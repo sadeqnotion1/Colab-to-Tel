@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 700px;
+      min-height: 400px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: #FAFAFA;
+      color: #1F2937;
+      padding: 0;
+    }
+
+    /* Header with gradient */
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 20px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .header::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+      opacity: 0.4;
+    }
+
+    .header-icon {
+      width: 48px;
+      height: 48px;
+      background: rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(10px);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+      position: relative;
+      z-index: 1;
+    }
+
+    .header-title {
+      flex: 1;
+      position: relative;
+      z-index: 1;
+    }
+
+    .header-title h1 {
+      font-size: 20px;
+      color: #FFFFFF;
+      font-weight: 700;
+      margin-bottom: 4px;
+      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .header-title p {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.9);
+      font-weight: 500;
+    }
+
+    .content {
+      padding: 24px;
+      max-height: 500px;
+      overflow-y: auto;
+    }
+
+    /* Modern status box */
+    .status-box {
+      background: #FFFFFF;
+      border: 2px solid #E5E7EB;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 24px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .status-box:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.08);
+    }
+
+    .status-box.ready {
+      background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%);
+      border-color: #10B981;
+    }
+
+    .status-box.waiting {
+      background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
+      border-color: #F59E0B;
+    }
+
+    .status-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-icon {
+      width: 24px;
+      height: 24px;
+    }
+
+    .status-details {
+      font-size: 13px;
+      color: #6B7280;
+      line-height: 1.7;
+    }
+
+    /* Section titles */
+    .section-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #1F2937;
+      margin: 32px 0 16px 0;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #E5E7EB;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .section-icon {
+      width: 20px;
+      height: 20px;
+      color: #667eea;
+    }
+
+    /* Quality cards with better design */
+    .quality-card {
+      background: #FFFFFF;
+      border: 2px solid #E5E7EB;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    }
+
+    .quality-card:hover {
+      border-color: #667eea;
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(102, 126, 234, 0.15);
+    }
+
+    .quality-card.best {
+      border-color: #667eea;
+      background: linear-gradient(135deg, #F0F4FF 0%, #E5EDFF 100%);
+      position: relative;
+    }
+
+    .quality-card.best::before {
+      content: '';
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 8px;
+      height: 8px;
+      background: #667eea;
+      border-radius: 50%;
+      box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .quality-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .quality-badge {
+      background: #667eea;
+      color: #FFFFFF;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 2px 4px rgba(102, 126, 234, 0.2);
+    }
+
+    .quality-badge.normal {
+      background: #9CA3AF;
+    }
+
+    .badge-icon {
+      width: 16px;
+      height: 16px;
+    }
+
+    .quality-meta {
+      font-size: 12px;
+      color: #6B7280;
+      font-weight: 600;
+    }
+
+    /* Command boxes with better styling */
+    .command-box {
+      background: #F9FAFB;
+      border: 1px solid #E5E7EB;
+      border-radius: 8px;
+      padding: 12px;
+      margin: 12px 0;
+      position: relative;
+      transition: all 0.2s;
+    }
+
+    .command-box:hover {
+      background: #F3F4F6;
+      border-color: #D1D5DB;
+    }
+
+    .command-label {
+      font-size: 11px;
+      color: #667eea;
+      font-weight: 700;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .label-icon {
+      width: 14px;
+      height: 14px;
+    }
+
+    .command-text {
+      font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+      font-size: 11px;
+      color: #374151;
+      word-break: break-all;
+      line-height: 1.6;
+      user-select: all;
+    }
+
+    /* Improved buttons */
+    .btn {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #FFFFFF;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      margin: 4px 4px 4px 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+    }
+
+    .btn-icon {
+      width: 16px;
+      height: 16px;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn:active {
+      transform: translateY(0);
+      box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+    }
+
+    .btn.copied {
+      background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+    }
+
+    /* Subtitle items */
+    .subtitle-item {
+      background: #FFFFFF;
+      border: 1px solid #E5E7EB;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+      transition: all 0.2s;
+    }
+
+    .subtitle-item:hover {
+      border-color: #667eea;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.06);
+    }
+
+    .subtitle-name {
+      font-size: 13px;
+      color: #1F2937;
+      font-weight: 700;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .subtitle-icon {
+      width: 18px;
+      height: 18px;
+      color: #667eea;
+    }
+
+    /* Empty state with illustration space */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #6B7280;
+    }
+
+    .empty-illustration {
+      width: 240px;
+      height: 240px;
+      margin: 0 auto 24px;
+      animation: float 3s ease-in-out infinite;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-10px); }
+    }
+
+    .empty-icon {
+      font-size: 64px;
+      margin-bottom: 24px;
+      opacity: 0.5;
+    }
+
+    .empty-title {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      color: #1F2937;
+    }
+
+    .empty-desc {
+      font-size: 14px;
+      line-height: 1.7;
+      max-width: 400px;
+      margin: 0 auto;
+    }
+
+    .actions {
+      margin-top: 24px;
+      padding-top: 24px;
+      border-top: 1px solid #E5E7EB;
+      text-align: center;
+    }
+
+    /* Smooth scrollbar */
+    ::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #F9FAFB;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+      border-radius: 5px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(180deg, #5568d3 0%, #653a8a 100%);
+    }
+
+    /* Loading spinner */
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: #fff;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-icon">🎬</div>
+    <div class="header-title">
+      <h1>Mindvalley Downloader Pro</h1>
+      <p>Professional video & audio extraction toolkit</p>
+    </div>
+  </div>
+
+  <div class="content" id="content">
+    <!-- Empty State Example (You'll see this when no streams detected) -->
+    <div class="empty-state">
+      <div class="empty-icon">🔍</div>
+      <!-- Replace above with: -->
+      <!-- <div class="empty-illustration">
+        <img src="assets/illustrations/video-files.svg" alt="No streams" style="width: 100%; height: 100%;">
+      </div> -->
+      <div class="empty-title">No Streams Detected Yet</div>
+      <div class="empty-desc">
+        Navigate to a Mindvalley video page and play the video.<br>
+        The extension will automatically detect all available qualities, audio tracks, and subtitles.<br><br>
+        <strong>Then click this extension icon again!</strong>
+      </div>
+      <div style="margin-top: 24px;">
+        <button class="btn">
+          <!-- SVG Icon inline example -->
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+          </svg>
+          Check Again
+        </button>
+      </div>
+    </div>
+
+    <!-- Example of improved quality card (This is what you'll see with streams) -->
+    <!-- Uncomment to preview:
+    <div class="section-title">
+      <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="7 10 12 15 17 10"></polyline>
+        <line x1="12" y1="15" x2="12" y2="3"></line>
+      </svg>
+      Download Commands
+    </div>
+
+    <div class="quality-card best">
+      <div class="quality-header">
+        <div class="quality-badge">
+          <svg class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+          </svg>
+          1080p
+        </div>
+        <div class="quality-meta">
+          1920x1080 • 2900kbps • BEST QUALITY
+        </div>
+      </div>
+
+      <div class="command-box">
+        <div class="command-label">
+          <svg class="label-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="23 7 16 12 23 17 23 7"></polygon>
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+          </svg>
+          STEP 1: Download Video (1080p)
+        </div>
+        <div class="command-text">N_m3u8DL-RE.exe "https://..." --save-name "video_1080p"</div>
+      </div>
+      <button class="btn">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+        Copy Video Command
+      </button>
+    </div>
+    -->
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
