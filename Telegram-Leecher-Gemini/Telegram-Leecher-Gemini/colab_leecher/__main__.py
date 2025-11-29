@@ -1182,22 +1182,21 @@ async def extract_archive(client, message):
             log.error(f"Error finding archive: {e}")
 
     if not archive_path:
+        # No archive found - prompt user to send path manually
+        BOT.State.extract_waiting = True
         help_text = (
-            "❌ No archive found.\n\n"
-            "**Usage:**\n"
-            "1. Reply to a RAR/ZIP file with `/extract`\n"
-            "2. Use `/extract` after downloading a file\n"
-            "3. Specify path: `/extract /path/to/file.rar`\n"
-            "4. Add filter: `/extract .mkv,.mp4`\n"
-            "5. Path + filter: `/extract /path/to/file.rar .mkv`\n\n"
+            "📂 **Extract Archive**\n\n"
+            "❌ No recent archive found in downloads.\n\n"
+            "Send me the archive path and optional file filter:\n\n"
             "**Examples:**\n"
-            "`/extract` - Extract all files from recent download\n"
-            "`/extract .mkv` - Extract only .mkv files\n"
-            "`/extract .mkv,.mp4,.avi` - Extract video files\n"
-            "`/extract /content/drive/MyDrive/file.part01.rar` - Extract from path\n"
-            "`/extract /content/drive/MyDrive/file.part01.rar .mkv` - Path with filter"
+            "`/content/drive/MyDrive/file.part01.rar`\n"
+            "`/content/drive/MyDrive/file.rar .mkv`\n"
+            "`/content/drive/MyDrive/file.zip .mkv,.mp4`\n\n"
+            "**Format:**\n"
+            "`<path>` or `<path> <filter>`\n\n"
+            "Cancel with /cancel"
         )
-        await message.reply_text(help_text)
+        extract_request_msg = await message.reply_text(help_text)
         return
 
     # Inform user about extraction start
