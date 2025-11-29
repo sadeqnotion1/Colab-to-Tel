@@ -1614,6 +1614,11 @@ async def help_command(client, message):
                  "⚠️ **Send image for Thumbnail!**")
     await message.reply_text(help_text, quote=True, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Instructions 📖", url="https://github.com/XronTrix10/Telegram-Leecher/wiki/INSTRUCTIONS")],[InlineKeyboardButton("Channel 📣", url="https://t.me/Colab_Leecher"), InlineKeyboardButton("Group 💬", url="https://t.me/Colab_Leecher_Discuss")]]))
 
+# DEBUG: Catch-all handler to log ALL private messages
+@colab_bot.on_message(filters.private & filters.text)
+async def debug_catch_all(client, message):
+    log.warning(f"[DEBUG CATCH-ALL] Received message: text='{message.text[:100] if message.text else None}', from_user={message.from_user.id}, extract_waiting={BOT.State.extract_waiting}")
+
 # Main Execution Guard
 if __name__ == "__main__":
      log.info("Colab Leecher Script Starting as main...")
