@@ -471,17 +471,21 @@ async def handle_url(client: Client, message: Message):
     global BOT, src_request_msg, reply_prompt_message_id
     user_id = message.from_user.id
 
-    # --- Safety Check: Ignore command messages ---
-    if message.text and message.text.startswith('/'):
-        log.debug("handle_url: Ignoring command message.")
-        raise ContinuePropagation
-
     # --- Initial State Checks ---
-    # Handle extract waiting state (takes priority)
+    # Handle extract waiting state FIRST (before command check)
     if BOT.State.extract_waiting:
         log.info("Processing extract path input from user")
         await _handle_extract_input(client, message)
         return
+
+    # --- Safety Check: Ignore command messages (but allow file paths like /content/) ---
+    if message.text and message.text.startswith('/'):
+        # Check if it's actually a command (word followed by space or end of string)
+        # vs a file path like /content/drive/...
+        parts = message.text.split(None, 1)
+        if len(parts[0]) <= 20 and not '/' in parts[0][1:]:  # Commands are short, paths have more slashes
+            log.debug("handle_url: Ignoring command message.")
+            raise ContinuePropagation
 
     # Ignore if expecting filenames or waiting for mindvalley URLs
     if BOT.State.expecting_nzb_filenames or \
