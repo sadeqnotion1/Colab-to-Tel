@@ -471,6 +471,9 @@ async def handle_url(client: Client, message: Message):
     global BOT, src_request_msg, reply_prompt_message_id
     user_id = message.from_user.id
 
+    log.info(f"handle_url triggered for message: {message.text[:100] if message.text else 'No text'}")
+    log.info(f"extract_waiting state: {BOT.State.extract_waiting}")
+
     # --- Initial State Checks ---
     # Handle extract waiting state FIRST (before command check)
     if BOT.State.extract_waiting:
@@ -483,9 +486,14 @@ async def handle_url(client: Client, message: Message):
         # Check if it's actually a command (word followed by space or end of string)
         # vs a file path like /content/drive/...
         parts = message.text.split(None, 1)
-        if len(parts[0]) <= 20 and not '/' in parts[0][1:]:  # Commands are short, paths have more slashes
+        first_part = parts[0]
+        has_more_slashes = '/' in first_part[1:]
+        log.info(f"Message starts with /: first_part='{first_part}', has_more_slashes={has_more_slashes}")
+        if len(parts[0]) <= 20 and not has_more_slashes:  # Commands are short, paths have more slashes
             log.debug("handle_url: Ignoring command message.")
             raise ContinuePropagation
+        else:
+            log.info("Detected as file path (not command), continuing...")
 
     # Ignore if expecting filenames or waiting for mindvalley URLs
     if BOT.State.expecting_nzb_filenames or \
@@ -1087,9 +1095,12 @@ async def extract_archive(client, message):
     import os
 
     log.info(f"Received /extract from {message.from_user.id}")
+    log.info(f"Command parts: {message.command}")
+    log.info(f"Command length: {len(message.command)}")
 
     # Check if user is replying to a document (takes priority)
     if message.reply_to_message and message.reply_to_message.document:
+        log.info("User replied to document, processing reply extraction")
         # Process reply-to-document immediately with optional filter from command
         await _process_extract_reply(client, message)
         return
@@ -1098,6 +1109,7 @@ async def extract_archive(client, message):
     if len(message.command) == 1:
         log.info("No arguments provided, prompting for extract path")
         BOT.State.extract_waiting = True
+        log.info(f"Set extract_waiting to: {BOT.State.extract_waiting}")
         help_text = (
             "📂 **Extract Archive**\n\n"
             "Send me the archive path and optional file filter:\n\n"
@@ -1110,6 +1122,7 @@ async def extract_archive(client, message):
             "Cancel with /cancel"
         )
         extract_request_msg = await message.reply_text(help_text)
+        log.info("Sent extract path prompt to user")
         return
 
     # Parse command arguments (file path and/or filters)
