@@ -1035,19 +1035,24 @@ async def _handle_extract_input(client, message):
         await message.reply_text(f"❌ File not found: `{archive_path}`\n\nUse /extract to try again.")
         return
 
-    # Auto-detect first part for multi-part RAR
+    # Auto-detect first part for multi-part RAR (handles formats like part01.rar or part01_Downloadly.ir.rar)
     if '.part' in archive_path.lower() and archive_path.lower().endswith('.rar'):
-        base = re.sub(r'\.part\d+\.rar$', '', archive_path, flags=re.IGNORECASE)
-        potential_first_parts = [
-            f"{base}.part01.rar",
-            f"{base}.part001.rar",
-            f"{base}.part1.rar"
-        ]
-        for first_part in potential_first_parts:
-            if os.path.exists(first_part):
-                archive_path = first_part
-                log.info(f"Multi-part RAR detected, using first part: {archive_path}")
-                break
+        # Extract base name and suffix (e.g., "_Downloadly.ir.rar" or ".rar")
+        match = re.search(r'(.*)\.part\d+(.*\.rar)$', archive_path, flags=re.IGNORECASE)
+        if match:
+            base = match.group(1)
+            suffix = match.group(2)  # Captures everything after partXX (e.g., ".rar" or "_Downloadly.ir.rar")
+
+            potential_first_parts = [
+                f"{base}.part01{suffix}",
+                f"{base}.part001{suffix}",
+                f"{base}.part1{suffix}"
+            ]
+            for first_part in potential_first_parts:
+                if os.path.exists(first_part):
+                    archive_path = first_part
+                    log.info(f"Multi-part RAR detected, using first part: {archive_path}")
+                    break
 
     # Inform user and start extraction
     filename = os.path.basename(archive_path)
@@ -1140,24 +1145,27 @@ async def extract_archive(client, message):
             archive_path = explicit_path
             log.info(f"Using explicit path: {archive_path}")
 
-            # If it's a multi-part RAR but not the first part, try to find part01
+            # If it's a multi-part RAR but not the first part, try to find part01 (handles Downloadly format)
             if '.part' in archive_path.lower() and archive_path.lower().endswith('.rar'):
-                # Extract the base name and try to find part01
+                # Extract base name and suffix (e.g., "_Downloadly.ir.rar" or ".rar")
                 import re
-                base = re.sub(r'\.part\d+\.rar$', '', archive_path, flags=re.IGNORECASE)
+                match = re.search(r'(.*)\.part\d+(.*\.rar)$', archive_path, flags=re.IGNORECASE)
+                if match:
+                    base = match.group(1)
+                    suffix = match.group(2)  # Captures everything after partXX
 
-                # Try different naming conventions
-                potential_first_parts = [
-                    f"{base}.part01.rar",
-                    f"{base}.part001.rar",
-                    f"{base}.part1.rar"
-                ]
+                    # Try different naming conventions
+                    potential_first_parts = [
+                        f"{base}.part01{suffix}",
+                        f"{base}.part001{suffix}",
+                        f"{base}.part1{suffix}"
+                    ]
 
-                for first_part in potential_first_parts:
-                    if os.path.exists(first_part):
-                        archive_path = first_part
-                        log.info(f"Multi-part RAR detected, using first part: {archive_path}")
-                        break
+                    for first_part in potential_first_parts:
+                        if os.path.exists(first_part):
+                            archive_path = first_part
+                            log.info(f"Multi-part RAR detected, using first part: {archive_path}")
+                            break
         else:
             await message.reply_text(f"❌ File not found: `{explicit_path}`")
             return
