@@ -1770,17 +1770,22 @@ async def extract_and_upload_streaming(
                     task_ctx=task_ctx
                 )
 
-            # Extract with streaming (1MB chunks)
+            # Extract with streaming (1MB chunks) - handle short reads gracefully
             log.info(f"[{idx}/{total_files}] Extracting {member.filename} ({sizeUnit(member.file_size)})")
-            with rar_ref.open(member, 'r') as source:
-                with open(temp_file_path, 'wb') as dest:
-                    while True:
-                        chunk = source.read(1024 * 1024)  # 1 MB chunks
-                        if not chunk:
-                            break
-                        dest.write(chunk)
-
-            log.info(f"Extracted to temp: {temp_file_path}")
+            try:
+                with rar_ref.open(member, 'r') as source:
+                    with open(temp_file_path, 'wb') as dest:
+                        # Use shutil.copyfileobj for robust streaming (handles short reads)
+                        import shutil
+                        shutil.copyfileobj(source, dest, length=1024 * 1024)  # 1 MB chunks
+                log.info(f"Extracted to temp: {temp_file_path}")
+            except rarfile.BadRarFile as e:
+                # Handle corrupt/incomplete RAR members
+                log.error(f"RAR extraction error for {member.filename}: {e}")
+                # Skip this file and continue
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                continue
 
             # Update status: Uploading
             percentage_upload = ((idx - 0.5) / total_files) * 100  # Midpoint progress
