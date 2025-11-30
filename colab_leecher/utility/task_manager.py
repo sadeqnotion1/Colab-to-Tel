@@ -102,6 +102,7 @@ async def taskScheduler(task_ctx=None):
     src_text = []
     is_dualzip = (_bot.Mode.type == "undzip")
     is_unzip = (_bot.Mode.type == "unzip")
+    is_stream_unzip = (_bot.Mode.type == "stream_unzip")  # NEW: Streaming extract+upload for large archives
     is_zip = (_bot.Mode.type == "zip")
     current_mode = _bot.Mode.mode
     is_dir = (current_mode == "dir-leech")

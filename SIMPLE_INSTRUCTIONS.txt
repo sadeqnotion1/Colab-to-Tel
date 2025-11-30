@@ -1,0 +1,54 @@
+═══════════════════════════════════════════════════════════════════════
+📦 SIMPLE FINRA ZIP EXTRACTION - 3 STEPS
+═══════════════════════════════════════════════════════════════════════
+
+STEP 1: Open Google Colab
+→ Go to: https://colab.research.google.com
+
+STEP 2: Upload the script
+→ Click folder icon (left side)
+→ Click upload button
+→ Upload: extract_finra_simple.py
+
+STEP 3: Run it
+→ In a new cell, paste:
+
+    !python extract_finra_simple.py
+
+→ Press Shift+Enter
+
+DONE! It will extract your FINRA ZIP automatically.
+
+═══════════════════════════════════════════════════════════════════════
+⚙️ CONFIGURATION (Optional)
+═══════════════════════════════════════════════════════════════════════
+
+Open extract_finra_simple.py and change these 3 lines:
+
+Line 9:  ZIP_FILE = "/content/drive/My Drive/finra/FINRA_archive.zip"
+Line 10: EXTRACT_TO = "/content/drive/My Drive/finra/extracted"
+Line 11: ONLY_CSV = True
+
+That's it!
+
+═══════════════════════════════════════════════════════════════════════
+💡 WHAT YOU'LL SEE
+═══════════════════════════════════════════════════════════════════════
+
+✅ Found ZIP: FINRA_archive.zip
+📏 Size: 65.00 GB
+📂 Extract to: /content/drive/My Drive/finra/extracted
+
+📊 Total files in ZIP: 5000
+📊 CSV files: 4500
+
+🚀 Starting extraction...
+
+[████████████████████░░░░░░░░] 66.7% | 3000/4500 | ETA: 25.0m
+
+✅ EXTRACTION COMPLETE!
+📊 Files extracted: 4500
+⏱️  Time: 50.2 minutes
+📂 Location: /content/drive/My Drive/finra/extracted
+
+═══════════════════════════════════════════════════════════════════════

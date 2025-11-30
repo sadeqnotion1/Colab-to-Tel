@@ -140,6 +140,7 @@ class Messages:
     download_name = ""
     task_msg = ""
     status_head = f"<b>📥 DOWNLOADING » </b>\n" # Default status head
+    extract_head = f"<b>📂 EXTRACTING »</b>\n" # Extraction status head
     dump_task = ""
     src_link = ""
     link_p = ""

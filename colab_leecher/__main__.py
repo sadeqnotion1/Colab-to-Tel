@@ -971,8 +971,13 @@ async def _perform_extraction(archive_path, file_filter=None):
 # Helper function to process reply-to-document extraction
 async def _process_extract_reply(client, message):
     """Handle extraction when user replies to a document"""
-    global BOT, Paths
+    global BOT, Paths, MSG
     import os
+    import random
+    import aiohttp
+    import aiofiles
+    from .utility.task_manager import thumbnail_urls
+    from .utility.helper import keyboard
 
     # Parse file filter from command if provided
     file_filter = None
@@ -987,14 +992,73 @@ async def _process_extract_reply(client, message):
         file_path = await message.reply_to_message.download(
             file_name=os.path.join(Paths.down_path, message.reply_to_message.document.file_name)
         )
-        await reply_msg.edit_text(f"✅ Downloaded: {os.path.basename(file_path)}")
 
+        # Download random thumbnail
+        hero_image_path = Paths.HERO_IMAGE
+        download_success = False
+
+        if thumbnail_urls:
+            try:
+                chosen_url = random.choice(thumbnail_urls)
+                log.info(f"Downloading thumbnail for extraction: {chosen_url}")
+
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(chosen_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                        if response.status == 200:
+                            async with aiofiles.open(hero_image_path, mode='wb') as f:
+                                while True:
+                                    chunk = await response.content.read(1024)
+                                    if not chunk:
+                                        break
+                                    await f.write(chunk)
+                            download_success = True
+            except Exception as e:
+                log.warning(f"Thumbnail download failed: {e}")
+
+        # Determine thumbnail path
+        if BOT.Setting.thumbnail and os.path.exists(Paths.THMB_PATH):
+            thumb_path = Paths.THMB_PATH
+        elif download_success and os.path.exists(Paths.HERO_IMAGE):
+            thumb_path = Paths.HERO_IMAGE
+        elif os.path.exists(Paths.DEFAULT_HERO):
+            thumb_path = Paths.DEFAULT_HERO
+        else:
+            thumb_path = None
+
+        # Create extraction status message
         filename = os.path.basename(file_path)
         filter_text = f" (filter: {', '.join(file_filter)})" if file_filter else ""
-        await reply_msg.edit_text(f"📂 Extracting `{filename}`{filter_text}...")
+
+        status_text = (
+            f"<b>📂 Archive Extraction »</b>\n\n"
+            f"<b>📦 Archive:</b> <code>{filename}</code>\n"
+            f"<b>📂 Output:</b> <code>{Paths.temp_unzip_path}</code>{filter_text}\n\n"
+            f"<i>Initializing...</i>"
+        )
+
+        # Replace reply message with photo message
+        await reply_msg.delete()
+
+        if thumb_path and os.path.exists(thumb_path):
+            status_msg = await client.send_photo(
+                message.chat.id,
+                photo=thumb_path,
+                caption=status_text,
+                reply_markup=keyboard()
+            )
+        else:
+            status_msg = await message.reply_text(status_text)
+
+        # Link to global MSG.status_msg
+        MSG.status_msg = status_msg
 
         success, result_msg = await _perform_extraction(file_path, file_filter)
-        await reply_msg.edit_text(result_msg)
+
+        # Update final message
+        if hasattr(status_msg, 'photo') and status_msg.photo:
+            await status_msg.edit_caption(caption=result_msg)
+        else:
+            await status_msg.edit_text(result_msg)
 
     except Exception as e:
         log.error(f"Failed to download/extract replied file: {e}")
@@ -1003,9 +1067,14 @@ async def _process_extract_reply(client, message):
 # Helper function to handle extract path input from user
 async def _handle_extract_input(client, message):
     """Process user's path input after /extract command"""
-    global BOT, Paths, extract_request_msg
+    global BOT, Paths, MSG, extract_request_msg
     import os
     import re
+    import random
+    import aiohttp
+    import aiofiles
+    from .utility.task_manager import thumbnail_urls
+    from .utility.helper import keyboard
 
     # Reset state
     BOT.State.extract_waiting = False
@@ -1060,16 +1129,72 @@ async def _handle_extract_input(client, message):
                     log.info(f"Multi-part RAR detected, using first part: {archive_path}")
                     break
 
-    # Inform user and start extraction
+    # Download random thumbnail (following Mindvalley pattern)
+    hero_image_path = Paths.HERO_IMAGE
+    download_success = False
+
+    if thumbnail_urls:
+        try:
+            chosen_url = random.choice(thumbnail_urls)
+            log.info(f"Downloading thumbnail for extraction: {chosen_url}")
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(chosen_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                    if response.status == 200:
+                        async with aiofiles.open(hero_image_path, mode='wb') as f:
+                            while True:
+                                chunk = await response.content.read(1024)
+                                if not chunk:
+                                    break
+                                await f.write(chunk)
+                        download_success = True
+                        log.info(f"Thumbnail downloaded to {hero_image_path}")
+        except Exception as e:
+            log.warning(f"Thumbnail download failed: {e}")
+
+    # Determine thumbnail path (priority: custom > random > default)
+    if BOT.Setting.thumbnail and os.path.exists(Paths.THMB_PATH):
+        thumb_path = Paths.THMB_PATH
+    elif download_success and os.path.exists(Paths.HERO_IMAGE):
+        thumb_path = Paths.HERO_IMAGE
+    elif os.path.exists(Paths.DEFAULT_HERO):
+        thumb_path = Paths.DEFAULT_HERO
+    else:
+        thumb_path = None
+
+    # Create status message
     filename = os.path.basename(archive_path)
     filter_text = f" (filter: {', '.join(file_filter)})" if file_filter else ""
-    status_msg = await message.reply_text(
-        f"📂 Starting extraction of `{filename}`{filter_text}..."
+
+    status_text = (
+        f"<b>📂 Archive Extraction »</b>\n\n"
+        f"<b>📦 Archive:</b> <code>{filename}</code>\n"
+        f"<b>📂 Output:</b> <code>{Paths.temp_unzip_path}</code>{filter_text}\n\n"
+        f"<i>Initializing...</i>"
     )
+
+    # Send message with thumbnail
+    if thumb_path and os.path.exists(thumb_path):
+        status_msg = await client.send_photo(
+            message.chat.id,
+            photo=thumb_path,
+            caption=status_text,
+            reply_markup=keyboard()
+        )
+    else:
+        status_msg = await message.reply_text(status_text)
+
+    # Link to global MSG.status_msg for progress updates
+    MSG.status_msg = status_msg
 
     # Perform extraction
     success, result_msg = await _perform_extraction(archive_path, file_filter)
-    await status_msg.edit_text(result_msg)
+
+    # Update final message
+    if hasattr(status_msg, 'photo') and status_msg.photo:
+        await status_msg.edit_caption(caption=result_msg)
+    else:
+        await status_msg.edit_text(result_msg)
 
 @colab_bot.on_message(filters.command("extract") & filters.private)
 async def extract_archive(client, message):
@@ -1084,9 +1209,14 @@ async def extract_archive(client, message):
         /extract /path/to/file.rar .mkv - Extract specific path with filter
         Reply to archive: Reply to RAR/ZIP file with /extract [filter]
     """
-    global BOT, Paths, extract_request_msg
+    global BOT, Paths, MSG, extract_request_msg
     from .utility.converters import extract_rar_streaming, extract_zip_streaming
+    from .utility.task_manager import thumbnail_urls
+    from .utility.helper import keyboard
     import os
+    import random
+    import aiohttp
+    import aiofiles
 
     log.info(f"Received /extract from {message.from_user.id}")
 
@@ -1213,16 +1343,72 @@ async def extract_archive(client, message):
         extract_request_msg = await message.reply_text(help_text)
         return
 
-    # Inform user about extraction start
+    # Download random thumbnail
+    hero_image_path = Paths.HERO_IMAGE
+    download_success = False
+
+    if thumbnail_urls:
+        try:
+            chosen_url = random.choice(thumbnail_urls)
+            log.info(f"Downloading thumbnail for extraction: {chosen_url}")
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(chosen_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                    if response.status == 200:
+                        async with aiofiles.open(hero_image_path, mode='wb') as f:
+                            while True:
+                                chunk = await response.content.read(1024)
+                                if not chunk:
+                                    break
+                                await f.write(chunk)
+                        download_success = True
+                        log.info(f"Thumbnail downloaded to {hero_image_path}")
+        except Exception as e:
+            log.warning(f"Thumbnail download failed: {e}")
+
+    # Determine thumbnail path (priority: custom > random > default)
+    if BOT.Setting.thumbnail and os.path.exists(Paths.THMB_PATH):
+        thumb_path = Paths.THMB_PATH
+    elif download_success and os.path.exists(Paths.HERO_IMAGE):
+        thumb_path = Paths.HERO_IMAGE
+    elif os.path.exists(Paths.DEFAULT_HERO):
+        thumb_path = Paths.DEFAULT_HERO
+    else:
+        thumb_path = None
+
+    # Create status message
     filename = os.path.basename(archive_path)
     filter_text = f" (filter: {', '.join(file_filter)})" if file_filter else ""
-    status_msg = await message.reply_text(
-        f"📂 Starting extraction of `{filename}`{filter_text}..."
+
+    status_text = (
+        f"<b>📂 Archive Extraction »</b>\n\n"
+        f"<b>📦 Archive:</b> <code>{filename}</code>\n"
+        f"<b>📂 Output:</b> <code>{Paths.temp_unzip_path}</code>{filter_text}\n\n"
+        f"<i>Initializing...</i>"
     )
+
+    # Send message with thumbnail
+    if thumb_path and os.path.exists(thumb_path):
+        status_msg = await client.send_photo(
+            message.chat.id,
+            photo=thumb_path,
+            caption=status_text,
+            reply_markup=keyboard()
+        )
+    else:
+        status_msg = await message.reply_text(status_text)
+
+    # Link to global MSG.status_msg for progress updates
+    MSG.status_msg = status_msg
 
     # Perform extraction using helper function
     success, result_msg = await _perform_extraction(archive_path, file_filter)
-    await status_msg.edit_text(result_msg)
+
+    # Update final message
+    if hasattr(status_msg, 'photo') and status_msg.photo:
+        await status_msg.edit_caption(caption=result_msg)
+    else:
+        await status_msg.edit_text(result_msg)
 
 @colab_bot.on_message(filters.command("mindvalley") & filters.private)
 async def mindvalley_download(client, message):
