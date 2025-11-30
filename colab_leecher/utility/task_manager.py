@@ -1125,6 +1125,171 @@ async def Do_Leech(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, task_c
                      batch_processing_error = True
                      if _task_error: _task_error.state = True; _task_error.text = f"Processing error: {processing_err}"
 
+                # --- Logic AFTER processing/upload try-except block, still INSIDE the loop ---
+                if batch_had_download_failures and not batch_processing_error:
+                    log.debug(f"Resetting _task_error state after recoverable download failure.")
+                    if _task_error:
+                       _task_error.state = False
+                       _task_error.text = ""
+
+                # Handle critical processing errors -> Break the main loop
+                if batch_processing_error:
+                     overall_success = False
+                     if _task_error and not _task_error.state: _task_error.state = True; _task_error.text = "Processing/Upload Error"
+                     log.error(f"Critical processing/upload error detected. Stopping.")
+                     break # Stop processing further batches
+
+                log.info(f"--- Finished Batch ---")
+            # --- End of Batch Loop ---
+
+    # --- Main except for Do_Leech ---
+    except Exception as leech_err:
+        log.error(f"Error in Do_Leech main execution: {leech_err}", exc_info=True)
+        if _task_error and not _task_error.state:
+             _task_error.state = True
+             _task_error.text = f"Unexpected Leech Error: {leech_err}"
+        overall_success = False
+
+    # --- Final cleanup logic for Do_Leech ---
+    if overall_success and (not _task_error or not _task_error.state):
+        log.info("Do_Leech completed successfully. Calling SendLogs...")
+        await SendLogs(True, task_ctx)
+    elif not overall_success:
+        log.warning("Do_Leech completed with errors.")
+        if _task_error and not _task_error.state:
+            _task_error.state = True
+            _task_error.text = _task_error.text or "Task completed with errors."
+        log.info("Do_Leech finished with errors.")
+    else:
+        log.warning("Do_Leech finished in inconsistent state.")
+        if _task_error and not _task_error.state: _task_error.state = True; _task_error.text="Inconsistent final state"
+
+
+# --- Do_Mirror Function ---
+async def Do_Mirror(source, is_ytdl, is_zip, is_unzip, is_dualzip, task_ctx=None):
+    """Execute mirror operation (download + copy to local directory).
+
+    Args:
+        source: List of URLs
+        is_ytdl: YouTube-DL mode (legacy parameter)
+        is_zip: Zip files before mirroring
+        is_unzip: Unzip files before mirroring
+        is_dualzip: Unzip then zip before mirroring
+        task_ctx: Optional TaskContext for multi-task support
+    """
+    global BOT, TRANSFER, Paths, Messages, TaskError, log
+
+    # Multi-task support: Use task_ctx if provided, otherwise fallback to globals
+    if task_ctx:
+        _bot = task_ctx.bot
+        _paths = task_ctx.paths
+        _transfer = task_ctx.transfer
+        _messages = task_ctx.messages
+        _task_error = task_ctx.task_error
+        log.info(f"Do_Mirror using TaskContext for task_id: {task_ctx.task_id}")
+    else:
+        _bot = BOT
+        _paths = Paths
+        _transfer = TRANSFER
+        _messages = Messages
+        _task_error = TaskError
+        log.info("Do_Mirror using global state (single-task mode)")
+
+    log.info(f"Do_Mirror started. is_ytdl(legacy)={is_ytdl}, is_zip={is_zip}, is_unzip={is_unzip}, is_dualzip={is_dualzip}")
+    selected_service = _bot.Options.service_type
+
+    # Ensure local mirror directory exists
+    if not ospath.exists(_paths.mirror_dir):
+        try: makedirs(_paths.mirror_dir); log.info(f"Created local mirror directory: {_paths.mirror_dir}")
+        except Exception as mkdir_err:
+             if _task_error: _task_error.state = True; _task_error.text = f"Cannot create local mirror dir: {mkdir_err}"
+             log.error(_task_error.text); return
+
+    original_down_path = _paths.down_path
+    download_completed = False
+    # --- Initialize cleanup variables ---
+    cleanup_temp = False
+    temp_path_to_clean = None
+    dualzip_unzip_path = None
+    mirror_dir_final = None
+    # --- End Initializations ---
+
+    try:
+        # --- Download Phase ---
+        log.info(f"Do_Mirror: Processing links via downloadManager (Service: {selected_service or 'auto'})...")
+        filenames_to_pass = _bot.Options.filenames if _bot.Options.filenames else None
+        log.debug(f"Do_Mirror: Passing filenames list (Count: {len(filenames_to_pass) if filenames_to_pass else 0}) to downloadManager.")
+
+        # Pass the retrieved filenames list to downloadManager
+        await downloadManager(source, is_ytdl, filenames_to_pass, task_ctx)
+
+        # Check _task_error state *after* downloadManager returns
+        if _task_error and _task_error.state:
+            log.error("Download failed before mirroring (downloadManager reported error).")
+            return # Stop Do_Mirror if download failed
+        else:
+            download_completed = True
+            log.info("Do_Mirror: Download phase completed successfully.")
+
+        # --- Mirroring Phase ---
+        if download_completed:
+            process_path = original_down_path # Start with the original download path
+
+            if not ospath.exists(process_path) or not os.listdir(process_path):
+                 log.warning(f"Mirror download path empty/missing after successful download: {process_path}")
+                 if not _task_error.state: _task_error.state = True; _task_error.text = "Mirror download inconsistency (Empty Dir)."
+                 return
+
+            _transfer.total_down_size = getSize(process_path); applyCustomName(task_ctx);
+            log.info(f"Download complete for mirror. Size: {sizeUnit(_transfer.total_down_size)}.")
+
+            # Determine final mirror destination folder name
+            mirror_base_name = _messages.download_name if _messages.download_name else ospath.basename(process_path if process_path != original_down_path else source[0] if isinstance(source, list) and source else "Mirrored_Item")
+            mirror_base_name, _ = ospath.splitext(mirror_base_name) # Remove extension
+            mirror_dir_final = ospath.join(_paths.mirror_dir, mirror_base_name)
+            log.info(f"Target mirror directory set to: {mirror_dir_final}")
+            if not ospath.exists(mirror_dir_final): makedirs(mirror_dir_final, exist_ok=True)
+
+            source_path_for_copy = process_path # Path containing files to be copied
+
+            # Zip/Unzip processing before copy
+            if is_zip: await Zip_Handler(process_path, True, True, task_ctx); source_path_for_copy = _paths.temp_zpath; cleanup_temp = True; temp_path_to_clean = _paths.temp_zpath
+            elif is_stream_unzip:
+                from ..utility.converters import extract_and_upload_streaming
+                items = await asyncio.to_thread(listdir, process_path) if ospath.isdir(process_path) else [ospath.basename(process_path)]
+                rars = [f for f in items if f.lower().endswith(('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))]
+                if not rars: _task_error.state = True; _task_error.text = "No RAR for streaming"; return
+                archive = ospath.join(process_path, rars[0]) if ospath.isdir(process_path) else process_path
+                success = await extract_and_upload_streaming(archive, _bot.Options.unzip_pswd if _bot.Options.unzip_pswd else None, None, task_ctx)
+                if not success: _task_error.state = True; return
+                source_path_for_copy = None; cleanup_temp = False  # Already uploaded
+            elif is_unzip: await Unzip_Handler(process_path, True, task_ctx); source_path_for_copy = _paths.temp_unzip_path; cleanup_temp = True; temp_path_to_clean = _paths.temp_unzip_path
+            elif is_dualzip: await Unzip_Handler(process_path, True, task_ctx); await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx); source_path_for_copy = _paths.temp_zpath; cleanup_temp = True; temp_path_to_clean = _paths.temp_zpath; dualzip_unzip_path = _paths.temp_unzip_path
+
+            if _task_error.state: log.error("Zip/Unzip failed before mirroring copy."); return
+            if not ospath.exists(source_path_for_copy):
+                 log.error(f"Mirror source path not found after processing: {source_path_for_copy}")
+                 if not _task_error.state: _task_error.state = True; _task_error.text = "Mirror source path invalid."
+                 return
+
+            # --- Mirror Copy Logic ---
+            log.info(f"Mirroring content from {source_path_for_copy} to LOCAL Colab path: {mirror_dir_final}")
+            try:
+                 for item in os.listdir(source_path_for_copy):
+                     s_item = ospath.join(source_path_for_copy, item)
+                     d_item = ospath.join(mirror_dir_final, item)
+                     if ospath.isdir(s_item):
+                         shutil.copytree(s_item, d_item, dirs_exist_ok=True)
+                     elif ospath.isfile(s_item):
+                         shutil.copy2(s_item, d_item)
+                 log.info(f"Successfully mirrored content to {mirror_dir_final}")
+            except Exception as copy_err:
+                log.error(f"Error mirroring content: {copy_err}", exc_info=True)
+                if _task_error: _task_error.state = True; _task_error.text = f"Mirror copy error: {copy_err}"
+
+        else:
+             log.warning("Skipping mirror processing due to download failure.")
+
     except Exception as mirror_err:
         log.error(f"Error in Do_Mirror main execution: {mirror_err}", exc_info=True)
         if _task_error and not _task_error.state: _task_error.state = True; _task_error.text = f"Unexpected Mirror Error: {mirror_err}"
