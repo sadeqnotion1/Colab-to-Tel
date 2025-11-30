@@ -906,6 +906,21 @@ async def Do_Leech(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, task_c
                 await Zip_Handler(process_source_path, True, False, task_ctx)
                 if _task_error.state: raise Exception(_task_error.text)
                 leech_target_path = _paths.temp_zpath
+            elif is_stream_unzip:
+                # NEW: Streaming extract+upload for large archives (65GB+)
+                from ..utility.converters import extract_and_upload_streaming
+                items_in_dir = await asyncio.to_thread(listdir, process_source_path) if ospath.isdir(process_source_path) else [ospath.basename(process_source_path)]
+                rar_files = [f for f in items_in_dir if f.lower().endswith(('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))]
+                if not rar_files: raise Exception("No RAR files found for streaming extraction")
+                archive_path = ospath.join(process_source_path, rar_files[0]) if ospath.isdir(process_source_path) else process_source_path
+                success = await extract_and_upload_streaming(
+                    rar_filepath=archive_path,
+                    password=_bot.Options.unzip_pswd if _bot.Options.unzip_pswd else None,
+                    file_filter=None,
+                    task_ctx=task_ctx
+                )
+                if not success: raise Exception("Streaming extract-upload failed")
+                leech_target_path = None  # Files already uploaded - skip Leech
             elif is_unzip:
                 await Unzip_Handler(process_source_path, False, task_ctx)
                 if _task_error.state: raise Exception(_task_error.text)
@@ -1041,7 +1056,45 @@ async def Do_Leech(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, task_c
                          await Zip_Handler(process_path, True, True, task_ctx) # Assumes it removes original on success
                          if _task_error and _task_error.state: batch_processing_error = True; log.error(">>> Zip_Handler failed.")
                          else: leech_path = _paths.temp_zpath; cleanup_process_path = False; log.debug(f">>> Zip successful. leech_path set to: {leech_path}")
-                     elif is_unzip:
+                    elif is_stream_unzip:
+                        # NEW: Streaming extract+upload for large archives (65GB+)
+                        log.debug(">>> Calling Streaming Extract+Upload Handler...")
+                        from ..utility.converters import extract_and_upload_streaming
+
+                        # Find RAR archives in the process directory
+                        items_in_dir = await asyncio.to_thread(listdir, process_path) if ospath.isdir(process_path) else [ospath.basename(process_path)]
+                        rar_files = [
+                            f for f in items_in_dir
+                            if f.lower().endswith(('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))
+                        ]
+
+                        if not rar_files:
+                            log.error("No RAR archives found for streaming extraction")
+                            batch_processing_error = True
+                            if _task_error: _task_error.state = True; _task_error.text = "No RAR files found"
+                        else:
+                            # Process first RAR archive
+                            archive_path = ospath.join(process_path, rar_files[0]) if ospath.isdir(process_path) else process_path
+
+                            # Extract + Upload + Delete in streaming mode
+                            log.info(f"Starting streaming extract+upload for: {archive_path}")
+                            success = await extract_and_upload_streaming(
+                                rar_filepath=archive_path,
+                                password=_bot.Options.unzip_pswd if _bot.Options.unzip_pswd else None,
+                                file_filter=None,
+                                task_ctx=task_ctx
+                            )
+
+                            if not success:
+                                log.error(">>> Streaming extract-upload failed.")
+                                batch_processing_error = True
+                                if _task_error: _task_error.state = True
+                            else:
+                                log.info(">>> Streaming extract-upload completed successfully")
+                                leech_path = None  # Skip normal Leech - files already uploaded
+                                cleanup_process_path = False
+
+
                          log.debug(">>> Calling Unzip_Handler...")
                          await Unzip_Handler(process_path, True, task_ctx) # Assumes it removes original on success
                          if _task_error and _task_error.state: batch_processing_error = True; log.error(">>> Unzip_Handler failed.")
@@ -1258,6 +1311,15 @@ async def Do_Mirror(source, is_ytdl, is_zip, is_unzip, is_dualzip, task_ctx=None
 
             # Zip/Unzip processing before copy
             if is_zip: await Zip_Handler(process_path, True, True, task_ctx); source_path_for_copy = _paths.temp_zpath; cleanup_temp = True; temp_path_to_clean = _paths.temp_zpath
+            elif is_stream_unzip:
+                from ..utility.converters import extract_and_upload_streaming
+                items = await asyncio.to_thread(listdir, process_path) if ospath.isdir(process_path) else [ospath.basename(process_path)]
+                rars = [f for f in items if f.lower().endswith(('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))]
+                if not rars: _task_error.state = True; _task_error.text = "No RAR for streaming"; return
+                archive = ospath.join(process_path, rars[0]) if ospath.isdir(process_path) else process_path
+                success = await extract_and_upload_streaming(archive, _bot.Options.unzip_pswd if _bot.Options.unzip_pswd else None, None, task_ctx)
+                if not success: _task_error.state = True; return
+                source_path_for_copy = None; cleanup_temp = False  # Already uploaded
             elif is_unzip: await Unzip_Handler(process_path, True, task_ctx); source_path_for_copy = _paths.temp_unzip_path; cleanup_temp = True; temp_path_to_clean = _paths.temp_unzip_path
             elif is_dualzip: await Unzip_Handler(process_path, True, task_ctx); await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx); source_path_for_copy = _paths.temp_zpath; cleanup_temp = True; temp_path_to_clean = _paths.temp_zpath; dualzip_unzip_path = _paths.temp_unzip_path
 
