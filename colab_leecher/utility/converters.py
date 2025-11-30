@@ -1045,10 +1045,18 @@ async def extract_rar_streaming(
 
         log.info(f"Extracting {total_to_extract} files from RAR archive...")
 
-        # Initialize memory monitoring
-        import psutil
-        process = psutil.Process(os.getpid())
-        initial_mem_mb = process.memory_info().rss / 1024 / 1024
+        # Initialize memory monitoring (optional - fallback if psutil not available)
+        try:
+            import psutil
+            process = psutil.Process(os.getpid())
+            initial_mem_mb = process.memory_info().rss / 1024 / 1024
+            memory_monitoring_available = True
+            log.info(f"Memory monitoring enabled (current: {initial_mem_mb:.0f}MB, limit: {memory_limit_mb}MB)")
+        except ImportError:
+            process = None
+            initial_mem_mb = 0
+            memory_monitoring_available = False
+            log.warning("psutil not available - memory monitoring disabled")
 
         # Helper function to save resume state
         def save_resume_state():
@@ -1096,8 +1104,8 @@ async def extract_rar_streaming(
                     engine="Streaming Extractor (rarfile)"
                 )
 
-                # Check memory usage every 10 files
-                if idx % 10 == 0:
+                # Check memory usage every 10 files (if monitoring available)
+                if idx % 10 == 0 and memory_monitoring_available:
                     current_mem_mb = process.memory_info().rss / 1024 / 1024
 
                     if current_mem_mb > memory_limit_mb:
