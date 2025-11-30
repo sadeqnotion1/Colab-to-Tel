@@ -1671,8 +1671,12 @@ async def extract_and_upload_streaming(
 
     # Open RAR archive
     try:
-        rar_ref = rarfile.RarFile(rar_filepath, pwd=password)
-        log.info(f"Opened RAR archive: {os.path.basename(rar_filepath)}")
+        rar_ref = rarfile.RarFile(rar_filepath)
+        if password:
+            rar_ref.setpassword(password)
+            log.info(f"Opened password-protected RAR archive: {os.path.basename(rar_filepath)}")
+        else:
+            log.info(f"Opened RAR archive: {os.path.basename(rar_filepath)}")
     except rarfile.BadRarFile as e:
         log.error(f"Invalid RAR archive: {e}")
         if _task_error:
@@ -1684,6 +1688,12 @@ async def extract_and_upload_streaming(
         if _task_error:
             _task_error.state = True
             _task_error.text = "Password required"
+        return False
+    except rarfile.BadRarPassword:
+        log.error("Incorrect password for RAR archive")
+        if _task_error:
+            _task_error.state = True
+            _task_error.text = "Incorrect RAR password"
         return False
 
     # Get list of members to extract
