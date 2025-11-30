@@ -1795,7 +1795,7 @@ async def extract_and_upload_streaming(
             log.info(f"[{idx}/{total_files}] Uploading {member.filename} to Telegram")
             upload_success = await upload_file(
                 file_path=temp_file_path,
-                filename=member.filename,
+                display_name=member.filename,
                 task_ctx=task_ctx
             )
 

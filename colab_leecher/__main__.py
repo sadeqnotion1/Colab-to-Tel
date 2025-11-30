@@ -909,9 +909,10 @@ async def unzip_pswd(client, message):
 # Helper function to perform extraction
 async def _perform_extraction(archive_path, file_filter=None):
     """
-    Core extraction logic - returns (success: bool, message: str)
+    Core extraction logic with streaming upload - returns (success: bool, message: str)
+    Extracts files one-by-one, uploads to Telegram, then deletes temp file
     """
-    from .utility.converters import extract_rar_streaming, extract_zip_streaming
+    from .utility.converters import extract_and_upload_streaming
     import os
 
     # Determine archive type
@@ -921,48 +922,34 @@ async def _perform_extraction(archive_path, file_filter=None):
     # Start extraction based on archive type
     try:
         if ext == ".rar" or ".part" in filename.lower():
-            log.info(f"Extracting RAR: {archive_path}")
+            log.info(f"Starting streaming extract+upload for RAR: {archive_path}")
 
-            # Generate resume state file
-            archive_name = os.path.splitext(filename)[0]
-            resume_file = os.path.join(Paths.down_path, f".resume_{archive_name}.json")
-
-            success = await extract_rar_streaming(
+            # Use streaming extract+upload (extracts one file, uploads it, deletes temp file)
+            success = await extract_and_upload_streaming(
                 rar_filepath=archive_path,
-                extract_to=Paths.temp_unzip_path,
-                remove=False,
                 password=BOT.Options.unzip_pswd if BOT.Options.unzip_pswd else None,
                 file_filter=file_filter,
-                resume_state_file=resume_file,
-                memory_limit_mb=800,
                 task_ctx=None
             )
+
+            if success:
+                msg = (
+                    f"✅ Extraction + Upload complete!\n\n"
+                    f"📁 Archive: `{filename}`\n"
+                    f"⬆️ All files uploaded to Telegram\n"
+                    f"🗑️ Temp files cleaned up"
+                )
+                log.info(f"Streaming extract+upload successful: {archive_path}")
+                return True, msg
+            else:
+                log.error(f"Streaming extract+upload failed: {archive_path}")
+                return False, f"❌ Extraction/Upload failed!\n\nCheck logs for details."
 
         elif ext == ".zip":
-            log.info(f"Extracting ZIP: {archive_path}")
-            success = await extract_zip_streaming(
-                zip_filepath=archive_path,
-                extract_to=Paths.temp_unzip_path,
-                remove=False,
-                file_filter=file_filter,
-                task_ctx=None
-            )
+            log.error(f"ZIP streaming not yet implemented: {archive_path}")
+            return False, f"❌ ZIP streaming extract+upload not yet implemented\n\nUse RAR archives for now"
         else:
-            return False, f"❌ Unsupported format: {ext}\n\nSupported: .rar, .zip"
-
-        if success:
-            extracted_count = len([f for f in os.listdir(Paths.temp_unzip_path) if os.path.isfile(os.path.join(Paths.temp_unzip_path, f))]) if os.path.exists(Paths.temp_unzip_path) else 0
-            msg = (
-                f"✅ Extraction complete!\n\n"
-                f"📁 Archive: `{filename}`\n"
-                f"📂 Extracted to: `{Paths.temp_unzip_path}`\n"
-                f"📊 Files extracted: {extracted_count}"
-            )
-            log.info(f"Extraction successful: {archive_path}")
-            return True, msg
-        else:
-            log.error(f"Extraction failed: {archive_path}")
-            return False, f"❌ Extraction failed!\n\nCheck logs for details."
+            return False, f"❌ Unsupported format: {ext}\n\nSupported: .rar (streaming), .zip (coming soon)"
 
     except Exception as e:
         log.error(f"Extraction error: {e}", exc_info=True)
