@@ -1056,22 +1056,22 @@ async def Do_Leech(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, task_c
                          await Zip_Handler(process_path, True, True, task_ctx) # Assumes it removes original on success
                          if _task_error and _task_error.state: batch_processing_error = True; log.error(">>> Zip_Handler failed.")
                          else: leech_path = _paths.temp_zpath; cleanup_process_path = False; log.debug(f">>> Zip successful. leech_path set to: {leech_path}")
-                    elif is_stream_unzip:
-                        # NEW: Streaming extract+upload for large archives (65GB+)
-                        log.debug(">>> Calling Streaming Extract+Upload Handler...")
-                        from ..utility.converters import extract_and_upload_streaming
+                     elif is_stream_unzip:
+                         # NEW: Streaming extract+upload for large archives (65GB+)
+                         log.debug(">>> Calling Streaming Extract+Upload Handler...")
+                         from ..utility.converters import extract_and_upload_streaming
 
-                        # Find RAR archives in the process directory
-                        items_in_dir = await asyncio.to_thread(listdir, process_path) if ospath.isdir(process_path) else [ospath.basename(process_path)]
-                        rar_files = [
-                            f for f in items_in_dir
-                            if f.lower().endswith(('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))
-                        ]
+                         # Find RAR archives in the process directory
+                         items_in_dir = await asyncio.to_thread(listdir, process_path) if ospath.isdir(process_path) else [ospath.basename(process_path)]
+                         rar_files = [
+                             f for f in items_in_dir
+                             if f.lower().endswith(('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))
+                         ]
 
-                        if not rar_files:
-                            log.error("No RAR archives found for streaming extraction")
-                            batch_processing_error = True
-                            if _task_error: _task_error.state = True; _task_error.text = "No RAR files found"
+                         if not rar_files:
+                             log.error("No RAR archives found for streaming extraction")
+                             batch_processing_error = True
+                             if _task_error: _task_error.state = True; _task_error.text = "No RAR files found"
                         else:
                             # Process first RAR archive
                             archive_path = ospath.join(process_path, rar_files[0]) if ospath.isdir(process_path) else process_path
