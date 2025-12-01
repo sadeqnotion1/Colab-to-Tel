@@ -816,9 +816,9 @@ async def taskScheduler(task_ctx=None):
             is_ytdl_task = (selected_service == 'ytdl') or _bot.Mode.ytdl
             log.info(f"Starting main task execution: Mode={current_mode}, Service={selected_service}, is_ytdl={is_ytdl_task}")
             if current_mode != "mirror":
-                await Do_Leech(_bot.SOURCE, is_dir, is_ytdl_task, is_zip, is_unzip, is_dualzip, task_ctx)
+                await Do_Leech(_bot.SOURCE, is_dir, is_ytdl_task, is_zip, is_unzip, is_dualzip, is_stream_unzip, task_ctx)
             else:
-                await Do_Mirror(_bot.SOURCE, is_ytdl_task, is_zip, is_unzip, is_dualzip, task_ctx)
+                await Do_Mirror(_bot.SOURCE, is_ytdl_task, is_zip, is_unzip, is_dualzip, is_stream_unzip, task_ctx)
 
     except Exception as scheduler_err:
          log.error(f"Error within taskScheduler main try block: {scheduler_err}", exc_info=True)
@@ -850,7 +850,7 @@ async def taskScheduler(task_ctx=None):
 
 # --- NEW Do_Leech Function with Batch Processing ---
 # --- Replace the ENTIRE Do_Leech function with this ---
-async def Do_Leech(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, task_ctx=None):
+async def Do_Leech(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, is_stream_unzip, task_ctx=None):
     """Execute leech operation (download + upload to Telegram).
 
     Args:
@@ -860,6 +860,7 @@ async def Do_Leech(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, task_c
         is_zip: Zip files before upload
         is_unzip: Unzip files before upload
         is_dualzip: Unzip then zip before upload
+        is_stream_unzip: Streaming extract+upload for large archives
         task_ctx: Optional TaskContext for multi-task support
     """
     global BOT, TRANSFER, Paths, Messages, TaskError, log # Ensure log is accessible
@@ -880,7 +881,7 @@ async def Do_Leech(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, task_c
         _task_error = TaskError
         log.info("Do_Leech using global state (single-task mode)")
 
-    log.info(f"Do_Leech started. is_dir={is_dir}, is_ytdl(legacy)={is_ytdl}, is_zip={is_zip}, is_unzip={is_unzip}, is_dualzip={is_dualzip}")
+    log.info(f"Do_Leech started. is_dir={is_dir}, is_ytdl(legacy)={is_ytdl}, is_zip={is_zip}, is_unzip={is_unzip}, is_dualzip={is_dualzip}, is_stream_unzip={is_stream_unzip}")
     original_down_path = _paths.down_path # Store original base download path
     selected_service = _bot.Options.service_type
     overall_success = True # Track if all batches succeeded
@@ -1166,7 +1167,7 @@ async def Do_Leech(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, task_c
 
 
 # --- Do_Mirror Function ---
-async def Do_Mirror(source, is_ytdl, is_zip, is_unzip, is_dualzip, task_ctx=None):
+async def Do_Mirror(source, is_ytdl, is_zip, is_unzip, is_dualzip, is_stream_unzip, task_ctx=None):
     """Execute mirror operation (download + copy to local directory).
 
     Args:
@@ -1175,6 +1176,7 @@ async def Do_Mirror(source, is_ytdl, is_zip, is_unzip, is_dualzip, task_ctx=None
         is_zip: Zip files before mirroring
         is_unzip: Unzip files before mirroring
         is_dualzip: Unzip then zip before mirroring
+        is_stream_unzip: Streaming extract+upload for large archives
         task_ctx: Optional TaskContext for multi-task support
     """
     global BOT, TRANSFER, Paths, Messages, TaskError, log
@@ -1195,7 +1197,7 @@ async def Do_Mirror(source, is_ytdl, is_zip, is_unzip, is_dualzip, task_ctx=None
         _task_error = TaskError
         log.info("Do_Mirror using global state (single-task mode)")
 
-    log.info(f"Do_Mirror started. is_ytdl(legacy)={is_ytdl}, is_zip={is_zip}, is_unzip={is_unzip}, is_dualzip={is_dualzip}")
+    log.info(f"Do_Mirror started. is_ytdl(legacy)={is_ytdl}, is_zip={is_zip}, is_unzip={is_unzip}, is_dualzip={is_dualzip}, is_stream_unzip={is_stream_unzip}")
     selected_service = _bot.Options.service_type
 
     # Ensure local mirror directory exists

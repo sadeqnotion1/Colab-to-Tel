@@ -70,6 +70,89 @@ class MindvalleyDownloader:
         log.error("No M3U8 downloader found! Install N_m3u8DL-RE, yt-dlp, or ffmpeg")
         return "none"
 
+    def _parse_vtt_duration(self, vtt_path: str) -> Optional[float]:
+        """
+        Parse VTT subtitle file and extract the duration (last timestamp)
+
+        Args:
+            vtt_path: Path to VTT file
+
+        Returns:
+            Duration in seconds, or None if parsing fails
+        """
+        try:
+            with open(vtt_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Find all timestamps in format: HH:MM:SS.mmm --> HH:MM:SS.mmm
+            timestamp_pattern = r'(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})'
+            matches = re.findall(timestamp_pattern, content)
+
+            if not matches:
+                log.warning(f"No timestamps found in VTT file: {vtt_path}")
+                return None
+
+            # Get the last end timestamp (second timestamp in the match)
+            last_match = matches[-1]
+            hours = int(last_match[4])
+            minutes = int(last_match[5])
+            seconds = int(last_match[6])
+            milliseconds = int(last_match[7])
+
+            # Convert to seconds
+            total_seconds = hours * 3600 + minutes * 60 + seconds + milliseconds / 1000.0
+            log.info(f"VTT duration: {total_seconds:.2f}s ({hours:02d}:{minutes:02d}:{seconds:02d})")
+            return total_seconds
+
+        except Exception as e:
+            log.error(f"Failed to parse VTT duration: {e}")
+            return None
+
+    async def _get_video_duration(self, video_path: str) -> Optional[float]:
+        """
+        Get video duration using ffprobe
+
+        Args:
+            video_path: Path to video file
+
+        Returns:
+            Duration in seconds, or None if detection fails
+        """
+        try:
+            # Check if ffprobe is available
+            if not shutil.which("ffprobe"):
+                log.warning("ffprobe not found, cannot validate video duration")
+                return None
+
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                video_path
+            ]
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                duration_str = stdout.decode('utf-8').strip()
+                duration = float(duration_str)
+                log.info(f"Video duration: {duration:.2f}s")
+                return duration
+            else:
+                log.error(f"ffprobe failed: {stderr.decode('utf-8')}")
+                return None
+
+        except Exception as e:
+            log.error(f"Failed to get video duration: {e}")
+            return None
+
     async def download_stream(
         self,
         m3u8_url: str,
@@ -483,45 +566,76 @@ class MindvalleyDownloader:
             total_segments = len(segments)
             await self.update_progress_bar(5.0, f"Downloading segments (0/{total_segments})")
 
-            # Download and merge segments
+            # Download and merge segments with retry logic
             merged_content = []
             first_segment = True
+            failed_segments = []
+            MAX_RETRIES = 2  # Retry failed segments once
 
             async with aiohttp.ClientSession() as session:
                 for i, segment_url in enumerate(segments, 1):
-                    try:
-                        async with session.get(segment_url) as response:
-                            if response.status != 200:
-                                log.warning(f"Failed to download segment {i}/{total_segments}")
-                                continue
+                    success = False
+                    for attempt in range(MAX_RETRIES):
+                        try:
+                            async with session.get(segment_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                                if response.status != 200:
+                                    log.warning(f"Failed to download segment {i}/{total_segments} (HTTP {response.status}), attempt {attempt + 1}/{MAX_RETRIES}")
+                                    if attempt < MAX_RETRIES - 1:
+                                        await asyncio.sleep(1)  # Wait before retry
+                                        continue
+                                    else:
+                                        failed_segments.append(i)
+                                        break
 
-                            content = await response.text()
+                                content = await response.text()
 
-                            # Skip WEBVTT header for non-first segments
-                            if not first_segment:
-                                lines = content.split('\n')
-                                if lines and lines[0].startswith('WEBVTT'):
-                                    content = '\n'.join(lines[1:])
+                                # Skip WEBVTT header for non-first segments
+                                if not first_segment:
+                                    lines = content.split('\n')
+                                    if lines and lines[0].startswith('WEBVTT'):
+                                        content = '\n'.join(lines[1:])
 
-                            merged_content.append(content)
-                            first_segment = False
+                                merged_content.append(content)
+                                first_segment = False
+                                success = True
+                                break  # Success, no need to retry
 
-                            # Update progress based on segment count
-                            percentage = (i / total_segments) * 95  # Reserve 5% for writing
-                            if i % 5 == 0 or i == total_segments:
-                                await self.update_progress_bar(percentage, f"Segments {i}/{total_segments}")
+                        except Exception as e:
+                            log.warning(f"Error downloading segment {i}: {e}, attempt {attempt + 1}/{MAX_RETRIES}")
+                            if attempt < MAX_RETRIES - 1:
+                                await asyncio.sleep(1)  # Wait before retry
+                            else:
+                                failed_segments.append(i)
 
-                    except Exception as e:
-                        log.warning(f"Error downloading segment {i}: {e}")
-                        continue
+                    # Update progress based on segment count
+                    percentage = (i / total_segments) * 95  # Reserve 5% for writing
+                    if i % 5 == 0 or i == total_segments:
+                        status_text = f"Segments {i}/{total_segments}"
+                        if failed_segments:
+                            status_text += f" ({len(failed_segments)} failed)"
+                        await self.update_progress_bar(percentage, status_text)
+
+            # Check if too many segments failed (more than 10% = failure)
+            failure_threshold = max(1, int(total_segments * 0.1))  # At least 1 segment, or 10% of total
+            if len(failed_segments) > failure_threshold:
+                error_msg = f"❌ Too many failed segments: {len(failed_segments)}/{total_segments} failed"
+                log.error(f"Subtitle download failed: {error_msg}")
+                await self.update_progress_bar(95.0, error_msg)
+                return False, None
 
             # Write merged subtitle file
             final_content = '\n'.join(merged_content)
             output_path.write_text(final_content, encoding='utf-8')
 
             file_size = output_path.stat().st_size
-            log.info(f"Subtitle saved: {output_path} ({sizeUnit(file_size)})")
-            await self.update_progress_bar(100.0, f"Complete ✅ {sizeUnit(file_size)}")
+            success_msg = f"Complete ✅ {sizeUnit(file_size)}"
+            if failed_segments:
+                success_msg += f" ({len(failed_segments)} segments skipped)"
+                log.warning(f"Subtitle saved with {len(failed_segments)} failed segments: {output_path}")
+            else:
+                log.info(f"Subtitle saved: {output_path} ({sizeUnit(file_size)})")
+
+            await self.update_progress_bar(100.0, success_msg)
 
             return True, str(output_path)
 
@@ -626,13 +740,40 @@ class MindvalleyDownloader:
             await self.update_progress_bar(0.0, "❌ Merge error")
             return False, None
 
+    async def download_subtitle_only(
+        self,
+        subtitle_url: str,
+        output_filename: str = "subtitle.vtt"
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Download only subtitle without video/audio
+
+        Args:
+            subtitle_url: M3U8 subtitle URL
+            output_filename: Output filename for subtitle
+
+        Returns:
+            Tuple of (success: bool, output_path: Optional[str])
+        """
+        log.info(f"Starting subtitle-only download: {subtitle_url}")
+
+        # Download subtitle
+        success, subtitle_path = await self.download_subtitle(subtitle_url, output_filename)
+
+        if not success:
+            log.error("Subtitle-only download failed")
+            return False, None
+
+        log.info(f"Subtitle-only download successful: {subtitle_path}")
+        return True, subtitle_path
+
     async def download_and_merge(
         self,
         video_url: str,
         audio_url: Optional[str] = None,
         subtitle_url: Optional[str] = None,
         output_filename: str = "mindvalley_course.mp4"
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
         """
         Complete download and merge workflow
 
@@ -643,12 +784,12 @@ class MindvalleyDownloader:
             output_filename: Final output filename
 
         Returns:
-            Tuple of (success: bool, output_path: Optional[str])
+            Tuple of (success: bool, mp4_path: Optional[str], vtt_path: Optional[str])
         """
         # Download video (progress bar will be shown automatically)
         video_success, video_path = await self.download_stream(video_url, "video", "video")
         if not video_success:
-            return False, None
+            return False, None, None
 
         # Download audio (if separate)
         audio_path = None
@@ -659,9 +800,35 @@ class MindvalleyDownloader:
 
         # Download subtitles (if provided)
         subtitle_path = None
+        vtt_path_for_upload = None
         if subtitle_url:
             subtitle_success, subtitle_path = await self.download_subtitle(subtitle_url)
-            if not subtitle_success:
+            if subtitle_success and subtitle_path:
+                # Validate subtitle duration against video duration
+                subtitle_duration = self._parse_vtt_duration(subtitle_path)
+                video_duration = await self._get_video_duration(video_path)
+
+                if subtitle_duration and video_duration:
+                    duration_ratio = subtitle_duration / video_duration
+                    log.info(f"Subtitle/Video duration ratio: {duration_ratio:.2%} ({subtitle_duration:.1f}s / {video_duration:.1f}s)")
+
+                    # Warn if subtitle is significantly shorter (less than 80% of video)
+                    if duration_ratio < 0.80:
+                        log.warning(f"⚠️ Subtitle duration ({subtitle_duration:.1f}s) is only {duration_ratio:.1%} of video duration ({video_duration:.1f}s)")
+                        log.warning("This may indicate incomplete subtitle download!")
+                    elif duration_ratio > 1.05:
+                        log.warning(f"⚠️ Subtitle duration ({subtitle_duration:.1f}s) is longer than video duration ({video_duration:.1f}s)")
+                    else:
+                        log.info(f"✅ Subtitle duration matches video duration (ratio: {duration_ratio:.1%})")
+
+                # Keep the VTT file for separate upload
+                vtt_filename = output_filename.replace('.mp4', '.vtt')
+                vtt_path_for_upload = str(Path(self.download_dir) / vtt_filename)
+
+                # Copy the subtitle to final VTT path (don't rename, we still need original for merge)
+                shutil.copy2(subtitle_path, vtt_path_for_upload)
+                log.info(f"VTT file prepared for upload: {vtt_path_for_upload}")
+            else:
                 log.warning("Subtitle download failed, continuing without subtitles")
 
         # Merge if we have multiple streams
@@ -679,17 +846,17 @@ class MindvalleyDownloader:
                         Path(audio_path).unlink()
                     if subtitle_path and Path(subtitle_path).exists():
                         Path(subtitle_path).unlink()
-                    log.info("Cleaned up temporary files")
+                    log.info("Cleaned up temporary files (kept VTT for upload)")
                 except Exception as e:
                     log.warning(f"Failed to clean up temp files: {e}")
 
-            return final_success, final_path
+            return final_success, final_path, vtt_path_for_upload
         else:
             # No merge needed, just rename video file
             final_path = Path(self.download_dir) / output_filename
             Path(video_path).rename(final_path)
             # Progress bar already shows completion from download_stream
-            return True, str(final_path)
+            return True, str(final_path), vtt_path_for_upload
 
     async def update_progress_bar(
         self,

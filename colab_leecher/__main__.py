@@ -1415,16 +1415,20 @@ async def mindvalley_download(client, message):
     help_text = (
         "**🎬 Mindvalley Course Downloader**\n\n"
         "**Send your M3U8 URLs** (choose one option):\n\n"
-        "**Option 1:** Direct URLs with optional title\n"
+        "**Option 1:** Full download (video + audio + subtitle)\n"
         "`TITLE=My Lesson Name` (optional - for custom filename)\n"
         "`https://...video.m3u8`\n"
         "`https://...audio.m3u8` (optional)\n"
         "`https://...subtitle.m3u8` (optional)\n\n"
-        "**Option 2:** Raw gist URL (with TITLE= as first line)\n"
+        "**Option 2:** Subtitle-only download\n"
+        "`DOWNLOAD_TYPE=subtitle-only`\n"
+        "`TITLE=My Subtitle Name` (optional)\n"
+        "`https://...subtitle.m3u8`\n\n"
+        "**Option 3:** Raw gist URL (with TITLE= as first line)\n"
         "`https://gist.githubusercontent.com/...`\n\n"
         "📌 **Tip:** Use browser extension to auto-copy with title!\n"
         "💡 **Tip:** Put long URLs in a gist to avoid character limits!\n"
-        "⚠️ At least the video URL is required"
+        "⚠️ **Tip:** Sending only one URL auto-enables subtitle-only mode"
     )
     src_request_msg = await task_starter(message, help_text)
     log.debug(f"/mindvalley: task_starter called, src_request_msg set")
@@ -1465,7 +1469,8 @@ async def handle_mindvalley_urls(client, message):
     try:
         input_text = message.text.strip()
         urls = []
-        custom_title = None  # NEW: Store custom title from TITLE= line
+        custom_title = None  # Store custom title from TITLE= line
+        subtitle_only = False  # NEW: Flag for subtitle-only mode
 
         # Check if input is a gist URL
         if 'gist.githubusercontent.com' in input_text or 'gist.github.com' in input_text:
@@ -1490,10 +1495,18 @@ async def handle_mindvalley_urls(client, message):
                         for line in lines:
                             line = line.strip()
 
-                            # NEW: Check for TITLE= line (case-insensitive)
+                            # Check for TITLE= line (case-insensitive)
                             if line.upper().startswith('TITLE='):
                                 custom_title = line.split('=', 1)[1].strip()
                                 log.info(f"Extracted custom title from gist: {custom_title}")
+                                continue  # Skip this line, don't add to URLs
+
+                            # NEW: Check for DOWNLOAD_TYPE=subtitle-only
+                            if line.upper().startswith('DOWNLOAD_TYPE='):
+                                download_type = line.split('=', 1)[1].strip().lower()
+                                if download_type == 'subtitle-only' or download_type == 'subtitle_only':
+                                    subtitle_only = True
+                                    log.info("Subtitle-only mode enabled via DOWNLOAD_TYPE")
                                 continue  # Skip this line, don't add to URLs
 
                             # Support both direct URLs and KEY=VALUE format
@@ -1511,15 +1524,23 @@ async def handle_mindvalley_urls(client, message):
                 return
 
         # Direct M3U8 URLs input
-        elif '.m3u8' in input_text.lower() or input_text.upper().startswith('TITLE='):
+        elif '.m3u8' in input_text.lower() or input_text.upper().startswith('TITLE=') or input_text.upper().startswith('DOWNLOAD_TYPE='):
             lines = input_text.split('\n')
             for line in lines:
                 line = line.strip()
 
-                # NEW: Check for TITLE= line (case-insensitive)
+                # Check for TITLE= line (case-insensitive)
                 if line.upper().startswith('TITLE='):
                     custom_title = line.split('=', 1)[1].strip()
                     log.info(f"Extracted custom title from input: {custom_title}")
+                    continue  # Skip this line, don't add to URLs
+
+                # NEW: Check for DOWNLOAD_TYPE=subtitle-only
+                if line.upper().startswith('DOWNLOAD_TYPE='):
+                    download_type = line.split('=', 1)[1].strip().lower()
+                    if download_type == 'subtitle-only' or download_type == 'subtitle_only':
+                        subtitle_only = True
+                        log.info("Subtitle-only mode enabled via DOWNLOAD_TYPE")
                     continue  # Skip this line, don't add to URLs
 
                 # Only add M3U8 URLs
@@ -1536,17 +1557,38 @@ async def handle_mindvalley_urls(client, message):
             await message.reply_text("❌ No valid M3U8 URLs found. Please try again.", quote=True)
             return
 
-        video_url = urls[0] if len(urls) > 0 else None
-        audio_url = urls[1] if len(urls) > 1 else None
-        subtitle_url = urls[2] if len(urls) > 2 else None
+        # NEW: Auto-detect subtitle-only mode if only one URL provided
+        if len(urls) == 1 and not subtitle_only:
+            log.info("Only one URL provided, treating as subtitle-only mode")
+            subtitle_only = True
 
-        # Validate video URL
-        if not video_url or ('.m3u8' not in video_url.lower()):
-            await message.reply_text(
-                "❌ Invalid video URL. First line must be a valid M3U8 playlist URL.",
-                quote=True
-            )
-            return
+        # Parse URLs based on mode
+        if subtitle_only:
+            # Subtitle-only mode: first (and only) URL is subtitle
+            subtitle_url = urls[0] if len(urls) > 0 else None
+            video_url = None
+            audio_url = None
+
+            # Validate subtitle URL
+            if not subtitle_url or ('.m3u8' not in subtitle_url.lower()):
+                await message.reply_text(
+                    "❌ Invalid subtitle URL. Must be a valid M3U8 playlist URL.",
+                    quote=True
+                )
+                return
+        else:
+            # Normal mode: video, optional audio, optional subtitle
+            video_url = urls[0] if len(urls) > 0 else None
+            audio_url = urls[1] if len(urls) > 1 else None
+            subtitle_url = urls[2] if len(urls) > 2 else None
+
+            # Validate video URL
+            if not video_url or ('.m3u8' not in video_url.lower()):
+                await message.reply_text(
+                    "❌ Invalid video URL. First line must be a valid M3U8 playlist URL.",
+                    quote=True
+                )
+                return
 
         # NEW: Create unique directories for this task
         os.makedirs(task_ctx.work_path, exist_ok=True)
@@ -1562,13 +1604,19 @@ async def handle_mindvalley_urls(client, message):
             base_name = clean_filename(custom_title)
             # Apply dot style for consistency with other downloads
             base_name = apply_dot_style(base_name) if base_name else "mindvalley_course"
-            # Ensure .mp4 extension
-            output_filename = base_name if base_name.lower().endswith('.mp4') else f"{base_name}.mp4"
+            # Ensure correct extension based on mode
+            if subtitle_only:
+                output_filename = base_name if base_name.lower().endswith('.vtt') else f"{base_name}.vtt"
+            else:
+                output_filename = base_name if base_name.lower().endswith('.mp4') else f"{base_name}.mp4"
             log.info(f"Using custom filename from title: {output_filename}")
         else:
             # Fallback to timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_filename = f"mindvalley_course_{timestamp}.mp4"
+            if subtitle_only:
+                output_filename = f"mindvalley_subtitle_{timestamp}.vtt"
+            else:
+                output_filename = f"mindvalley_course_{timestamp}.mp4"
             log.info(f"Using timestamp filename: {output_filename}")
 
         # Store URLs in task context
@@ -1576,13 +1624,22 @@ async def handle_mindvalley_urls(client, message):
         task_ctx.filenames = [output_filename]
 
         # Initialize status message for progress tracking
-        status_text = (
-            f"🎬 **Mindvalley Download Started** [{task_ctx.get_short_id()}]\n\n"
-            f"📹 Video: ✅\n"
-            f"🔊 Audio: {'✅' if audio_url else '❌ (using embedded audio)'}\n"
-            f"📝 Subtitle: {'✅' if subtitle_url else '❌'}\n\n"
-            f"_Download will start shortly..._"
-        )
+        if subtitle_only:
+            status_text = (
+                f"📝 **Mindvalley Subtitle Download** [{task_ctx.get_short_id()}]\n\n"
+                f"📝 Subtitle: ✅\n"
+                f"📹 Video: ❌ (subtitle-only mode)\n"
+                f"🔊 Audio: ❌ (subtitle-only mode)\n\n"
+                f"_Download will start shortly..._"
+            )
+        else:
+            status_text = (
+                f"🎬 **Mindvalley Download Started** [{task_ctx.get_short_id()}]\n\n"
+                f"📹 Video: ✅\n"
+                f"🔊 Audio: {'✅' if audio_url else '❌ (using embedded audio)'}\n"
+                f"📝 Subtitle: {'✅' if subtitle_url else '❌'}\n\n"
+                f"_Download will start shortly..._"
+            )
 
         # Download random thumbnail (same logic as taskScheduler)
         # Thumbnail URLs list (same as in task_manager.py)
@@ -1681,22 +1738,53 @@ async def handle_mindvalley_urls(client, message):
                 BotTimes.start_time = datetime.now()
                 log.info(f"Task {task_ctx.get_short_id()} started: Mindvalley download")
 
-                # Download
-                success, final_path = await downloader.download_and_merge(
-                    video_url, audio_url, subtitle_url, output_filename
-                )
+                # Download based on mode
+                vtt_path = None
+                if subtitle_only:
+                    success, final_path = await downloader.download_subtitle_only(
+                        subtitle_url, output_filename
+                    )
+                else:
+                    # Returns (success, mp4_path, vtt_path)
+                    success, final_path, vtt_path = await downloader.download_and_merge(
+                        video_url, audio_url, subtitle_url, output_filename
+                    )
 
                 if success and final_path:
-                    # Upload
+                    # Upload MP4 (or VTT if subtitle-only)
                     log.info(f"Task {task_ctx.get_short_id()}: Uploading {final_path} to Telegram...")
 
                     try:
                         display_name = os.path.basename(final_path)
-                        # NEW: Pass task_ctx to upload_file for per-task upload tracking
+                        # Upload main file (MP4 or VTT)
                         upload_success = await upload_file(final_path, display_name, task_ctx)
 
+                        # If successful and we have a separate VTT file, upload it too
+                        if upload_success and vtt_path and os.path.exists(vtt_path):
+                            log.info(f"Task {task_ctx.get_short_id()}: Uploading VTT subtitle {vtt_path}...")
+                            vtt_display_name = os.path.basename(vtt_path)
+
+                            # Upload VTT file as a document
+                            try:
+                                await client.send_document(
+                                    OWNER,
+                                    document=vtt_path,
+                                    caption=f"📝 **Subtitle File**\n\n`{vtt_display_name}`"
+                                )
+                                log.info(f"VTT file uploaded successfully: {vtt_display_name}")
+
+                                # Clean up VTT file after upload
+                                try:
+                                    os.remove(vtt_path)
+                                    log.info(f"Cleaned up VTT file: {vtt_path}")
+                                except Exception as cleanup_err:
+                                    log.warning(f"Failed to clean up VTT file: {cleanup_err}")
+                            except Exception as vtt_upload_err:
+                                log.error(f"Failed to upload VTT file: {vtt_upload_err}")
+                                # Continue anyway - main file was uploaded
+
                         if upload_success:
-                            # NEW: Pass task_ctx to SendLogs for per-task completion tracking
+                            # Pass task_ctx to SendLogs for per-task completion tracking
                             await SendLogs(is_leech=True, task_ctx=task_ctx)
                             task_ctx.mark_completed()
                             log.info(f"Task {task_ctx.get_short_id()} completed successfully")
