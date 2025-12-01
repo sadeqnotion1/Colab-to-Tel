@@ -1420,10 +1420,11 @@ async def mindvalley_download(client, message):
         "`https://...video.m3u8`\n"
         "`https://...audio.m3u8` (optional)\n"
         "`https://...subtitle.webvtt.m3u8` (optional)\n\n"
-        "**Option 2:** Subtitle-only download ⚠️ Must use flag!\n"
-        "`DOWNLOAD_TYPE=subtitle-only` (required!)\n"
+        "**Option 2:** Subtitle-only download (auto-detected!)\n"
+        "Just send a subtitle URL (contains 'subtitle' or 'webvtt'):\n"
         "`TITLE=My Subtitle Name` (optional)\n"
-        "`https://...subtitle.webvtt.m3u8`\n\n"
+        "`https://...subtitle.webvtt.m3u8`\n"
+        "Or use manual flag: `DOWNLOAD_TYPE=subtitle-only`\n\n"
         "**Option 3:** Raw gist URL (with TITLE= as first line)\n"
         "`https://gist.githubusercontent.com/...`\n\n"
         "📌 **Tip:** Use browser extension to auto-copy with title!\n"
@@ -1557,6 +1558,14 @@ async def handle_mindvalley_urls(client, message):
         if not urls:
             await message.reply_text("❌ No valid M3U8 URLs found. Please try again.", quote=True)
             return
+
+        # Auto-detect subtitle-only mode if user sends a single subtitle URL
+        if not subtitle_only and len(urls) == 1:
+            url_lower = urls[0].lower()
+            # Check if URL contains subtitle indicators
+            if 'subtitle' in url_lower or 'webvtt' in url_lower or url_lower.endswith('.webvtt.m3u8'):
+                subtitle_only = True
+                log.info("Auto-detected subtitle-only mode from URL pattern")
 
         # Parse URLs based on mode
         if subtitle_only:
