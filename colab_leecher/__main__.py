@@ -1419,11 +1419,11 @@ async def mindvalley_download(client, message):
         "`TITLE=My Lesson Name` (optional - for custom filename)\n"
         "`https://...video.m3u8`\n"
         "`https://...audio.m3u8` (optional)\n"
-        "`https://...subtitle.m3u8` (optional)\n\n"
+        "`https://...subtitle.webvtt.m3u8` (optional)\n\n"
         "**Option 2:** Subtitle-only download ⚠️ Must use flag!\n"
         "`DOWNLOAD_TYPE=subtitle-only` (required!)\n"
         "`TITLE=My Subtitle Name` (optional)\n"
-        "`https://...subtitle.m3u8`\n\n"
+        "`https://...subtitle.webvtt.m3u8`\n\n"
         "**Option 3:** Raw gist URL (with TITLE= as first line)\n"
         "`https://gist.githubusercontent.com/...`\n\n"
         "📌 **Tip:** Use browser extension to auto-copy with title!\n"
@@ -1510,7 +1510,8 @@ async def handle_mindvalley_urls(client, message):
                                 continue  # Skip this line, don't add to URLs
 
                             # Support both direct URLs and KEY=VALUE format
-                            if '.m3u8' in line.lower():
+                            # Accept .m3u8 or .webvtt.m3u8 (for subtitles)
+                            if '.m3u8' in line.lower() or '.webvtt' in line.lower():
                                 if '=' in line:  # Format: VIDEO_URL=https://...
                                     url = line.split('=', 1)[1].strip()
                                 else:  # Direct URL format
@@ -1523,8 +1524,8 @@ async def handle_mindvalley_urls(client, message):
                 await message.reply_text(f"❌ Failed to fetch gist: {str(fetch_err)}", quote=True)
                 return
 
-        # Direct M3U8 URLs input
-        elif '.m3u8' in input_text.lower() or input_text.upper().startswith('TITLE=') or input_text.upper().startswith('DOWNLOAD_TYPE='):
+        # Direct M3U8 URLs input (including .webvtt.m3u8 for subtitles)
+        elif '.m3u8' in input_text.lower() or '.webvtt' in input_text.lower() or input_text.upper().startswith('TITLE=') or input_text.upper().startswith('DOWNLOAD_TYPE='):
             lines = input_text.split('\n')
             for line in lines:
                 line = line.strip()
@@ -1535,7 +1536,7 @@ async def handle_mindvalley_urls(client, message):
                     log.info(f"Extracted custom title from input: {custom_title}")
                     continue  # Skip this line, don't add to URLs
 
-                # NEW: Check for DOWNLOAD_TYPE=subtitle-only
+                # Check for DOWNLOAD_TYPE=subtitle-only
                 if line.upper().startswith('DOWNLOAD_TYPE='):
                     download_type = line.split('=', 1)[1].strip().lower()
                     if download_type == 'subtitle-only' or download_type == 'subtitle_only':
@@ -1543,8 +1544,8 @@ async def handle_mindvalley_urls(client, message):
                         log.info("Subtitle-only mode enabled via DOWNLOAD_TYPE")
                     continue  # Skip this line, don't add to URLs
 
-                # Only add M3U8 URLs
-                if line and '.m3u8' in line.lower():
+                # Accept M3U8 URLs (including .webvtt.m3u8 for subtitles)
+                if line and ('.m3u8' in line.lower() or '.webvtt' in line.lower()):
                     urls.append(line)
 
             log.info(f"Parsed {len(urls)} direct M3U8 URLs")
@@ -1564,10 +1565,10 @@ async def handle_mindvalley_urls(client, message):
             video_url = None
             audio_url = None
 
-            # Validate subtitle URL
-            if not subtitle_url or ('.m3u8' not in subtitle_url.lower()):
+            # Validate subtitle URL (accepts .m3u8 or .webvtt.m3u8)
+            if not subtitle_url or ('.m3u8' not in subtitle_url.lower() and '.webvtt' not in subtitle_url.lower()):
                 await message.reply_text(
-                    "❌ Invalid subtitle URL. Must be a valid M3U8 playlist URL.",
+                    "❌ Invalid subtitle URL. Must be a valid M3U8 or WebVTT playlist URL (.m3u8 or .webvtt.m3u8).",
                     quote=True
                 )
                 return
