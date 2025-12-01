@@ -756,8 +756,15 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext = None):
                      log.warning(f"Cannot send final summary to dump chat {task_id_str}, sent_msg invalid.")
 
                  # Edit the status message in owner chat
-                 await status_msg.edit_text(text=final_status_text, reply_markup=final_markup, disable_web_page_preview=True)
-                 log.info(f"Edited final status message for owner {task_id_str}.")
+                 # Check if message is a photo (has thumbnail) or plain text
+                 if hasattr(status_msg, 'photo') and status_msg.photo:
+                     # Message has a photo/thumbnail - edit caption to preserve thumbnail
+                     await status_msg.edit_caption(caption=final_status_text, reply_markup=final_markup)
+                     log.info(f"Edited final status caption (thumbnail preserved) for owner {task_id_str}.")
+                 else:
+                     # Plain text message - edit text normally
+                     await status_msg.edit_text(text=final_status_text, reply_markup=final_markup, disable_web_page_preview=True)
+                     log.info(f"Edited final status text for owner {task_id_str}.")
 
                  # Send detailed file log if leeching and files were sent
                  if is_leech and file_count > 0:
