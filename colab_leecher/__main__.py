@@ -1420,15 +1420,15 @@ async def mindvalley_download(client, message):
         "`https://...video.m3u8`\n"
         "`https://...audio.m3u8` (optional)\n"
         "`https://...subtitle.m3u8` (optional)\n\n"
-        "**Option 2:** Subtitle-only download\n"
-        "`DOWNLOAD_TYPE=subtitle-only`\n"
+        "**Option 2:** Subtitle-only download ⚠️ Must use flag!\n"
+        "`DOWNLOAD_TYPE=subtitle-only` (required!)\n"
         "`TITLE=My Subtitle Name` (optional)\n"
         "`https://...subtitle.m3u8`\n\n"
         "**Option 3:** Raw gist URL (with TITLE= as first line)\n"
         "`https://gist.githubusercontent.com/...`\n\n"
         "📌 **Tip:** Use browser extension to auto-copy with title!\n"
         "💡 **Tip:** Put long URLs in a gist to avoid character limits!\n"
-        "⚠️ **Tip:** Sending only one URL auto-enables subtitle-only mode"
+        "📝 **Note:** Subtitles uploaded as both SRT and VTT formats"
     )
     src_request_msg = await task_starter(message, help_text)
     log.debug(f"/mindvalley: task_starter called, src_request_msg set")
@@ -1556,11 +1556,6 @@ async def handle_mindvalley_urls(client, message):
         if not urls:
             await message.reply_text("❌ No valid M3U8 URLs found. Please try again.", quote=True)
             return
-
-        # NEW: Auto-detect subtitle-only mode if only one URL provided
-        if len(urls) == 1 and not subtitle_only:
-            log.info("Only one URL provided, treating as subtitle-only mode")
-            subtitle_only = True
 
         # Parse URLs based on mode
         if subtitle_only:
@@ -1740,48 +1735,110 @@ async def handle_mindvalley_urls(client, message):
 
                 # Download based on mode
                 vtt_path = None
+                srt_path = None
                 if subtitle_only:
-                    success, final_path = await downloader.download_subtitle_only(
+                    # Returns (success, vtt_path, srt_path) - no final_path for subtitle-only
+                    success, vtt_path, srt_path = await downloader.download_subtitle_only(
                         subtitle_url, output_filename
                     )
+                    # For subtitle-only, set final_path to vtt_path for backward compatibility
+                    final_path = vtt_path if success else None
                 else:
-                    # Returns (success, mp4_path, vtt_path)
-                    success, final_path, vtt_path = await downloader.download_and_merge(
+                    # Returns (success, mp4_path, vtt_path, srt_path)
+                    success, final_path, vtt_path, srt_path = await downloader.download_and_merge(
                         video_url, audio_url, subtitle_url, output_filename
                     )
 
                 if success and final_path:
-                    # Upload MP4 (or VTT if subtitle-only)
-                    log.info(f"Task {task_ctx.get_short_id()}: Uploading {final_path} to Telegram...")
-
                     try:
-                        display_name = os.path.basename(final_path)
-                        # Upload main file (MP4 or VTT)
-                        upload_success = await upload_file(final_path, display_name, task_ctx)
+                        # Handle subtitle-only mode differently
+                        if subtitle_only:
+                            log.info(f"Task {task_ctx.get_short_id()}: Uploading subtitle files...")
+                            upload_success = True  # Will be set to False if uploads fail
 
-                        # If successful and we have a separate VTT file, upload it too
-                        if upload_success and vtt_path and os.path.exists(vtt_path):
-                            log.info(f"Task {task_ctx.get_short_id()}: Uploading VTT subtitle {vtt_path}...")
-                            vtt_display_name = os.path.basename(vtt_path)
-
-                            # Upload VTT file as a document
-                            try:
-                                await client.send_document(
-                                    OWNER,
-                                    document=vtt_path,
-                                    caption=f"📝 **Subtitle File**\n\n`{vtt_display_name}`"
-                                )
-                                log.info(f"VTT file uploaded successfully: {vtt_display_name}")
-
-                                # Clean up VTT file after upload
+                            # Upload SRT file (more compatible)
+                            if srt_path and os.path.exists(srt_path):
+                                srt_display_name = os.path.basename(srt_path)
                                 try:
+                                    await client.send_document(
+                                        OWNER,
+                                        document=srt_path,
+                                        caption=f"📝 **Subtitle File (SRT)**\n\n`{srt_display_name}`\n\n✅ Compatible with most players"
+                                    )
+                                    log.info(f"SRT file uploaded: {srt_display_name}")
+                                    os.remove(srt_path)
+                                except Exception as e:
+                                    log.error(f"SRT upload failed: {e}")
+                                    upload_success = False
+
+                            # Upload VTT file (original)
+                            if vtt_path and os.path.exists(vtt_path):
+                                vtt_display_name = os.path.basename(vtt_path)
+                                try:
+                                    await client.send_document(
+                                        OWNER,
+                                        document=vtt_path,
+                                        caption=f"📝 **Subtitle File (VTT)**\n\n`{vtt_display_name}`\n\n🌐 Web-compatible format"
+                                    )
+                                    log.info(f"VTT file uploaded: {vtt_display_name}")
                                     os.remove(vtt_path)
-                                    log.info(f"Cleaned up VTT file: {vtt_path}")
-                                except Exception as cleanup_err:
-                                    log.warning(f"Failed to clean up VTT file: {cleanup_err}")
-                            except Exception as vtt_upload_err:
-                                log.error(f"Failed to upload VTT file: {vtt_upload_err}")
-                                # Continue anyway - main file was uploaded
+                                except Exception as e:
+                                    log.error(f"VTT upload failed: {e}")
+                                    upload_success = False
+
+                        else:
+                            # Normal mode: Upload MP4 video
+                            log.info(f"Task {task_ctx.get_short_id()}: Uploading {final_path} to Telegram...")
+                            display_name = os.path.basename(final_path)
+                            upload_success = await upload_file(final_path, display_name, task_ctx)
+
+                        # If successful and we have subtitle files, upload them
+                        if upload_success:
+                            # Upload SRT file (more widely compatible)
+                            if srt_path and os.path.exists(srt_path):
+                                log.info(f"Task {task_ctx.get_short_id()}: Uploading SRT subtitle {srt_path}...")
+                                srt_display_name = os.path.basename(srt_path)
+
+                                try:
+                                    await client.send_document(
+                                        OWNER,
+                                        document=srt_path,
+                                        caption=f"📝 **Subtitle File (SRT)**\n\n`{srt_display_name}`\n\n✅ Compatible with most players"
+                                    )
+                                    log.info(f"SRT file uploaded successfully: {srt_display_name}")
+
+                                    # Clean up SRT file after upload
+                                    try:
+                                        os.remove(srt_path)
+                                        log.info(f"Cleaned up SRT file: {srt_path}")
+                                    except Exception as cleanup_err:
+                                        log.warning(f"Failed to clean up SRT file: {cleanup_err}")
+                                except Exception as srt_upload_err:
+                                    log.error(f"Failed to upload SRT file: {srt_upload_err}")
+                                    # Continue to VTT upload
+
+                            # Upload VTT file (original format)
+                            if vtt_path and os.path.exists(vtt_path):
+                                log.info(f"Task {task_ctx.get_short_id()}: Uploading VTT subtitle {vtt_path}...")
+                                vtt_display_name = os.path.basename(vtt_path)
+
+                                try:
+                                    await client.send_document(
+                                        OWNER,
+                                        document=vtt_path,
+                                        caption=f"📝 **Subtitle File (VTT)**\n\n`{vtt_display_name}`\n\n🌐 Web-compatible format"
+                                    )
+                                    log.info(f"VTT file uploaded successfully: {vtt_display_name}")
+
+                                    # Clean up VTT file after upload
+                                    try:
+                                        os.remove(vtt_path)
+                                        log.info(f"Cleaned up VTT file: {vtt_path}")
+                                    except Exception as cleanup_err:
+                                        log.warning(f"Failed to clean up VTT file: {cleanup_err}")
+                                except Exception as vtt_upload_err:
+                                    log.error(f"Failed to upload VTT file: {vtt_upload_err}")
+                                    # Continue anyway - main file was uploaded
 
                         if upload_success:
                             # Pass task_ctx to SendLogs for per-task completion tracking

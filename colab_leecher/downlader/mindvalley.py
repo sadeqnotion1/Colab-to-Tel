@@ -153,6 +153,95 @@ class MindvalleyDownloader:
             log.error(f"Failed to get video duration: {e}")
             return None
 
+    def _convert_vtt_to_srt(self, vtt_path: str, srt_path: str) -> bool:
+        """
+        Convert VTT subtitle file to SRT format
+
+        VTT format:
+            WEBVTT
+
+            00:00:01.000 --> 00:00:04.000
+            First subtitle
+
+        SRT format:
+            1
+            00:00:01,000 --> 00:00:04,000
+            First subtitle
+
+        Args:
+            vtt_path: Path to input VTT file
+            srt_path: Path to output SRT file
+
+        Returns:
+            True if conversion successful, False otherwise
+        """
+        try:
+            log.info(f"Converting VTT to SRT: {vtt_path} → {srt_path}")
+
+            with open(vtt_path, 'r', encoding='utf-8') as vtt_file:
+                vtt_content = vtt_file.read()
+
+            # Split into lines
+            lines = vtt_content.split('\n')
+
+            srt_lines = []
+            subtitle_counter = 1
+            i = 0
+
+            while i < len(lines):
+                line = lines[i].strip()
+
+                # Skip WEBVTT header and empty lines at start
+                if line.startswith('WEBVTT') or line.startswith('NOTE') or not line:
+                    i += 1
+                    continue
+
+                # Check if this is a timestamp line (contains -->)
+                if '-->' in line:
+                    # Convert VTT timestamp to SRT format (. to ,)
+                    timestamp_line = line.replace('.', ',')
+
+                    # Remove any cue settings (text after second timestamp)
+                    # Example: "00:00:01,000 --> 00:00:04,000 align:start position:0%"
+                    parts = timestamp_line.split()
+                    if len(parts) >= 3:
+                        # Keep only: timestamp --> timestamp
+                        timestamp_line = f"{parts[0]} {parts[1]} {parts[2]}"
+
+                    # Add subtitle number
+                    srt_lines.append(str(subtitle_counter))
+                    srt_lines.append(timestamp_line)
+
+                    # Collect subtitle text (lines after timestamp until blank line)
+                    i += 1
+                    subtitle_text = []
+                    while i < len(lines) and lines[i].strip() and '-->' not in lines[i]:
+                        subtitle_text.append(lines[i].strip())
+                        i += 1
+
+                    # Add subtitle text
+                    srt_lines.extend(subtitle_text)
+
+                    # Add blank line separator
+                    srt_lines.append('')
+
+                    subtitle_counter += 1
+                else:
+                    i += 1
+
+            # Write SRT file
+            srt_content = '\n'.join(srt_lines)
+            with open(srt_path, 'w', encoding='utf-8') as srt_file:
+                srt_file.write(srt_content)
+
+            srt_size = os.path.getsize(srt_path)
+            log.info(f"SRT conversion successful: {srt_path} ({sizeUnit(srt_size)}) - {subtitle_counter - 1} subtitles")
+            return True
+
+        except Exception as e:
+            log.error(f"Failed to convert VTT to SRT: {e}")
+            return False
+
     async def download_stream(
         self,
         m3u8_url: str,
@@ -744,28 +833,38 @@ class MindvalleyDownloader:
         self,
         subtitle_url: str,
         output_filename: str = "subtitle.vtt"
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
         """
-        Download only subtitle without video/audio
+        Download only subtitle without video/audio, and convert to SRT
 
         Args:
             subtitle_url: M3U8 subtitle URL
-            output_filename: Output filename for subtitle
+            output_filename: Output filename for subtitle (VTT)
 
         Returns:
-            Tuple of (success: bool, output_path: Optional[str])
+            Tuple of (success: bool, vtt_path: Optional[str], srt_path: Optional[str])
         """
         log.info(f"Starting subtitle-only download: {subtitle_url}")
 
-        # Download subtitle
-        success, subtitle_path = await self.download_subtitle(subtitle_url, output_filename)
+        # Download subtitle as VTT
+        success, vtt_path = await self.download_subtitle(subtitle_url, output_filename)
 
         if not success:
             log.error("Subtitle-only download failed")
-            return False, None
+            return False, None, None
 
-        log.info(f"Subtitle-only download successful: {subtitle_path}")
-        return True, subtitle_path
+        # Convert VTT to SRT for wider compatibility
+        srt_filename = output_filename.replace('.vtt', '.srt')
+        srt_path = str(Path(self.download_dir) / srt_filename)
+
+        if self._convert_vtt_to_srt(vtt_path, srt_path):
+            log.info(f"SRT conversion successful: {srt_path}")
+        else:
+            log.warning("SRT conversion failed, will upload VTT only")
+            srt_path = None
+
+        log.info(f"Subtitle-only download successful: VTT={vtt_path}, SRT={srt_path}")
+        return True, vtt_path, srt_path
 
     async def download_and_merge(
         self,
@@ -773,7 +872,7 @@ class MindvalleyDownloader:
         audio_url: Optional[str] = None,
         subtitle_url: Optional[str] = None,
         output_filename: str = "mindvalley_course.mp4"
-    ) -> Tuple[bool, Optional[str], Optional[str]]:
+    ) -> Tuple[bool, Optional[str], Optional[str], Optional[str]]:
         """
         Complete download and merge workflow
 
@@ -784,12 +883,12 @@ class MindvalleyDownloader:
             output_filename: Final output filename
 
         Returns:
-            Tuple of (success: bool, mp4_path: Optional[str], vtt_path: Optional[str])
+            Tuple of (success: bool, mp4_path: Optional[str], vtt_path: Optional[str], srt_path: Optional[str])
         """
         # Download video (progress bar will be shown automatically)
         video_success, video_path = await self.download_stream(video_url, "video", "video")
         if not video_success:
-            return False, None, None
+            return False, None, None, None
 
         # Download audio (if separate)
         audio_path = None
@@ -801,6 +900,7 @@ class MindvalleyDownloader:
         # Download subtitles (if provided)
         subtitle_path = None
         vtt_path_for_upload = None
+        srt_path_for_upload = None
         if subtitle_url:
             subtitle_success, subtitle_path = await self.download_subtitle(subtitle_url)
             if subtitle_success and subtitle_path:
@@ -828,6 +928,16 @@ class MindvalleyDownloader:
                 # Copy the subtitle to final VTT path (don't rename, we still need original for merge)
                 shutil.copy2(subtitle_path, vtt_path_for_upload)
                 log.info(f"VTT file prepared for upload: {vtt_path_for_upload}")
+
+                # Convert VTT to SRT for wider compatibility
+                srt_filename = output_filename.replace('.mp4', '.srt')
+                srt_path_for_upload = str(Path(self.download_dir) / srt_filename)
+
+                if self._convert_vtt_to_srt(vtt_path_for_upload, srt_path_for_upload):
+                    log.info(f"SRT file prepared for upload: {srt_path_for_upload}")
+                else:
+                    log.warning("SRT conversion failed, will upload VTT only")
+                    srt_path_for_upload = None
             else:
                 log.warning("Subtitle download failed, continuing without subtitles")
 
@@ -850,13 +960,13 @@ class MindvalleyDownloader:
                 except Exception as e:
                     log.warning(f"Failed to clean up temp files: {e}")
 
-            return final_success, final_path, vtt_path_for_upload
+            return final_success, final_path, vtt_path_for_upload, srt_path_for_upload
         else:
             # No merge needed, just rename video file
             final_path = Path(self.download_dir) / output_filename
             Path(video_path).rename(final_path)
             # Progress bar already shows completion from download_stream
-            return True, str(final_path), vtt_path_for_upload
+            return True, str(final_path), vtt_path_for_upload, srt_path_for_upload
 
     async def update_progress_bar(
         self,
