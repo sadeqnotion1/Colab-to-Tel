@@ -1637,30 +1637,9 @@ async def handle_mindvalley_urls(client, message):
                 f"_Download will start shortly..._"
             )
 
-        # Download random thumbnail (same logic as taskScheduler)
-        # Thumbnail URLs list (same as in task_manager.py)
-        thumbnail_urls = [
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1731164711_3503133943815832551_342994803587bc07f39f08a94d.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1731164711_3503133943706415129_3429948035fbb4ed854c9f2ac2.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1731164711_3503133943773516810_342994803551ea06f4867ad33c.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1731164711_3503133943790280673_34299480355502f86f51e81532.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1731164711_3503133943882697775_342994803557e0e4a1e2f1e5dd.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1731164711_3503133943849198116_3429948035a79adeb1c2c1ec97.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1731164711_3503133943819962381_3429948035abb63b73e3c16c1c.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1731164711_3503133943844949079_342994803545f02a2a3a99e9c1.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1731164711_3503133943861785118_3429948035d8fbe0b63e18d479.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1728582585_3475925118982133232_342994803592004050ba1fccab.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1728582585_3475925118990576676_3429948035dbedd90651c96727.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1737667652_3552136181712529874_34299480353f5fb1ec339cb42c.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1742051665_3588911949501537595_34299480355c53b923688461d5.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1744484994_3609324193139157716_34299480354bd55e91315e963a.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1744484994_3609324193130940649_3429948035139c381bbb606449.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1744484994_3609324193130978917_34299480350eb26602481108e4.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1744484994_3609324193231502887_342994803504995ffddeea1c4b.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1744484994_3609324193130816235_342994803554e5d684bd1109dd.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1745962016_3621714348768893962_342994803559b97df7ddd7c5a0.jpg",
-            "https://simp6.selti-delivery.ru/images3/sofiamuse_1745962016_3621714348793969595_3429948035f25f1077d9aa5bdd.jpg"
-        ]
+        # Download random thumbnail - use shared pool from task_manager
+        # Import the full thumbnail collection (~472 URLs) instead of hardcoded subset
+        from .utility.task_manager import thumbnail_urls
 
         # NEW: Use task-specific hero image path
         hero_image_path = task_ctx.hero_image
@@ -1757,34 +1736,36 @@ async def handle_mindvalley_urls(client, message):
                             log.info(f"Task {task_ctx.get_short_id()}: Uploading subtitle files...")
                             upload_success = True  # Will be set to False if uploads fail
 
-                            # Upload SRT file (more compatible)
+                            # Upload SRT file (more compatible) using upload_file for proper stats tracking
                             if srt_path and os.path.exists(srt_path):
                                 srt_display_name = os.path.basename(srt_path)
-                                try:
-                                    await client.send_document(
-                                        OWNER,
-                                        document=srt_path,
-                                        caption=f"📝 **Subtitle File (SRT)**\n\n`{srt_display_name}`\n\n✅ Compatible with most players"
-                                    )
-                                    log.info(f"SRT file uploaded: {srt_display_name}")
-                                    os.remove(srt_path)
-                                except Exception as e:
-                                    log.error(f"SRT upload failed: {e}")
+                                log.info(f"Uploading SRT subtitle: {srt_display_name}")
+                                srt_upload = await upload_file(srt_path, srt_display_name, task_ctx)
+                                if srt_upload:
+                                    log.info(f"SRT file uploaded successfully: {srt_display_name}")
+                                    try:
+                                        os.remove(srt_path)
+                                        log.info(f"Cleaned up SRT file: {srt_path}")
+                                    except Exception as cleanup_err:
+                                        log.warning(f"Failed to clean up SRT file: {cleanup_err}")
+                                else:
+                                    log.error(f"SRT upload failed: {srt_display_name}")
                                     upload_success = False
 
-                            # Upload VTT file (original)
+                            # Upload VTT file (original) using upload_file for proper stats tracking
                             if vtt_path and os.path.exists(vtt_path):
                                 vtt_display_name = os.path.basename(vtt_path)
-                                try:
-                                    await client.send_document(
-                                        OWNER,
-                                        document=vtt_path,
-                                        caption=f"📝 **Subtitle File (VTT)**\n\n`{vtt_display_name}`\n\n🌐 Web-compatible format"
-                                    )
-                                    log.info(f"VTT file uploaded: {vtt_display_name}")
-                                    os.remove(vtt_path)
-                                except Exception as e:
-                                    log.error(f"VTT upload failed: {e}")
+                                log.info(f"Uploading VTT subtitle: {vtt_display_name}")
+                                vtt_upload = await upload_file(vtt_path, vtt_display_name, task_ctx)
+                                if vtt_upload:
+                                    log.info(f"VTT file uploaded successfully: {vtt_display_name}")
+                                    try:
+                                        os.remove(vtt_path)
+                                        log.info(f"Cleaned up VTT file: {vtt_path}")
+                                    except Exception as cleanup_err:
+                                        log.warning(f"Failed to clean up VTT file: {cleanup_err}")
+                                else:
+                                    log.error(f"VTT upload failed: {vtt_display_name}")
                                     upload_success = False
 
                         else:
@@ -1793,52 +1774,42 @@ async def handle_mindvalley_urls(client, message):
                             display_name = os.path.basename(final_path)
                             upload_success = await upload_file(final_path, display_name, task_ctx)
 
-                        # If successful and we have subtitle files, upload them
+                        # If successful and we have subtitle files, upload them using upload_file
                         if upload_success:
-                            # Upload SRT file (more widely compatible)
+                            # Upload SRT file (more widely compatible) using upload_file for proper stats tracking
                             if srt_path and os.path.exists(srt_path):
                                 log.info(f"Task {task_ctx.get_short_id()}: Uploading SRT subtitle {srt_path}...")
                                 srt_display_name = os.path.basename(srt_path)
 
-                                try:
-                                    await client.send_document(
-                                        OWNER,
-                                        document=srt_path,
-                                        caption=f"📝 **Subtitle File (SRT)**\n\n`{srt_display_name}`\n\n✅ Compatible with most players"
-                                    )
+                                srt_upload = await upload_file(srt_path, srt_display_name, task_ctx)
+                                if srt_upload:
                                     log.info(f"SRT file uploaded successfully: {srt_display_name}")
-
                                     # Clean up SRT file after upload
                                     try:
                                         os.remove(srt_path)
                                         log.info(f"Cleaned up SRT file: {srt_path}")
                                     except Exception as cleanup_err:
                                         log.warning(f"Failed to clean up SRT file: {cleanup_err}")
-                                except Exception as srt_upload_err:
-                                    log.error(f"Failed to upload SRT file: {srt_upload_err}")
+                                else:
+                                    log.error(f"Failed to upload SRT file: {srt_display_name}")
                                     # Continue to VTT upload
 
-                            # Upload VTT file (original format)
+                            # Upload VTT file (original format) using upload_file for proper stats tracking
                             if vtt_path and os.path.exists(vtt_path):
                                 log.info(f"Task {task_ctx.get_short_id()}: Uploading VTT subtitle {vtt_path}...")
                                 vtt_display_name = os.path.basename(vtt_path)
 
-                                try:
-                                    await client.send_document(
-                                        OWNER,
-                                        document=vtt_path,
-                                        caption=f"📝 **Subtitle File (VTT)**\n\n`{vtt_display_name}`\n\n🌐 Web-compatible format"
-                                    )
+                                vtt_upload = await upload_file(vtt_path, vtt_display_name, task_ctx)
+                                if vtt_upload:
                                     log.info(f"VTT file uploaded successfully: {vtt_display_name}")
-
                                     # Clean up VTT file after upload
                                     try:
                                         os.remove(vtt_path)
                                         log.info(f"Cleaned up VTT file: {vtt_path}")
                                     except Exception as cleanup_err:
                                         log.warning(f"Failed to clean up VTT file: {cleanup_err}")
-                                except Exception as vtt_upload_err:
-                                    log.error(f"Failed to upload VTT file: {vtt_upload_err}")
+                                else:
+                                    log.error(f"Failed to upload VTT file: {vtt_display_name}")
                                     # Continue anyway - main file was uploaded
 
                         if upload_success:
