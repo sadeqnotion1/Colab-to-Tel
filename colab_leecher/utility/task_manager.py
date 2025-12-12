@@ -1097,29 +1097,52 @@ async def Do_Leech(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, is_str
                                  log.info(">>> Streaming extract-upload completed successfully")
                                  leech_path = None  # Skip normal Leech - files already uploaded
                                  cleanup_process_path = False
-                     elif is_unzip: await Unzip_Handler(process_path, True, task_ctx); source_path_for_copy = _paths.temp_unzip_path; cleanup_temp = True; temp_path_to_clean = _paths.temp_unzip_path
-                     elif is_dualzip: await Unzip_Handler(process_path, True, task_ctx); await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx); source_path_for_copy = _paths.temp_zpath; cleanup_temp = True; temp_path_to_clean = _paths.temp_zpath; dualzip_unzip_path = _paths.temp_unzip_path
+                     elif is_unzip:
+                         log.debug(">>> Calling Unzip_Handler...")
+                         await Unzip_Handler(process_path, True, task_ctx)
+                         if _task_error and _task_error.state:
+                             batch_processing_error = True
+                             log.error(">>> Unzip_Handler failed.")
+                         else:
+                             leech_path = _paths.temp_unzip_path
+                             cleanup_process_path = False
+                             log.debug(f">>> Unzip successful. leech_path set to: {leech_path}")
+                     elif is_dualzip:
+                         log.debug(">>> Calling Unzip_Handler (dualzip)...")
+                         await Unzip_Handler(process_path, True, task_ctx)
+                         if _task_error and _task_error.state:
+                             batch_processing_error = True
+                             log.error(">>> Unzip_Handler (dualzip) failed.")
+                         else:
+                             log.debug(">>> Calling Zip_Handler (dualzip)...")
+                             await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx)
+                             if _task_error and _task_error.state:
+                                 batch_processing_error = True
+                                 log.error(">>> Zip_Handler (dualzip) failed.")
+                             else:
+                                 leech_path = _paths.temp_zpath
+                                 cleanup_process_path = False
+                                 log.debug(f">>> Dualzip successful. leech_path set to: {leech_path}")
 
-                     if _task_error.state: log.error("Zip/Unzip failed before mirroring copy."); return
-                     if not ospath.exists(source_path_for_copy):
-                          log.error(f"Mirror source path not found after processing: {source_path_for_copy}")
-                          if not _task_error.state: _task_error.state = True; _task_error.text = "Mirror source path invalid."
-                          return
-
-                     # --- Mirror Copy Logic ---
-                     log.info(f"Mirroring content from {source_path_for_copy} to LOCAL Colab path: {mirror_dir_final}")
-                     try:
-                          for item in os.listdir(source_path_for_copy):
-                              s_item = ospath.join(source_path_for_copy, item)
-                              d_item = ospath.join(mirror_dir_final, item)
-                              if ospath.isdir(s_item):
-                                  shutil.copytree(s_item, d_item, dirs_exist_ok=True)
-                              elif ospath.isfile(s_item):
-                                  shutil.copy2(s_item, d_item)
-                          log.info(f"Successfully mirrored content to {mirror_dir_final}")
-                     except Exception as copy_err:
-                          log.error(f"Error mirroring content: {copy_err}", exc_info=True)
-                          if _task_error: _task_error.state = True; _task_error.text = f"Mirror copy error: {copy_err}"
+                     # Check for processing errors before leech
+                     if _task_error.state:
+                         log.error("Zip/Unzip failed before leech upload.")
+                         batch_processing_error = True
+                     # Call Leech handler to upload processed files to Telegram
+                     elif leech_path is not None and ospath.exists(leech_path):
+                         log.info(f"Do_Leech batch: Starting Leech handler for path: {leech_path}")
+                         await Leech(leech_path, True, task_ctx)
+                         if _task_error.state:
+                             log.error(">>> Leech handler failed.")
+                             batch_processing_error = True
+                         else:
+                             log.debug(f">>> Leech successful for batch {i//batch_size + 1}")
+                     elif leech_path is None:
+                         log.debug("leech_path is None - files already uploaded (streaming mode)")
+                     else:
+                         log.error(f"Leech path missing or invalid: {leech_path}")
+                         batch_processing_error = True
+                         if _task_error: _task_error.state = True; _task_error.text = "Leech path invalid"
 
                 except Exception as processing_err:
                      log.error(f"Error during batch processing: {processing_err}", exc_info=True)
