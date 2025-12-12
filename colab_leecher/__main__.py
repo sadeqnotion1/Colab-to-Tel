@@ -75,6 +75,24 @@ async def ask_manual_filenames(client, chat_id, service_name, count):
     prompt_msg = await client.send_message(chat_id, f"📝 Okay, **reply to this message** with the {count} filename(s) for {service_name}, one per line.")
     reply_prompt_message_id = prompt_msg.id # Store prompt ID
 
+# --- Helper function to ask for upload destination (Google Drive or Local Mirror) ---
+async def ask_upload_destination(client, chat_id):
+    log.info(f"Asking upload destination for chat {chat_id}")
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("☁️ Google Drive", callback_data="destination_gdrive")],
+        [InlineKeyboardButton("📂 Local Mirror (Colab)", callback_data="destination_mirror")],
+        [InlineKeyboardButton("Cancel Task", callback_data="cancel")]
+    ])
+    text = (
+        "<b>📤 Select Upload Destination »</b>\n\n"
+        "☁️ <b>Google Drive:</b> <i>Upload files to your Google Drive (requires token.pickle)</i>\n"
+        "📂 <b>Local Mirror:</b> <i>Copy files to Colab environment (/content/Mirrored_Files)</i>"
+    )
+    try:
+        await client.send_message(chat_id, text, reply_markup=keyboard)
+    except Exception as e:
+        log.error(f"Failed to send upload destination prompt: {e}", exc_info=True)
+
 # --- Existing Command Handlers ---
 @colab_bot.on_message(filters.command("start") & filters.private)
 async def start(client, message):
@@ -93,12 +111,15 @@ async def telegram_upload(client, message):
 
 @colab_bot.on_message(filters.command("gdupload") & filters.private)
 async def drive_upload(client, message):
-    global BOT, src_request_msg
+    global BOT
     log.info(f"Received /gdupload from {message.from_user.id}")
-    BOT.Mode.mode = "gdrive"; BOT.Mode.ytdl = False; BOT.Options.service_type = None # Reset service type
-    text = "<b>☁️ Google Drive Upload » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, NZB, bitso, Downloadly)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
-    src_request_msg = await task_starter(message, text)
-    log.debug(f"/gdupload: task_starter called, src_request_msg set")
+    # Reset mode and service type - mode will be set after user selects destination
+    BOT.Mode.ytdl = False
+    BOT.Options.service_type = None
+    # Ask user to choose upload destination (Google Drive or Local Mirror)
+    await message.delete()
+    await ask_upload_destination(client, message.chat.id)
+    log.debug(f"/gdupload: Asked user for upload destination choice")
 
 @colab_bot.on_message(filters.command("drupload") & filters.private)
 async def directory_upload(client, message):
@@ -666,6 +687,48 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 # No filename choice needed for this service
                 log.info(f"Service '{service}' selected. Proceeding to ask leech type.")
                 await ask_leech_type(client, chat_id, BOT.Mode.mode)
+
+        # --- Upload Destination Selection (Google Drive or Local Mirror) ---
+        elif query_data.startswith("destination_"):
+            await callback_query.answer()
+            destination = query_data.split("_", 1)[1]
+            log.info(f"User selected upload destination: {destination}")
+
+            # Set the mode based on user's choice
+            if destination == "gdrive":
+                BOT.Mode.mode = "gdrive"
+                text = "<b>☁️ Google Drive Upload » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, NZB, bitso, Downloadly)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
+                log.info("Mode set to 'gdrive' for Google Drive upload")
+            elif destination == "mirror":
+                BOT.Mode.mode = "mirror"
+                text = "<b>📂 Local Mirror » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, NZB, bitso, Downloadly)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
+                log.info("Mode set to 'mirror' for local Colab mirror")
+            else:
+                log.error(f"Unknown destination: {destination}")
+                await callback_query.answer("Unknown destination!", show_alert=True)
+                return
+
+            # Delete the destination selection message
+            try:
+                await message.delete()
+            except Exception as e:
+                log.warning(f"Could not delete destination selection message: {e}")
+
+            # Send prompt message to collect links (similar to task_starter behavior)
+            if not BOT.State.task_going:
+                BOT.State.started = True
+                log.debug(f"BOT.State.started=True for {destination} destination")
+                try:
+                    global src_request_msg
+                    src_request_msg = await client.send_message(chat_id, text)
+                    log.info(f"Link collection prompt sent for {destination} destination")
+                except Exception as e:
+                    log.error(f"Failed to send link prompt: {e}", exc_info=True)
+                    BOT.State.started = False
+                    await client.send_message(chat_id, f"❌ Error sending prompt: {e}")
+            else:
+                log.warning("Task already going, cannot start new destination selection")
+                await client.send_message(chat_id, "**I'm already on it! Wait up! 💯🔥**")
 
         # --- Filename Options ---
         # <<< THIS BLOCK'S INDENTATION MUST MATCH THE 'if' ABOVE >>>
