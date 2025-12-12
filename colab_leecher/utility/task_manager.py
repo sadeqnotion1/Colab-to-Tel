@@ -1123,6 +1123,11 @@ async def Do_Leech(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, is_str
                                  leech_path = _paths.temp_zpath
                                  cleanup_process_path = False
                                  log.debug(f">>> Dualzip successful. leech_path set to: {leech_path}")
+                     else:
+                         # Normal mode - no processing needed, upload downloaded files directly
+                         log.debug(">>> Normal leech mode - no processing needed")
+                         leech_path = process_path
+                         log.debug(f">>> Normal mode. leech_path set to: {leech_path}")
 
                      # Check for processing errors before leech
                      if _task_error.state:
