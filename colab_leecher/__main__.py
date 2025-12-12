@@ -95,8 +95,8 @@ async def telegram_upload(client, message):
 async def drive_upload(client, message):
     global BOT, src_request_msg
     log.info(f"Received /gdupload from {message.from_user.id}")
-    BOT.Mode.mode = "mirror"; BOT.Mode.ytdl = False; BOT.Options.service_type = None # Reset service type
-    text = "<b>♻️ Mirror Task » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, NZB, bitso, Downloadly)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
+    BOT.Mode.mode = "gdrive"; BOT.Mode.ytdl = False; BOT.Options.service_type = None # Reset service type
+    text = "<b>☁️ Google Drive Upload » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, NZB, bitso, Downloadly)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
     src_request_msg = await task_starter(message, text)
     log.debug(f"/gdupload: task_starter called, src_request_msg set")
 

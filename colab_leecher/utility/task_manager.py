@@ -815,10 +815,16 @@ async def taskScheduler(task_ctx=None):
             BotTimes.current_time = time() # Update time before starting main work
             is_ytdl_task = (selected_service == 'ytdl') or _bot.Mode.ytdl
             log.info(f"Starting main task execution: Mode={current_mode}, Service={selected_service}, is_ytdl={is_ytdl_task}")
-            if current_mode != "mirror":
+            if current_mode == "leech":
                 await Do_Leech(_bot.SOURCE, is_dir, is_ytdl_task, is_zip, is_unzip, is_dualzip, is_stream_unzip, task_ctx)
-            else:
+            elif current_mode == "mirror":
                 await Do_Mirror(_bot.SOURCE, is_ytdl_task, is_zip, is_unzip, is_dualzip, is_stream_unzip, task_ctx)
+            elif current_mode == "gdrive":
+                await Do_GDrive_Upload(_bot.SOURCE, is_dir, is_ytdl_task, is_zip, is_unzip, is_dualzip, is_stream_unzip, task_ctx)
+            else:
+                log.error(f"Unknown mode: {current_mode}")
+                _task_error.state = True
+                _task_error.text = f"Invalid mode: {current_mode}"
 
     except Exception as scheduler_err:
          log.error(f"Error within taskScheduler main try block: {scheduler_err}", exc_info=True)
@@ -1341,3 +1347,285 @@ async def Do_Mirror(source, is_ytdl, is_zip, is_unzip, is_dualzip, is_stream_unz
         log.info("Do_Mirror completed without error state. Sending logs...")
         await SendLogs(False, task_ctx) # False indicates Mirror mode
         log.info("Do_Mirror finished successfully.")
+
+
+# --- Do_GDrive_Upload Function ---
+async def Do_GDrive_Upload(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, is_stream_unzip, task_ctx=None):
+    """Execute Google Drive upload operation (download + upload to Google Drive).
+
+    Args:
+        source: List of URLs or directory path
+        is_dir: Directory upload mode
+        is_ytdl: YouTube-DL mode (legacy parameter)
+        is_zip: Zip files before upload
+        is_unzip: Unzip files before upload
+        is_dualzip: Unzip then zip before upload
+        is_stream_unzip: Streaming extract+upload for large archives
+        task_ctx: Optional TaskContext for multi-task support
+    """
+    global BOT, TRANSFER, Paths, Messages, TaskError, log
+
+    # Multi-task support: Use task_ctx if provided, otherwise fallback to globals
+    if task_ctx:
+        _bot = task_ctx.bot
+        _paths = task_ctx.paths
+        _transfer = task_ctx.transfer
+        _messages = task_ctx.messages
+        _task_error = task_ctx.task_error
+        log.info(f"Do_GDrive_Upload using TaskContext for task_id: {task_ctx.task_id}")
+    else:
+        _bot = BOT
+        _paths = Paths
+        _transfer = TRANSFER
+        _messages = Messages
+        _task_error = TaskError
+        log.info("Do_GDrive_Upload using global state (single-task mode)")
+
+    log.info(f"Do_GDrive_Upload started. is_dir={is_dir}, is_ytdl(legacy)={is_ytdl}, is_zip={is_zip}, is_unzip={is_unzip}, is_dualzip={is_dualzip}, is_stream_unzip={is_stream_unzip}")
+
+    original_down_path = _paths.down_path
+    selected_service = _bot.Options.service_type
+    overall_success = True
+    full_filenames_list = _bot.Options.filenames if _bot.Options.filenames else []
+
+    # Initialize Google Drive service
+    from ..downlader.gdrive import build_service
+    from ..utility.variables import Gdrive
+
+    try:
+        await build_service()
+
+        if not Gdrive.service:
+            log.error("Do_GDrive_Upload: Google Drive service not available")
+            _task_error.state = True
+            _task_error.text = "Google Drive authentication failed. Token.pickle not found or invalid."
+            return
+
+        log.info("Do_GDrive_Upload: Google Drive service initialized successfully")
+
+        # --- Handle Directory Upload (No Batching) ---
+        if is_dir:
+            log.info("Do_GDrive_Upload: Directory mode selected.")
+            source_path_item = source[0]
+            log.info(f"Do_GDrive_Upload: Processing directory/file {source_path_item}")
+
+            process_source_path = source_path_item
+            gdrive_upload_path = None
+            cleanup_after_upload = True
+
+            if not ospath.exists(process_source_path):
+                _task_error.state=True
+                _task_error.text=f"Dir-upload source missing: {process_source_path}"
+                raise Exception(_task_error.text)
+
+            # Apply Zip/Unzip processing
+            if is_zip:
+                await Zip_Handler(process_source_path, False, False, task_ctx)
+                if _task_error.state:
+                    raise Exception(_task_error.text)
+                gdrive_upload_path = _paths.temp_zpath
+            elif is_unzip:
+                await Unzip_Handler(process_source_path, False, task_ctx)
+                if _task_error.state:
+                    raise Exception(_task_error.text)
+                gdrive_upload_path = _paths.temp_unzip_path
+            elif is_dualzip:
+                await Unzip_Handler(process_source_path, False, task_ctx)
+                if _task_error.state:
+                    raise Exception(_task_error.text)
+                await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx)
+                if _task_error.state:
+                    raise Exception(_task_error.text)
+                gdrive_upload_path = _paths.temp_zpath
+            else:
+                if ospath.isdir(process_source_path):
+                    gdrive_upload_path = process_source_path
+                    cleanup_after_upload = False
+                elif ospath.isfile(process_source_path):
+                    if not ospath.exists(_paths.temp_dirleech_path):
+                        makedirs(_paths.temp_dirleech_path, exist_ok=True)
+                    try:
+                        shutil.copy2(process_source_path, _paths.temp_dirleech_path)
+                        gdrive_upload_path = _paths.temp_dirleech_path
+                    except Exception as copy_err:
+                        log.error(f"Failed copy single file for dir-gdrive: {copy_err}")
+                        _task_error.state = True
+                        _task_error.text = f"Copy Error: {copy_err}"
+                        raise Exception(_task_error.text)
+                else:
+                    _task_error.state = True
+                    _task_error.text = "Source path disappeared"
+                    raise Exception(_task_error.text)
+
+            # Call Google Drive Upload handler
+            if gdrive_upload_path and ospath.exists(gdrive_upload_path):
+                log.info(f"Do_GDrive_Upload: Starting GDrive upload for dir from path: {gdrive_upload_path}")
+                from ..uploader.gdrive import GDrive_Upload
+                await GDrive_Upload(gdrive_upload_path, cleanup_after_upload, task_ctx)
+                if _task_error.state:
+                    raise Exception(_task_error.text)
+            elif not _task_error.state:
+                log.error(f"Processing failed or gdrive path missing for dir-gdrive: {gdrive_upload_path}")
+                _task_error.state = True
+                _task_error.text = f"Dir processing error ({_bot.Mode.type})"
+                raise Exception(_task_error.text)
+
+        # --- Handle Link Modes with Batch Processing ---
+        else:
+            source_links = list(source)
+            batch_size = 1
+            total_links = len(source_links)
+            manual_filenames_provided = bool(full_filenames_list)
+
+            if manual_filenames_provided and len(full_filenames_list) != total_links:
+                log.error(f"Do_GDrive_Upload Error: Initial filename count ({len(full_filenames_list)}) doesn't match link count ({total_links}).")
+                _task_error.state = True
+                _task_error.text = "Initial filename/link count mismatch."
+                raise Exception(_task_error.text)
+
+            log.info(f"Do_GDrive_Upload: Link mode selected. Processing {total_links} links in batches of {batch_size}.")
+
+            # --- Batch Processing Loop ---
+            for i in range(0, total_links, batch_size):
+                batch_links = source_links[i:i+batch_size]
+                batch_filenames = full_filenames_list[i:i+batch_size] if manual_filenames_provided else []
+
+                log.info(f"--- Processing Batch {i//batch_size + 1} ({i+1}-{min(i+batch_size, total_links)}) / {(total_links + batch_size - 1) // batch_size} ---")
+
+                # Clean work directories
+                batch_download_path = _paths.down_path
+                log.info(f"Cleaning work directories before batch {i//batch_size + 1}... Target: {batch_download_path}")
+                if ospath.exists(batch_download_path):
+                    shutil.rmtree(batch_download_path, ignore_errors=True)
+                makedirs(batch_download_path, exist_ok=True)
+
+                # Download batch
+                log.info(f"Downloading batch {i//batch_size + 1}...")
+                batch_had_download_failures = False
+
+                try:
+                    await downloadManager(batch_links, batch_filenames, task_ctx)
+
+                    if _task_error.state:
+                        log.warning(f"Batch {i//batch_size + 1} download had failures.")
+                        batch_had_download_failures = True
+                except Exception as download_err:
+                    log.error(f"Download error in batch {i//batch_size + 1}: {download_err}", exc_info=True)
+                    batch_had_download_failures = True
+
+                # Check if download directory has files
+                if not ospath.exists(batch_download_path) or not os.listdir(batch_download_path):
+                    log.warning(f"Batch {i//batch_size + 1} download directory empty or missing. Skipping processing/upload.")
+                    continue
+
+                # --- Process and Upload ---
+                log.info(f"Processing/Uploading downloaded files for batch {i//batch_size + 1}...")
+                batch_processing_error = False
+
+                try:
+                    _transfer.total_down_size = getSize(batch_download_path)
+                    log.info(f"Batch download size: {sizeUnit(_transfer.total_down_size)}. Processing type: {_bot.Mode.type}")
+
+                    process_path = batch_download_path
+                    gdrive_upload_path = None
+                    cleanup_process_path = True
+
+                    # --- Zip/Unzip Logic ---
+                    if is_zip:
+                        log.debug(">>> Calling Zip_Handler...")
+                        await Zip_Handler(process_path, True, True, task_ctx)
+                        if _task_error and _task_error.state:
+                            batch_processing_error = True
+                            log.error(">>> Zip_Handler failed.")
+                        else:
+                            gdrive_upload_path = _paths.temp_zpath
+                            cleanup_process_path = False
+                            log.debug(f">>> Zip successful. gdrive_upload_path set to: {gdrive_upload_path}")
+                    elif is_unzip:
+                        log.debug(">>> Calling Unzip_Handler...")
+                        await Unzip_Handler(process_path, True, task_ctx)
+                        if _task_error and _task_error.state:
+                            batch_processing_error = True
+                            log.error(">>> Unzip_Handler failed.")
+                        else:
+                            gdrive_upload_path = _paths.temp_unzip_path
+                            cleanup_process_path = False
+                            log.debug(f">>> Unzip successful. gdrive_upload_path set to: {gdrive_upload_path}")
+                    elif is_dualzip:
+                        log.debug(">>> Calling Unzip_Handler (dualzip)...")
+                        await Unzip_Handler(process_path, True, task_ctx)
+                        if _task_error and _task_error.state:
+                            batch_processing_error = True
+                            log.error(">>> Unzip_Handler (dualzip) failed.")
+                        else:
+                            log.debug(">>> Calling Zip_Handler (dualzip)...")
+                            await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx)
+                            if _task_error and _task_error.state:
+                                batch_processing_error = True
+                                log.error(">>> Zip_Handler (dualzip) failed.")
+                            else:
+                                gdrive_upload_path = _paths.temp_zpath
+                                cleanup_process_path = False
+                                log.debug(f">>> Dualzip successful. gdrive_upload_path set to: {gdrive_upload_path}")
+                    else:
+                        # Normal mode - no processing needed
+                        log.debug(">>> Normal GDrive upload mode - no processing needed")
+                        gdrive_upload_path = process_path
+                        log.debug(f">>> Normal mode. gdrive_upload_path set to: {gdrive_upload_path}")
+
+                    # Check for processing errors before upload
+                    if _task_error.state:
+                        log.error("Zip/Unzip failed before GDrive upload.")
+                        batch_processing_error = True
+                    # Call GDrive Upload handler
+                    elif gdrive_upload_path is not None and ospath.exists(gdrive_upload_path):
+                        log.info(f"Do_GDrive_Upload batch: Starting GDrive upload for path: {gdrive_upload_path}")
+                        from ..uploader.gdrive import GDrive_Upload
+                        await GDrive_Upload(gdrive_upload_path, True, task_ctx)
+                        if _task_error.state:
+                            log.error(">>> GDrive upload failed.")
+                            batch_processing_error = True
+                        else:
+                            log.debug(f">>> GDrive upload successful for batch {i//batch_size + 1}")
+                    else:
+                        log.error(f"GDrive upload path missing or invalid: {gdrive_upload_path}")
+                        batch_processing_error = True
+                        if _task_error:
+                            _task_error.state = True
+                            _task_error.text = "GDrive upload path invalid"
+
+                except Exception as processing_err:
+                    log.error(f"Error during batch processing: {processing_err}", exc_info=True)
+                    batch_processing_error = True
+                    if _task_error:
+                        _task_error.state = True
+                        _task_error.text = f"Processing error: {processing_err}"
+
+                # Handle critical processing errors -> Break the main loop
+                if batch_processing_error:
+                    overall_success = False
+                    if _task_error and not _task_error.state:
+                        _task_error.state = True
+                        _task_error.text = "Processing/Upload Error"
+                    log.error(f"Critical processing/upload error detected. Stopping.")
+                    break
+
+                log.info(f"--- Finished Batch ---")
+
+    except Exception as gdrive_err:
+        log.error(f"Error in Do_GDrive_Upload main execution: {gdrive_err}", exc_info=True)
+        if _task_error and not _task_error.state:
+            _task_error.state = True
+            _task_error.text = f"Unexpected GDrive Error: {gdrive_err}"
+        overall_success = False
+
+    # --- Final cleanup logic ---
+    if overall_success and (not _task_error or not _task_error.state):
+        log.info("Do_GDrive_Upload completed successfully. Calling SendLogs...")
+        await SendLogs(True, task_ctx)  # True for non-mirror mode
+    elif not overall_success:
+        log.warning("Do_GDrive_Upload completed with errors.")
+        if _task_error and not _task_error.state:
+            _task_error.state = True
+            _task_error.text = _task_error.text or "Task completed with errors."
+        log.info("Do_GDrive_Upload finished with errors.")

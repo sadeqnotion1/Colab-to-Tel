@@ -58,7 +58,7 @@ class BOT:
         service_type = None # e.g., 'direct', 'delta', 'nzbcloud', 'bitso', 'ytdl', 'local', 'gdrive', 'mega'
         # --- END ---
     class Mode:
-        mode = "leech"
+        mode = "leech"  # Possible values: "leech" (Telegram upload), "mirror" (local copy), "gdrive" (Google Drive upload)
         type = "normal"
         ytdl = False
     class State:

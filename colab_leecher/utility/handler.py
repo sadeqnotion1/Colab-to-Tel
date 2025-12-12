@@ -796,6 +796,47 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext = None):
                                # Send remaining parts as new messages if reply fails?
                                if OWNER and colab_bot: await colab_bot.send_message(OWNER, fn_txt)
                                break # Stop trying to reply if it fails once
+
+                 # Send Google Drive links if available (for gdrive mode)
+                 if hasattr(messages_obj, 'uploaded_links') and messages_obj.uploaded_links:
+                     gdrive_links = messages_obj.uploaded_links
+                     gdrive_count = len(gdrive_links)
+                     log.info(f"Formatting {gdrive_count} Google Drive upload links {task_id_str}...")
+
+                     gdrive_log_texts = []
+                     current_gdrive_log = f"<b>☁️ Uploaded to Google Drive ({gdrive_count}):</b>\n"
+
+                     for i, item in enumerate(gdrive_links):
+                         try:
+                             file_name = item.get('name', 'Unknown')
+                             file_link = item.get('link', 'N/A')
+                             file_size = sizeUnit(item.get('size', 0))
+
+                             gdrive_entry = f"\n({str(i+1).zfill(2)}) <a href='{file_link}'>{file_name}</a> ({file_size})"
+
+                             if len(current_gdrive_log + gdrive_entry) >= 4096:
+                                 gdrive_log_texts.append(current_gdrive_log)
+                                 current_gdrive_log = gdrive_entry
+                             else:
+                                 current_gdrive_log += gdrive_entry
+                         except Exception as gdrive_log_err:
+                             log.error(f"Error building GDrive log entry {i+1}: {gdrive_log_err}")
+                             current_gdrive_log += f"\n({str(i+1).zfill(2)}) Error."
+
+                     gdrive_log_texts.append(current_gdrive_log)
+
+                     # Send Google Drive log parts
+                     last_gdrive_msg = status_msg
+                     for gdrive_txt in gdrive_log_texts:
+                         try:
+                             last_gdrive_msg = await last_gdrive_msg.reply_text(text=gdrive_txt, disable_web_page_preview=False, quote=True)
+                             await asyncio.sleep(0.5)
+                         except Exception as e:
+                             log.error(f"Error sending GDrive log part {task_id_str}: {e}", exc_info=False)
+                             if OWNER and colab_bot:
+                                 await colab_bot.send_message(OWNER, gdrive_txt, disable_web_page_preview=False)
+                             break
+
              except Exception as e:
                  log.error(f"Error sending/editing final logs {task_id_str}: {e}", exc_info=True)
                  if OWNER and colab_bot: await colab_bot.send_message(OWNER, f"Error updating final status {task_id_str}: {e}")
