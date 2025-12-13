@@ -18,5 +18,4 @@ uvloop
 yt_dlp
 pymegatools
 rarfile>=4.2
-sabyenc>=7.0.0
-requests
+sabyenc>=3.3.6
