@@ -61,6 +61,21 @@ BOT.Setting.bitso_phpsessid_cookie = credentials.get("BITSO_PHPSESSID_COOKIE", "
 log.info(f"NZBCloud CF Cookie: {'Set' if BOT.Setting.nzb_cf_clearance else 'Not Set'}")
 log.info(f"Bitso Identity Cookie: {'Set' if BOT.Setting.bitso_identity_cookie else 'Not Set'}")
 log.info(f"Bitso PHPSESSID Cookie: {'Set' if BOT.Setting.bitso_phpsessid_cookie else 'Not Set'}")
+
+# --- Load Usenet/NZB Provider Configurations ---
+log.info("Loading Usenet provider configurations...")
+nzb_providers_config = credentials.get("NZB_PROVIDERS", {})
+
+if nzb_providers_config:
+    BOT.Setting.nzb_providers = nzb_providers_config
+    default_provider = credentials.get("NZB_DEFAULT_PROVIDER", list(nzb_providers_config.keys())[0] if nzb_providers_config else "")
+    BOT.Setting.nzb_active_provider = default_provider
+    log.info(f"Loaded {len(nzb_providers_config)} Usenet provider(s)")
+    log.info(f"Active Provider: {default_provider if default_provider else 'None'}")
+else:
+    BOT.Setting.nzb_providers = {}
+    BOT.Setting.nzb_active_provider = ""
+    log.warning("No Usenet providers configured in credentials.json")
 # --- END MODIFICATION ---
 
 

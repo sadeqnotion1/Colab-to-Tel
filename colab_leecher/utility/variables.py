@@ -40,7 +40,10 @@ class BOT:
         nzb_cf_clearance = ""
         bitso_identity_cookie = ""
         bitso_phpsessid_cookie = ""
-        
+        # NZB/Usenet Settings (Multi-Provider Support)
+        nzb_providers = {}  # Dict of provider configs
+        nzb_active_provider = "default"  # Currently selected provider
+
     class Options:
         stream_upload = True # Keep this consistent with Setting unless logic changes it
         convert_video = False # Default conversion OFF internally
@@ -71,6 +74,7 @@ class BOT:
         expecting_bitso_filenames = False
         mindvalley_waiting = False
         extract_waiting = False  # Waiting for extract path input
+        nzb_waiting = False  # Waiting for NZB file/URL
 
 
 # --- Original YTDL State Class (Restored as requested) ---

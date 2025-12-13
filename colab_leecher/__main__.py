@@ -1498,15 +1498,92 @@ async def mindvalley_download(client, message):
     log.debug(f"/mindvalley: task_starter called, src_request_msg set")
 
 
-# Handler for Mindvalley URLs (when user sends URLs after /mindvalley command)
+# Handler for Mindvalley URLs and NZB URLs (when user sends URLs after commands)
 @colab_bot.on_message(filters.text & filters.private)
-async def handle_mindvalley_urls(client, message):
-    """Handle URLs sent after /mindvalley command (supports direct M3U8 URLs or gist URLs)"""
+async def handle_text_input(client, message):
+    """Handle text input: Mindvalley M3U8 URLs, NZB URLs, etc."""
     global BOT, MSG, src_request_msg, Messages, BotTimes
+
+    # Check if waiting for NZB URL
+    if BOT.State.nzb_waiting:
+        log.info(f"Received NZB URL from {message.from_user.id}")
+
+        # Check if message contains .nzb URL
+        text = message.text.strip()
+        if '.nzb' in text.lower():
+            import aiohttp
+            import os
+
+            BOT.State.nzb_waiting = False
+
+            # Delete help message
+            if src_request_msg:
+                try:
+                    await src_request_msg.delete()
+                    src_request_msg = None
+                except Exception:
+                    pass
+
+            # Extract URL (take first line if multiple)
+            nzb_url = text.split('\n')[0].strip()
+            log.info(f"Downloading NZB from URL: {nzb_url}")
+
+            try:
+                # Download .nzb file from URL
+                from .utility.task_context import create_task_context
+
+                task_ctx = create_task_context(
+                    user_id=message.from_user.id,
+                    chat_id=message.chat.id,
+                    mode="leech"
+                )
+
+                nzb_filename = nzb_url.split('/')[-1]
+                if not nzb_filename.endswith('.nzb'):
+                    nzb_filename = "download.nzb"
+
+                nzb_path = os.path.join(task_ctx.down_path, nzb_filename)
+
+                # Download file
+                status_msg = await message.reply_text("⏳ Downloading .nzb file from URL...", quote=True)
+
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(nzb_url, timeout=60) as response:
+                        if response.status == 200:
+                            content = await response.read()
+                            with open(nzb_path, 'wb') as f:
+                                f.write(content)
+                            log.info(f"Downloaded .nzb file to: {nzb_path}")
+
+                            # Delete status message
+                            try:
+                                await status_msg.delete()
+                            except:
+                                pass
+
+                            # Process the downloaded NZB file
+                            await handle_nzb_file(client, message, nzb_file_path=nzb_path)
+                        else:
+                            await status_msg.edit_text(f"❌ Failed to download NZB: HTTP {response.status}")
+                            log.error(f"Failed to download NZB: HTTP {response.status}")
+
+            except Exception as e:
+                log.exception("Error downloading NZB from URL")
+                await message.reply_text(f"❌ Error downloading NZB: {str(e)}", quote=True)
+
+            return  # Don't process further
+
+        else:
+            await message.reply_text(
+                "❌ Please send a valid .nzb URL\n"
+                "Example: https://example.com/file.nzb",
+                quote=True
+            )
+            return
 
     # Check if we're waiting for Mindvalley URLs
     if not BOT.State.mindvalley_waiting:
-        return  # Not in Mindvalley mode, let other handlers process this
+        return  # Not in Mindvalley/NZB mode, let other handlers process this
 
     log.info(f"Received Mindvalley input from {message.from_user.id}")
 
@@ -1949,6 +2026,261 @@ async def handle_mindvalley_urls(client, message):
             quote=True
         )
 
+
+# ========== NZB (Usenet) Download Handlers ==========
+
+@colab_bot.on_message(filters.command("nzb") & filters.private)
+async def nzb_download(client, message):
+    """
+    Download files from Usenet using NZB file
+    Usage: /nzb then upload .nzb file or send .nzb URL
+    """
+    global BOT, src_request_msg
+    log.info(f"Received /nzb from {message.from_user.id}")
+
+    # Set bot state
+    BOT.Mode.mode = "leech"  # Upload to Telegram
+    BOT.Mode.ytdl = False
+    BOT.Options.service_type = "nzb"
+    BOT.State.nzb_waiting = True
+
+    help_text = (
+        "**📰 NZB Usenet Downloader**\n\n"
+        "**Upload your .nzb file** or **send NZB URL**\n\n"
+        "📌 **Requirements:**\n"
+        "• Valid Usenet account configured in credentials.json\n"
+        "• NZB file with valid article IDs\n\n"
+        "💡 **Tip:** Supports multi-part RAR archives!\n"
+        "⚠️ **Note:** Missing articles will be skipped\n\n"
+        f"**Active Provider:** {BOT.Setting.nzb_active_provider or 'Not configured'}"
+    )
+
+    src_request_msg = await task_starter(message, help_text)
+    log.debug(f"/nzb: task_starter called, src_request_msg set")
+
+
+@colab_bot.on_message(filters.document & filters.private)
+async def handle_document_upload(client, message):
+    """Handle document uploads (currently .nzb files)"""
+    global BOT
+
+    # Check if waiting for NZB file
+    if BOT.State.nzb_waiting and message.document.file_name.lower().endswith('.nzb'):
+        log.info(f"Received .nzb file upload: {message.document.file_name}")
+        await handle_nzb_file(client, message)
+        return
+
+    # Future: Add handlers for other document types (e.g., .torrent)
+
+
+async def handle_nzb_file(client, message, nzb_file_path=None):
+    """Process uploaded .nzb file or downloaded from URL
+
+    Args:
+        client: Pyrogram client
+        message: Message object
+        nzb_file_path: Optional path to .nzb file (if already downloaded from URL)
+    """
+    global BOT, MSG, src_request_msg, BotTimes
+    from .downlader.nzb import NZBDownloader
+    from .utility.task_context import create_task_context
+    from .uploader.task_uploader import upload_file
+    import random
+    import aiohttp
+    import aiofiles
+
+    BOT.State.nzb_waiting = False
+
+    # Delete help message
+    if src_request_msg:
+        try:
+            await src_request_msg.delete()
+            src_request_msg = None
+        except Exception:
+            pass
+
+    # Create TaskContext for this NZB download
+    task_ctx = create_task_context(
+        user_id=message.from_user.id,
+        chat_id=message.chat.id,
+        mode="leech"
+    )
+    task_ctx.service_type = "nzb"
+    log.info(f"Created TaskContext {task_ctx.get_short_id()} for NZB download")
+
+    try:
+        # Determine NZB file path
+        if nzb_file_path:
+            # Already downloaded from URL
+            nzb_path = nzb_file_path
+            nzb_filename = os.path.basename(nzb_path)
+            log.info(f"Using pre-downloaded NZB file: {nzb_path}")
+        elif message.document:
+            # Download .nzb file from Telegram
+            nzb_filename = message.document.file_name
+            nzb_path = os.path.join(task_ctx.down_path, nzb_filename)
+            log.info(f"Downloading .nzb file to: {nzb_path}")
+            await message.download(file_name=nzb_path)
+        else:
+            raise ValueError("No NZB file provided (not a document and no path given)")
+
+        # Validate Usenet credentials
+        if not BOT.Setting.nzb_providers or not BOT.Setting.nzb_active_provider:
+            await message.reply_text(
+                "❌ **Usenet Not Configured**\n\n"
+                "Add to `credentials.json`:\n"
+                "```json\n"
+                "{\n"
+                '  "NZB_PROVIDERS": {\n'
+                '    "provider_name": {\n'
+                '      "host": "news.server.com",\n'
+                '      "port": 563,\n'
+                '      "username": "user",\n'
+                '      "password": "pass",\n'
+                '      "ssl": true,\n'
+                '      "connections": 8\n'
+                "    }\n"
+                "  },\n"
+                '  "NZB_DEFAULT_PROVIDER": "provider_name"\n'
+                "}\n"
+                "```",
+                quote=True
+            )
+            return
+
+        active_provider = BOT.Setting.nzb_providers.get(BOT.Setting.nzb_active_provider, {})
+        if not active_provider.get('host'):
+            await message.reply_text(
+                f"❌ **Invalid Provider Configuration**\n\n"
+                f"Active provider '{BOT.Setting.nzb_active_provider}' is missing required fields.\n"
+                "Check your credentials.json",
+                quote=True
+            )
+            return
+
+        # Download random thumbnail for status message
+        from .utility.task_manager import thumbnail_urls
+        hero_image_path = task_ctx.hero_image
+        chosen_url = random.choice(thumbnail_urls) if thumbnail_urls else None
+
+        if chosen_url:
+            log.info(f"Downloading random thumbnail for task {task_ctx.get_short_id()}: {chosen_url}")
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(chosen_url, timeout=30) as response:
+                        if response.status == 200:
+                            async with aiofiles.open(hero_image_path, mode='wb') as f:
+                                while True:
+                                    chunk = await response.content.read(1024)
+                                    if not chunk:
+                                        break
+                                    await f.write(chunk)
+                            log.info(f"Thumbnail downloaded successfully to {hero_image_path}")
+            except Exception as e:
+                log.warning(f"Failed to download thumbnail: {e}")
+
+        # Determine thumbnail to send
+        if BOT.Setting.thumbnail and os.path.exists(Paths.THMB_PATH):
+            thumb_path = Paths.THMB_PATH
+        elif os.path.exists(hero_image_path):
+            thumb_path = hero_image_path
+        else:
+            thumb_path = Paths.DEFAULT_HERO
+
+        # Send initial status with thumbnail
+        initial_status = (
+            f"<b>📰 NZB Download [{task_ctx.get_short_id()}] »</b>\n\n"
+            f"<b>📄 File » </b><code>{nzb_filename}</code>\n"
+            f"<b>🔌 Provider » </b><code>{BOT.Setting.nzb_active_provider}</code>\n"
+            f"<b>🎯 Status » </b><code>Initializing...</code>\n"
+        )
+
+        if os.path.exists(thumb_path):
+            task_ctx.status_msg = await client.send_photo(
+                OWNER,
+                photo=thumb_path,
+                caption=initial_status,
+                reply_markup=keyboard()
+            )
+        else:
+            task_ctx.status_msg = await client.send_message(
+                OWNER,
+                initial_status,
+                reply_markup=keyboard()
+            )
+
+        # Initialize downloader
+        downloader = NZBDownloader(client, message, task_ctx)
+
+        # Download NZB
+        log.info(f"Starting NZB download for task {task_ctx.get_short_id()}")
+        success, output_files = await downloader.download_nzb(nzb_path)
+
+        if success and output_files:
+            log.info(f"NZB download successful: {len(output_files)} file(s)")
+
+            # Upload files to Telegram
+            for file_path in output_files:
+                filename = os.path.basename(file_path)
+                log.info(f"Uploading to Telegram: {filename}")
+
+                # Update status
+                if task_ctx.status_msg:
+                    try:
+                        if hasattr(task_ctx.status_msg, 'photo') and task_ctx.status_msg.photo:
+                            await task_ctx.status_msg.edit_caption(
+                                caption=f"<b>📰 NZB Download Complete »</b>\n\n"
+                                        f"<b>📤 Uploading to Telegram...</b>\n"
+                                        f"<code>{filename}</code>"
+                            )
+                        else:
+                            await task_ctx.status_msg.edit_text(
+                                text=f"<b>📰 NZB Download Complete »</b>\n\n"
+                                     f"<b>📤 Uploading to Telegram...</b>\n"
+                                     f"<code>{filename}</code>"
+                            )
+                    except Exception as e:
+                        log.warning(f"Failed to update status: {e}")
+
+                # Upload file
+                await upload_file(file_path, filename, task_ctx)
+
+            # Final success message
+            if task_ctx.status_msg:
+                try:
+                    final_text = (
+                        f"<b>✅ NZB Download Complete [{task_ctx.get_short_id()}] »</b>\n\n"
+                        f"<b>📦 Files Downloaded: </b><code>{len(output_files)}</code>\n"
+                        f"<b>📤 Uploaded to Telegram</b>"
+                    )
+                    if hasattr(task_ctx.status_msg, 'photo') and task_ctx.status_msg.photo:
+                        await task_ctx.status_msg.edit_caption(caption=final_text)
+                    else:
+                        await task_ctx.status_msg.edit_text(text=final_text)
+                except Exception as e:
+                    log.warning(f"Failed to send final message: {e}")
+
+        else:
+            log.error("NZB download failed")
+            if task_ctx.status_msg:
+                try:
+                    error_text = (
+                        f"<b>❌ NZB Download Failed [{task_ctx.get_short_id()}] »</b>\n\n"
+                        f"Check logs for details."
+                    )
+                    if hasattr(task_ctx.status_msg, 'photo') and task_ctx.status_msg.photo:
+                        await task_ctx.status_msg.edit_caption(caption=error_text)
+                    else:
+                        await task_ctx.status_msg.edit_text(text=error_text)
+                except Exception as e:
+                    log.warning(f"Failed to send error message: {e}")
+
+    except Exception as e:
+        log.exception("Error processing NZB file")
+        BOT.State.nzb_waiting = False
+        await message.reply_text(f"❌ **Error:** {str(e)}", quote=True)
+
+
 @colab_bot.on_message(filters.command("help") & filters.private)
 async def help_command(client, message):
     log.info("Received /help command.")
@@ -1960,6 +2292,7 @@ async def help_command(client, message):
                  "  `/ytupload` - Leech YouTube-DL links\n"
                  "  `/drupload` - Leech from Colab directory\n"
                  "  `/mindvalley` - Download Mindvalley courses (M3U8)\n"
+                 "  `/nzb` - Download from Usenet (NZB files)\n"
                  "Follow prompts after command (you'll be asked to select service type for /tupload & /gdupload).\n\n"
                  "**Other Commands:** `/settings`, `/setname`, `/zipaswd`, `/unzipaswd`\n\n"
                  "⚠️ **Send image for Thumbnail!**")
