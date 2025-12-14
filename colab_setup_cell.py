@@ -232,6 +232,67 @@ if valid_creds and ipython:
          except IOError as e:
              log.error(f"Failed to write credentials file: {e}")
              Working = False
+
+     # --- SABnzbd Setup for NZB Downloads ---
+     if Working and setup_ok:
+         log.info("=" * 70)
+         log.info("Setting up SABnzbd for NZB downloads...")
+         log.info("=" * 70)
+
+         try:
+             # Install SABnzbd system dependencies
+             log.info("Installing SABnzbd system dependencies...")
+             cmd_apt_sabnzbd = "apt-get update -qq && apt-get install -y -qq python3-pip python3-dev par2 unrar unzip p7zip-full"
+             proc_apt_sab = subprocess.run(cmd_apt_sabnzbd, shell=True, capture_output=True, text=True)
+             if proc_apt_sab.returncode != 0:
+                 log.warning(f"SABnzbd apt install issues:\n{proc_apt_sab.stderr}")
+                 raise Exception("Failed to install SABnzbd system dependencies")
+             log.info("✅ SABnzbd system dependencies installed")
+
+             # Install SABnzbd Python package
+             log.info("Installing SABnzbd Python package...")
+             cmd_pip_sabnzbd = "pip3 install sabnzbd --quiet"
+             proc_pip_sab = subprocess.run(cmd_pip_sabnzbd, shell=True, capture_output=True, text=True)
+             if proc_pip_sab.returncode != 0:
+                 log.warning(f"SABnzbd pip install issues:\n{proc_pip_sab.stderr}")
+                 raise Exception("Failed to install SABnzbd Python package")
+             log.info("✅ SABnzbd Python package installed")
+
+             # Import SABnzbd setup modules (need to import after pip install)
+             import sys
+             sys.path.insert(0, repo_path)  # Ensure our repo is in path
+             from colab_leecher.utility.sabnzbd_setup import setup_sabnzbd
+             from colab_leecher.downlader.sabnzbd_downloader import set_sabnzbd_config
+
+             # Setup and start SABnzbd
+             log.info("Configuring and starting SABnzbd...")
+             sabnzbd_config = setup_sabnzbd()
+
+             if sabnzbd_config and sabnzbd_config.get('base_url'):
+                 set_sabnzbd_config(sabnzbd_config)
+                 log.info(f"✅ SABnzbd configured successfully")
+                 log.info(f"   Base URL: {sabnzbd_config['base_url']}")
+                 log.info(f"   API Key: {sabnzbd_config['api_key'][:8]}...")
+
+                 # Display public URL if tunnel was created
+                 if sabnzbd_config.get('public_url'):
+                     log.info("=" * 70)
+                     log.info(f"🌐 SABnzbd Web UI: {sabnzbd_config['public_url']}")
+                     log.info(f"🔑 API Key: {sabnzbd_config['api_key']}")
+                     log.info("=" * 70)
+
+                 log.info(f"✅ SABnzbd is ready for NZB downloads")
+             else:
+                 log.warning("⚠️ SABnzbd setup returned invalid config")
+                 raise Exception("SABnzbd configuration failed")
+
+         except Exception as e:
+             log.warning("=" * 70)
+             log.warning(f"⚠️ SABnzbd setup failed: {e}")
+             log.warning("⚠️ Bot will use custom NNTP downloader as fallback")
+             log.warning("=" * 70)
+             # Don't set Working = False, just continue without SABnzbd
+
 elif not ipython: log.error("Could not get IPython instance."); Working = False
 
 # --- Stop Loading Animation ---
