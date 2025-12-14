@@ -1533,6 +1533,18 @@ async def handle_text_input(client, message):
 
             # Extract URL (take first line if multiple)
             nzb_url = text.split('\n')[0].strip()
+
+            # Validate URL format
+            if not (nzb_url.startswith('http://') or nzb_url.startswith('https://')):
+                await message.reply_text(
+                    "❌ Invalid URL!\n\n"
+                    "Please send a valid NZB download link starting with http:// or https://\n\n"
+                    "Or upload a .nzb file instead.",
+                    quote=True
+                )
+                BOT.State.nzb_waiting = False
+                return
+
             log.info(f"Downloading NZB from URL: {nzb_url}")
 
             try:
