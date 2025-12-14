@@ -281,6 +281,13 @@ if valid_creds and ipython:
                      log.info(f"🔑 API Key: {sabnzbd_config['api_key']}")
                      log.info("=" * 70)
 
+                     # Save URL to file so bot can send it via Telegram on startup
+                     sabnzbd_info_file = os.path.join(repo_path, '.sabnzbd_url.txt')
+                     with open(sabnzbd_info_file, 'w') as f:
+                         f.write(f"{sabnzbd_config['public_url']}\n")
+                         f.write(f"{sabnzbd_config['api_key']}\n")
+                     log.info(f"   Saved URL info for Telegram notification")
+
                  log.info(f"✅ SABnzbd is ready for NZB downloads")
              else:
                  log.warning("⚠️ SABnzbd setup returned invalid config")

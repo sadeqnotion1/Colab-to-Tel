@@ -2228,12 +2228,23 @@ async def handle_nzb_file(client, message, nzb_file_path=None):
                 reply_markup=keyboard()
             )
 
-        # Initialize downloader
-        downloader = NZBDownloader(client, message, task_ctx)
+        # Check if SABnzbd is configured (preferred method)
+        from .downlader.sabnzbd_downloader import get_sabnzbd_config, SABnzbdDownloader
+
+        sabnzbd_config = get_sabnzbd_config()
+
+        if sabnzbd_config:
+            # Use SABnzbd downloader (more reliable)
+            log.info("Using SABnzbd backend for NZB download")
+            downloader = SABnzbdDownloader(client, message, sabnzbd_config)
+        else:
+            # Fall back to custom NNTP downloader
+            log.info("Using custom NNTP downloader (SABnzbd not configured)")
+            downloader = NZBDownloader(client, message, task_ctx)
 
         # Download NZB
         log.info(f"Starting NZB download for task {task_ctx.get_short_id()}")
-        success, output_files = await downloader.download_nzb(nzb_path)
+        success, output_files = await downloader.download_nzb(nzb_path, task_ctx.down_path)
 
         if success and output_files:
             log.info(f"NZB download successful: {len(output_files)} file(s)")
@@ -2317,6 +2328,36 @@ async def help_command(client, message):
                  "⚠️ **Send image for Thumbnail!**")
     await message.reply_text(help_text, quote=True, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Instructions 📖", url="https://github.com/XronTrix10/Telegram-Leecher/wiki/INSTRUCTIONS")],[InlineKeyboardButton("Channel 📣", url="https://t.me/Colab_Leecher"), InlineKeyboardButton("Group 💬", url="https://t.me/Colab_Leecher_Discuss")]]))
 
+# Send SABnzbd URL on bot startup
+async def send_sabnzbd_url_to_telegram():
+    """Send SABnzbd web UI URL to owner via Telegram if available"""
+    try:
+        # Wait for bot to connect
+        await asyncio.sleep(3)
+
+        sabnzbd_info_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.sabnzbd_url.txt')
+        if os.path.exists(sabnzbd_info_file):
+            with open(sabnzbd_info_file, 'r') as f:
+                lines = f.readlines()
+                if len(lines) >= 2:
+                    public_url = lines[0].strip()
+                    api_key = lines[1].strip()
+
+                    message_text = (
+                        f"<b>🌐 SABnzbd Web UI Ready!</b>\n\n"
+                        f"<b>🔗 URL:</b> {public_url}\n"
+                        f"<b>🔑 API Key:</b> <code>{api_key}</code>\n\n"
+                        f"<i>Click the URL to manage NZB downloads in your browser.</i>"
+                    )
+
+                    await colab_bot.send_message(OWNER, message_text)
+                    log.info(f"✅ Sent SABnzbd URL to owner via Telegram")
+
+                    # Delete file after sending
+                    os.remove(sabnzbd_info_file)
+    except Exception as e:
+        log.warning(f"Failed to send SABnzbd URL via Telegram: {e}")
+
 # DEBUG: Log all messages
 @colab_bot.on_message()
 async def debug_all_messages(client, message):
@@ -2327,6 +2368,12 @@ if __name__ == "__main__":
      log.info("Colab Leecher Script Starting as main...")
      if colab_bot:
           log.info("colab_bot instance found, attempting run()...")
-          try: colab_bot.run()
+
+          # Schedule SABnzbd URL message
+          async def startup():
+              asyncio.create_task(send_sabnzbd_url_to_telegram())
+
+          try:
+              colab_bot.run(startup())
           except Exception as run_err: log.critical(f"Bot crashed during run: {run_err}", exc_info=True)
      else: log.critical("colab_bot was not initialized successfully.")
