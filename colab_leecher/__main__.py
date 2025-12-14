@@ -2369,11 +2369,11 @@ if __name__ == "__main__":
      if colab_bot:
           log.info("colab_bot instance found, attempting run()...")
 
-          # Schedule SABnzbd URL message
-          async def startup():
-              asyncio.create_task(send_sabnzbd_url_to_telegram())
+          # Schedule SABnzbd URL message as background task
+          loop = asyncio.get_event_loop()
+          loop.create_task(send_sabnzbd_url_to_telegram())
 
           try:
-              colab_bot.run(startup())
+              colab_bot.run()
           except Exception as run_err: log.critical(f"Bot crashed during run: {run_err}", exc_info=True)
      else: log.critical("colab_bot was not initialized successfully.")
