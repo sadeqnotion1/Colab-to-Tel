@@ -65,9 +65,11 @@ class NZBDownloader:
         # Missing/corrupted segments tracking
         self.missing_segments = []
         self.corrupted_segments = []
+        self.fallback_recoveries = 0  # Articles recovered from alternate providers
 
         # NNTP connection pool (supporting multiple providers)
         self.nntp_connections = []
+        self.connection_providers = {}  # Maps connection -> provider name for fallback
         self.max_connections = 8  # Total connections across all providers
 
         # Get ALL provider configurations for multi-provider support
@@ -305,8 +307,7 @@ class NZBDownloader:
         except nntplib.NNTPTemporaryError as e:
             error_code = str(e)
             if '430' in error_code:  # Article not found
-                log.warning(f"Article {message_id} not found (segment {segment_number}) - likely expired")
-                self.missing_segments.append(segment_number)
+                # Don't log here - let download_article_with_fallback handle it
                 return None
             else:
                 log.error(f"Temporary error downloading segment {segment_number}: {e}")
@@ -317,6 +318,53 @@ class NZBDownloader:
         except Exception as e:
             log.exception(f"Unexpected error downloading segment {segment_number}: {e}")
             return None
+
+    def download_article_with_fallback(self, connection: nntplib.NNTP, message_id: str, segment_number: int) -> Optional[bytes]:
+        """
+        Download article with automatic provider fallback for missing articles.
+
+        Tries the given connection first. If article is missing (430 error),
+        automatically tries connections from other providers before giving up.
+
+        Args:
+            connection: Primary NNTP connection to try first
+            message_id: Article message ID
+            segment_number: Segment number for logging
+
+        Returns:
+            Raw article data or None if missing on ALL providers
+        """
+        # Try primary connection first
+        primary_provider = self.connection_providers.get(id(connection), 'unknown')
+        article_data = self.download_article(connection, message_id, segment_number)
+
+        if article_data:
+            return article_data
+
+        # Article missing on primary provider - try other providers
+        if len(self.provider_configs) > 1:
+            tried_providers = {primary_provider}
+
+            for other_conn in self.nntp_connections:
+                other_provider = self.connection_providers.get(id(other_conn), 'unknown')
+
+                # Skip if same provider or already tried
+                if other_provider in tried_providers:
+                    continue
+
+                log.info(f"Article {message_id} missing on {primary_provider}, trying {other_provider}...")
+                tried_providers.add(other_provider)
+
+                article_data = self.download_article(other_conn, message_id, segment_number)
+                if article_data:
+                    log.info(f"✅ Found on {other_provider}!")
+                    self.fallback_recoveries += 1
+                    return article_data
+
+        # Article missing on all providers
+        log.warning(f"Article {message_id} not found on ANY provider (segment {segment_number}) - likely expired")
+        self.missing_segments.append(segment_number)
+        return None
 
     def decode_yenc(self, article_data: bytes) -> Optional[bytes]:
         """
@@ -582,6 +630,7 @@ class NZBDownloader:
                     try:
                         conn = await self.connect_nntp(provider)
                         self.nntp_connections.append(conn)
+                        self.connection_providers[id(conn)] = provider_name  # Track provider for fallback
                         connection_count += 1
                         log.debug(f"Connection {connection_count}/{self.max_connections} established ({provider_name})")
                     except Exception as e:
@@ -611,8 +660,8 @@ class NZBDownloader:
                     conn_idx = seg_idx % len(self.nntp_connections)
                     connection = self.nntp_connections[conn_idx]
 
-                    # Download article
-                    article_data = self.download_article(connection, segment['message_id'], segment['number'])
+                    # Download article with automatic provider fallback
+                    article_data = self.download_article_with_fallback(connection, segment['message_id'], segment['number'])
 
                     if article_data:
                         # Decode yEnc
@@ -687,6 +736,8 @@ class NZBDownloader:
                 log.info("NZB Download Complete")
                 log.info(f"Files: {len(output_files)}/{len(nzb_data['files'])}")
                 log.info(f"Total Size: {sizeUnit(total_size)}")
+                if self.fallback_recoveries > 0:
+                    log.info(f"✅ Fallback Recoveries: {self.fallback_recoveries} articles recovered from alternate providers")
                 if self.missing_segments:
                     log.warning(f"Missing segments: {len(self.missing_segments)}")
                 if self.corrupted_segments:
