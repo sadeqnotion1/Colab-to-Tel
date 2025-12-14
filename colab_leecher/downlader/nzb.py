@@ -66,21 +66,44 @@ class NZBDownloader:
         self.missing_segments = []
         self.corrupted_segments = []
 
-        # NNTP connection pool
+        # NNTP connection pool (supporting multiple providers)
         self.nntp_connections = []
-        self.max_connections = 8  # Default, overridden by provider config
+        self.max_connections = 8  # Total connections across all providers
 
-        # Get active provider configuration
-        self.provider_config = self.get_active_provider()
-        if self.provider_config:
-            self.max_connections = self.provider_config.get('connections', 8)
-            log.info(f"Using provider: {BOT.Setting.nzb_active_provider} with {self.max_connections} connections")
+        # Get ALL provider configurations for multi-provider support
+        self.provider_configs = self.get_all_providers()
+        if self.provider_configs:
+            total_connections = sum(p['connections'] for p in self.provider_configs)
+            provider_names = ', '.join(p['name'] for p in self.provider_configs)
+            log.info(f"Using {len(self.provider_configs)} provider(s): {provider_names} with {total_connections} total connections")
+            self.max_connections = total_connections
         else:
-            log.warning("No active Usenet provider configured")
+            log.warning("No Usenet providers configured")
+
+    def get_all_providers(self) -> list:
+        """
+        Get ALL configured Usenet providers for multi-provider support
+
+        Returns:
+            List of dicts, each containing provider config with 'name' field added
+            Empty list if no providers configured
+        """
+        if not BOT.Setting.nzb_providers:
+            return []
+
+        providers = []
+        for name, config in BOT.Setting.nzb_providers.items():
+            if config.get('host'):  # Only include providers with host configured
+                provider_with_name = config.copy()
+                provider_with_name['name'] = name
+                providers.append(provider_with_name)
+                log.debug(f"Loaded provider '{name}': {config.get('host', 'N/A')}")
+
+        return providers
 
     def get_active_provider(self) -> Dict:
         """
-        Get configuration for currently active Usenet provider
+        Get configuration for currently active Usenet provider (legacy method)
 
         Returns:
             Dict with provider config (host, port, username, password, ssl, connections)
@@ -179,10 +202,13 @@ class NZBDownloader:
             log.exception(f"Error parsing NZB file: {e}")
             raise
 
-    async def connect_nntp(self) -> nntplib.NNTP:
+    async def connect_nntp(self, provider_config: Dict = None) -> nntplib.NNTP:
         """
         Create NNTP connection to Usenet server
         Supports both SSL and non-SSL connections
+
+        Args:
+            provider_config: Optional provider config. If None, uses first available provider
 
         Returns:
             NNTP connection object (authenticated)
@@ -191,19 +217,24 @@ class NZBDownloader:
             ValueError: If provider config invalid
             nntplib.NNTPError: If connection/auth fails
         """
-        if not self.provider_config:
-            raise ValueError("No Usenet provider configured. Add NZB_PROVIDERS to credentials.json")
+        # Use provided config or default to first provider
+        if provider_config is None:
+            if self.provider_configs:
+                provider_config = self.provider_configs[0]
+            else:
+                raise ValueError("No Usenet provider configured. Add NZB_PROVIDERS to credentials.json")
 
-        host = self.provider_config.get('host')
-        port = self.provider_config.get('port', 563)
-        username = self.provider_config.get('username', '')
-        password = self.provider_config.get('password', '')
-        use_ssl = self.provider_config.get('ssl', True)
+        host = provider_config.get('host')
+        port = provider_config.get('port', 563)
+        username = provider_config.get('username', '')
+        password = provider_config.get('password', '')
+        use_ssl = provider_config.get('ssl', True)
+        provider_name = provider_config.get('name', 'unknown')
 
         if not host:
             raise ValueError("Provider configuration missing 'host' field")
 
-        log.debug(f"Connecting to NNTP server: {host}:{port} (SSL: {use_ssl})")
+        log.debug(f"Connecting to {provider_name} ({host}:{port}, SSL: {use_ssl})")
 
         try:
             # Create connection (SSL or plain)
@@ -216,9 +247,9 @@ class NZBDownloader:
             if username and password:
                 log.debug(f"Authenticating as: {username}")
                 connection.login(username, password)
-                log.info("NNTP authentication successful")
+                log.info(f"NNTP authentication successful ({provider_name})")
             else:
-                log.info("Connected to NNTP server (no authentication)")
+                log.info(f"Connected to NNTP server ({provider_name}, no authentication)")
 
             # Select a newsgroup (required by some NNTP servers before retrieving articles)
             # Use a common binary newsgroup
@@ -535,24 +566,33 @@ class NZBDownloader:
 
             log.info(f"Total: {len(nzb_data['files'])} file(s), {self.total_articles} articles, {sizeUnit(self.total_bytes)}")
 
-            # Step 2: Create NNTP connection pool
+            # Step 2: Create NNTP connection pool (multi-provider support)
             await self.update_progress_bar(1.0, "Connecting to Usenet...")
 
-            log.info(f"Creating {self.max_connections} NNTP connections...")
-            for i in range(self.max_connections):
-                try:
-                    conn = await self.connect_nntp()
-                    self.nntp_connections.append(conn)
-                    log.debug(f"Connection {i+1}/{self.max_connections} established")
-                except Exception as e:
-                    log.error(f"Failed to create connection {i+1}: {e}")
-                    if i == 0:  # At least one connection required
-                        raise
+            log.info(f"Creating {self.max_connections} NNTP connections across {len(self.provider_configs)} provider(s)...")
+            connection_count = 0
+
+            # Create connections for each provider
+            for provider in self.provider_configs:
+                provider_name = provider.get('name', 'unknown')
+                num_connections = provider.get('connections', 8)
+
+                log.info(f"Creating {num_connections} connections to {provider_name}...")
+                for i in range(num_connections):
+                    try:
+                        conn = await self.connect_nntp(provider)
+                        self.nntp_connections.append(conn)
+                        connection_count += 1
+                        log.debug(f"Connection {connection_count}/{self.max_connections} established ({provider_name})")
+                    except Exception as e:
+                        log.error(f"Failed to create connection to {provider_name}: {e}")
+                        if connection_count == 0 and i == 0:  # At least one connection required
+                            raise
 
             if not self.nntp_connections:
                 raise ValueError("Failed to establish any NNTP connections")
 
-            log.info(f"Connected with {len(self.nntp_connections)} connection(s)")
+            log.info(f"Connected with {len(self.nntp_connections)} connection(s) across {len(self.provider_configs)} provider(s)")
 
             # Step 3: Download all files
             for file_idx, file_info in enumerate(nzb_data['files'], 1):
