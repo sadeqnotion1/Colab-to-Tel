@@ -35,6 +35,12 @@ from .utility.handler import SendLogs
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 log = logging.getLogger(__name__)
 
+# Custom filter to exclude command messages (messages starting with /)
+def not_command(_, __, message):
+    return not (message.text and message.text.startswith('/'))
+
+not_command_filter = filters.create(not_command)
+
 log.info(f"--> MERGED V1: colab_bot instance used in __main__.py: ID = {id(colab_bot)}")
 
 src_request_msg = None
@@ -1499,7 +1505,8 @@ async def mindvalley_download(client, message):
 
 
 # Handler for Mindvalley URLs and NZB URLs (when user sends URLs after commands)
-@colab_bot.on_message(filters.text & filters.private)
+# Exclude commands so they can be handled by specific command handlers
+@colab_bot.on_message(filters.text & not_command_filter & filters.private)
 async def handle_text_input(client, message):
     """Handle text input: Mindvalley M3U8 URLs, NZB URLs, etc."""
     global BOT, MSG, src_request_msg, Messages, BotTimes
@@ -2297,6 +2304,11 @@ async def help_command(client, message):
                  "**Other Commands:** `/settings`, `/setname`, `/zipaswd`, `/unzipaswd`\n\n"
                  "⚠️ **Send image for Thumbnail!**")
     await message.reply_text(help_text, quote=True, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Instructions 📖", url="https://github.com/XronTrix10/Telegram-Leecher/wiki/INSTRUCTIONS")],[InlineKeyboardButton("Channel 📣", url="https://t.me/Colab_Leecher"), InlineKeyboardButton("Group 💬", url="https://t.me/Colab_Leecher_Discuss")]]))
+
+# DEBUG: Log all messages
+@colab_bot.on_message()
+async def debug_all_messages(client, message):
+    log.info(f"DEBUG: Received message from user {message.from_user.id if message.from_user else 'N/A'}, chat {message.chat.id if message.chat else 'N/A'}, text: {message.text[:50] if message.text else 'No text'}")
 
 # Main Execution Guard
 if __name__ == "__main__":
