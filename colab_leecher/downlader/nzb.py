@@ -672,18 +672,12 @@ class NZBDownloader:
                 self.current_file = filename
                 log.info(f"\nDownloading file {file_idx}/{len(nzb_data['files'])}: {filename}")
                 log.info(f"  Segments: {len(segments)}, Size: {sizeUnit(file_info['size'])}")
-
-                # Select newsgroup for this file on all connections
                 if newsgroups:
-                    newsgroup = newsgroups[0]  # Use first newsgroup
-                    log.info(f"  Newsgroup: {newsgroup}")
-                    for conn in self.nntp_connections:
-                        try:
-                            conn.group(newsgroup)
-                        except Exception as e:
-                            log.warning(f"Failed to select newsgroup {newsgroup}: {e}")
-                else:
-                    log.warning("  No newsgroup specified in NZB file")
+                    log.info(f"  Newsgroup: {newsgroups[0]}")
+
+                # NOTE: Do NOT select newsgroup when using message IDs!
+                # According to nntplib docs, article(message_id) works WITHOUT group()
+                # Selecting a group can cause 412/423 errors if the article isn't in that specific group
 
                 # Download segments
                 segments_data = []
