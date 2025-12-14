@@ -263,9 +263,17 @@ class NZBDownloader:
             else:
                 log.info(f"Connected to NNTP server ({provider_name}, no authentication)")
 
-            # Don't select a newsgroup - modern servers support fetching articles by Message-ID
-            # without group selection. If needed, the download_article method will handle it.
-            log.debug(f"NNTP connection ready ({provider_name})")
+            # Select a default newsgroup - some servers (like giganews) require this even for message IDs
+            # We'll select a common binary group that should exist on most servers
+            try:
+                connection.group('alt.binaries.test')
+                log.debug(f"NNTP connection ready ({provider_name}) - selected alt.binaries.test")
+            except:
+                try:
+                    connection.group('alt.test')
+                    log.debug(f"NNTP connection ready ({provider_name}) - selected alt.test")
+                except:
+                    log.debug(f"NNTP connection ready ({provider_name}) - no default group")
 
             return connection
 
