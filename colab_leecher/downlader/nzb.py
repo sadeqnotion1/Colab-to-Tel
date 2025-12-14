@@ -66,6 +66,8 @@ class NZBDownloader:
         self.missing_segments = []
         self.corrupted_segments = []
         self.fallback_recoveries = 0  # Articles recovered from alternate providers
+        self.consecutive_missing = 0  # Track consecutive missing articles
+        self.fallback_enabled = True  # Enable/disable fallback based on success rate
 
         # NNTP connection pool (supporting multiple providers)
         self.nntp_connections = []
@@ -321,10 +323,11 @@ class NZBDownloader:
 
     def download_article_with_fallback(self, connection: nntplib.NNTP, message_id: str, segment_number: int) -> Optional[bytes]:
         """
-        Download article with automatic provider fallback for missing articles.
+        Download article with smart provider fallback for missing articles.
 
         Tries the given connection first. If article is missing (430 error),
-        automatically tries connections from other providers before giving up.
+        tries other providers - but intelligently disables fallback if the NZB
+        appears to be mostly expired (too many consecutive misses).
 
         Args:
             connection: Primary NNTP connection to try first
@@ -339,10 +342,22 @@ class NZBDownloader:
         article_data = self.download_article(connection, message_id, segment_number)
 
         if article_data:
+            # Reset consecutive missing counter on success
+            self.consecutive_missing = 0
             return article_data
 
-        # Article missing on primary provider - try other providers
-        if len(self.provider_configs) > 1:
+        # Article missing on primary provider
+        self.consecutive_missing += 1
+
+        # Disable fallback if too many consecutive misses (NZB is expired)
+        # After 20 consecutive misses, stop trying fallback to prevent slowdown
+        if self.consecutive_missing > 20:
+            if self.fallback_enabled:
+                log.warning(f"⚠️ Too many consecutive missing articles ({self.consecutive_missing}), disabling fallback to improve speed")
+                self.fallback_enabled = False
+
+        # Try other providers if fallback is still enabled
+        if self.fallback_enabled and len(self.provider_configs) > 1:
             tried_providers = {primary_provider}
 
             for other_conn in self.nntp_connections:
@@ -359,10 +374,15 @@ class NZBDownloader:
                 if article_data:
                     log.info(f"✅ Found on {other_provider}!")
                     self.fallback_recoveries += 1
+                    self.consecutive_missing = 0  # Reset on successful fallback
                     return article_data
 
-        # Article missing on all providers
-        log.warning(f"Article {message_id} not found on ANY provider (segment {segment_number}) - likely expired")
+        # Article missing on all providers (or fallback disabled)
+        if not self.fallback_enabled:
+            log.debug(f"Article {message_id} missing (segment {segment_number})")
+        else:
+            log.warning(f"Article {message_id} not found on ANY provider (segment {segment_number}) - likely expired")
+
         self.missing_segments.append(segment_number)
         return None
 
