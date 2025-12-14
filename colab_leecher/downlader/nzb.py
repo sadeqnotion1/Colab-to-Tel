@@ -446,6 +446,17 @@ class NZBDownloader:
             if not status_msg:
                 return
 
+            # Throttle updates to prevent Telegram FLOOD_WAIT errors
+            # Update only every 3 seconds, except for special cases (0%, 100%, errors)
+            current_time = time.time()
+            time_since_last_update = current_time - self.last_update_time
+            is_special_update = percentage == 0 or percentage == 100 or "❌" in status_text
+
+            if not is_special_update and time_since_last_update < 3:
+                return  # Skip this update to avoid rate limiting
+
+            self.last_update_time = current_time
+
             # Update current percentage for error reporting
             self.current_percentage = percentage
 
