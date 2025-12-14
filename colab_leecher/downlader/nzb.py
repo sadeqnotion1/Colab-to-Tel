@@ -173,6 +173,14 @@ class NZBDownloader:
                 # Get file size if available
                 file_info['size'] = 0
 
+                # Extract newsgroup from <groups><group> element
+                file_info['newsgroups'] = []
+                groups_elem = file_elem.find('nzb:groups', namespace)
+                if groups_elem is not None:
+                    for group_elem in groups_elem.findall('nzb:group', namespace):
+                        if group_elem.text:
+                            file_info['newsgroups'].append(group_elem.text.strip())
+
                 # Parse segments
                 segments = []
                 segments_elem = file_elem.find('nzb:segments', namespace)
@@ -659,10 +667,23 @@ class NZBDownloader:
             for file_idx, file_info in enumerate(nzb_data['files'], 1):
                 filename = file_info['filename']
                 segments = file_info['segments']
+                newsgroups = file_info.get('newsgroups', [])
 
                 self.current_file = filename
                 log.info(f"\nDownloading file {file_idx}/{len(nzb_data['files'])}: {filename}")
                 log.info(f"  Segments: {len(segments)}, Size: {sizeUnit(file_info['size'])}")
+
+                # Select newsgroup for this file on all connections
+                if newsgroups:
+                    newsgroup = newsgroups[0]  # Use first newsgroup
+                    log.info(f"  Newsgroup: {newsgroup}")
+                    for conn in self.nntp_connections:
+                        try:
+                            conn.group(newsgroup)
+                        except Exception as e:
+                            log.warning(f"Failed to select newsgroup {newsgroup}: {e}")
+                else:
+                    log.warning("  No newsgroup specified in NZB file")
 
                 # Download segments
                 segments_data = []
