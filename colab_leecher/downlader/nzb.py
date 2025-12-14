@@ -220,6 +220,18 @@ class NZBDownloader:
             else:
                 log.info("Connected to NNTP server (no authentication)")
 
+            # Select a newsgroup (required by some NNTP servers before retrieving articles)
+            # Use a common binary newsgroup
+            try:
+                connection.group('alt.binaries.boneless')
+                log.debug("Selected newsgroup: alt.binaries.boneless")
+            except:
+                try:
+                    connection.group('alt.binaries.test')
+                    log.debug("Selected newsgroup: alt.binaries.test")
+                except:
+                    log.warning("Could not select default newsgroup - server may not require it")
+
             return connection
 
         except nntplib.NNTPPermanentError as e:
@@ -250,7 +262,7 @@ class NZBDownloader:
             Raw article data (yEnc encoded) or None if article missing
         """
         try:
-            # Request article by message ID
+            # Request article by message ID (newsgroup already selected during connection setup)
             response, info = connection.article(message_id)
 
             # Extract article body (skip headers)
