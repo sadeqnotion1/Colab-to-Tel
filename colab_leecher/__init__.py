@@ -3,8 +3,12 @@
 #================================================
 # copyright 2023 © Xron Trix | https://github.com/Xrontrix10
 
-import logging, json, asyncio
-from uvloop import install
+import logging, json, asyncio, os
+# uvloop only works on Linux/Mac, not Windows
+try:
+    from uvloop import install as uvloop_install
+except ImportError:
+    uvloop_install = None  # Windows doesn't support uvloop
 from pyrogram.client import Client
 # --- ADDED: Import BOT object to set settings ---
 from .utility.variables import BOT
@@ -19,7 +23,11 @@ log = logging.getLogger(__name__) # Use a logger instance
 
 
 # Read the dictionary from the credentials file
-credentials_path = "/content/Telegram-Leecher/credentials.json"
+# Use local path if running on Windows, else use Colab path
+if os.name == 'nt':  # Windows
+    credentials_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "credentials.json")
+else:  # Linux/Colab
+    credentials_path = "/content/Telegram-Leecher/credentials.json"
 credentials = {}
 try:
     with open(credentials_path, "r") as file:
@@ -79,12 +87,15 @@ else:
 # --- END MODIFICATION ---
 
 
-# Install uvloop
-try:
-     install()
-     log.info("uvloop installed.")
-except Exception as e:
-     log.warning(f"Could not install uvloop: {e}")
+# Install uvloop (only on Linux/Mac, not Windows)
+if uvloop_install:
+    try:
+         uvloop_install()
+         log.info("uvloop installed.")
+    except Exception as e:
+         log.warning(f"Could not install uvloop: {e}")
+else:
+     log.info("uvloop not available (Windows) - using standard asyncio event loop")
 
 # Fix for Python 3.12: Ensure event loop exists
 try:
