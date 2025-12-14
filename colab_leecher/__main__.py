@@ -2091,7 +2091,7 @@ async def handle_nzb_file(client, message, nzb_file_path=None):
     global BOT, MSG, src_request_msg, BotTimes
     from .downlader.nzb import NZBDownloader
     from .utility.task_context import create_task_context
-    from .uploader.task_uploader import upload_file
+    from .uploader.telegram import upload_file
     import random
     import aiohttp
     import aiofiles
