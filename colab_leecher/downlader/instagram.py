@@ -151,7 +151,7 @@ def instagram_downloader_instaloader(url):
             save_metadata=False,
             compress_json=False,
             post_metadata_txt_pattern='',
-            filename_pattern='{profile}_{date_utc}_UTC',  # Include username in filename
+            filename_pattern='{profile}_{date}',  # username_postdate format
             quiet=False
         )
 
@@ -812,7 +812,7 @@ def instagram_profile_downloader_instaloader(url: str, username: str, max_posts:
             save_metadata=False,
             compress_json=False,
             post_metadata_txt_pattern='',
-            filename_pattern='{profile}_{date_utc}_UTC',  # Include username in filename
+            filename_pattern='{profile}_{date}',  # username_postdate format
             quiet=False
         )
 
