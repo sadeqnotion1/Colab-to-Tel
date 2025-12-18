@@ -206,6 +206,10 @@ def instagram_downloader_instaloader(url):
             post = instaloader.Post.from_shortcode(L.context, shortcode)
             log.info(f"✅ Found post by @{post.owner_username}")
 
+            # Set better filename: username_shortcode (without domain and .bin)
+            from ..utility.variables import Messages
+            Messages.download_name = f"{post.owner_username}_{shortcode}"
+
             _instagram_state.header = f"📥 __Downloading post...__"
 
             # Download post
