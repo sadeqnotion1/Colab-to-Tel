@@ -801,6 +801,7 @@ def instagram_profile_downloader_instaloader(url: str, username: str, max_posts:
     try:
         import instaloader
         import json
+        import time
         from pathlib import Path
 
         # Create instaloader instance
@@ -835,17 +836,23 @@ def instagram_profile_downloader_instaloader(url: str, username: str, max_posts:
 
                 if sessionid:
                     # Get username from sessionid (format: userid%3A...)
-                    user_id = BOT.Setting.instagram_sessionid.split('%3A')[0] if BOT.Setting.instagram_sessionid else None
+                    user_id = sessionid.split('%3A')[0] if '%3A' in sessionid else None
 
                     # Try to load existing session or create new one
                     session_file = Path("instagram_session")
 
                     # Instaloader uses session files - try to import session
                     try:
-                        # Login with sessionid
-                        L.context._session.cookies.set('sessionid', sessionid, domain='.instagram.com')
+                        # Load ALL cookies from the cookies file, not just sessionid
+                        for cookie in cookies_data:
+                            name = cookie.get('name', '')
+                            value = cookie.get('value', '')
+                            domain = cookie.get('domain', '.instagram.com')
+                            if name and value:
+                                L.context._session.cookies.set(name, value, domain=domain)
+
                         L.context.username = user_id or "unknown"
-                        log.info(f"✅ Loaded Instagram session for user")
+                        log.info(f"✅ Loaded Instagram session with {len(cookies_data)} cookies (user_id: {user_id})")
                     except Exception as session_err:
                         log.warning(f"Could not load session: {session_err}")
                 else:
@@ -874,34 +881,55 @@ def instagram_profile_downloader_instaloader(url: str, username: str, max_posts:
 
             # Download posts
             downloaded_count = 0
-            for idx, post in enumerate(profile.get_posts(), 1):
-                if idx > max_posts:
-                    log.info(f"Reached max_posts limit ({max_posts})")
-                    break
+            failed_count = 0
 
-                try:
-                    _instagram_state.header = f"📥 __Downloading post {idx}/{min(max_posts, profile.mediacount)}...__"
+            log.info(f"🔄 Starting to iterate through posts (max: {max_posts})")
 
-                    # Download post
-                    L.download_post(post, target=username)
-                    downloaded_count += 1
+            try:
+                for idx, post in enumerate(profile.get_posts(), 1):
+                    log.debug(f"Loop iteration {idx}: Processing post {post.shortcode}")
 
-                    log.info(f"✅ Downloaded post {idx}/{max_posts}")
+                    if idx > max_posts:
+                        log.info(f"✋ Reached max_posts limit ({max_posts})")
+                        break
 
-                except instaloader.exceptions.LoginRequiredException:
-                    log.error(f"Login required for post {idx}")
-                    _instagram_state.header = f"❌ __Login required (private account)__"
-                    TaskError.failed_links.append({
-                        "link": url,
-                        "filename": username,
-                        "reason": "Login required - account may be private"
-                    })
-                    break
-                except Exception as post_err:
-                    log.warning(f"Failed to download post {idx}: {post_err}")
-                    continue
+                    try:
+                        _instagram_state.header = f"📥 __Downloading post {idx}/{min(max_posts, profile.mediacount)}...__"
 
-            log.info(f"✅ Profile download complete: {downloaded_count} posts from @{username}")
+                        # Download post
+                        L.download_post(post, target=username)
+                        downloaded_count += 1
+
+                        log.info(f"✅ Downloaded post {idx}/{max_posts} (shortcode: {post.shortcode})")
+
+                        # Small delay to avoid rate limiting
+                        if idx % 10 == 0:
+                            log.debug(f"⏸️ Pausing briefly after {idx} downloads to avoid rate limiting")
+                            time.sleep(2)
+
+                    except instaloader.exceptions.LoginRequiredException:
+                        log.error(f"❌ Login required for post {idx}")
+                        _instagram_state.header = f"❌ __Login required (private account)__"
+                        TaskError.failed_links.append({
+                            "link": url,
+                            "filename": username,
+                            "reason": "Login required - account may be private"
+                        })
+                        break
+                    except Exception as post_err:
+                        failed_count += 1
+                        log.warning(f"⚠️ Failed to download post {idx} (shortcode: {post.shortcode}): {post_err}")
+                        continue
+
+                # If we exit the loop, log why
+                log.info(f"🏁 Exited download loop at iteration {idx}. Downloaded: {downloaded_count}, Failed: {failed_count}")
+
+            except StopIteration:
+                log.info(f"⚠️ Iterator stopped at {downloaded_count} posts (StopIteration)")
+            except Exception as iter_err:
+                log.error(f"❌ Error during iteration: {iter_err}", exc_info=True)
+
+            log.info(f"✅ Profile download complete: {downloaded_count} posts from @{username} (failed: {failed_count})")
             _instagram_state.header = f"✅ __Downloaded {downloaded_count} posts!__"
 
         except instaloader.exceptions.ProfileNotExistsException:
