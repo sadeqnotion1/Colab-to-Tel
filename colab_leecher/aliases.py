@@ -79,7 +79,7 @@ async def instagram_cmd(client, message):
         log.info("  - Setting mode to 'leech'")
         BOT.Mode.mode = "leech"
         BOT.Mode.ytdl = False
-        BOT.Options.service_type = "instagram"
+        BOT.Options.service_type = "direct"  # Use 'direct' to trigger auto-detect (which detects Instagram)
 
         log.info("  - Preparing message text")
         text = (
