@@ -9,3 +9,10 @@ testing_purpose/
 __pycache__/
 
 *.session
+
+# Sensitive credentials and cookies
+*cookies*.txt
+*cookies*.json
+credentials.json
+instagram_*.txt
+instagram_*.json
