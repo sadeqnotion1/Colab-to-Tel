@@ -1,12 +1,13 @@
 """
 Registers lightweight commands to reach feature parity without Docker:
 
-- /mirror (/m)  -> same flow as your GDrive upload (prompt → mirror)
-- /leech (/l)   -> same flow as your Telegram upload (prompt → leech)
-- /ytdl  (/y)   -> same flow as your yt-dlp leech
-- /count        -> size of Drive link
-- /del|/delete  -> delete Drive link
-- /stats        -> CPU/RAM/Disk (psutil)
+- /mirror (/m)       -> same flow as your GDrive upload (prompt → mirror)
+- /leech (/l)        -> same flow as your Telegram upload (prompt → leech)
+- /ytdl  (/y)        -> same flow as your yt-dlp leech
+- /ig (/instagram)   -> Instagram batch downloader (posts, reels, stories)
+- /count             -> size of Drive link
+- /del|/delete       -> delete Drive link
+- /stats             -> CPU/RAM/Disk (psutil)
 
 These avoid importing existing handlers to prevent circular imports and
 instead replicate the tiny "set mode + prompt" logic those handlers use.
@@ -65,6 +66,39 @@ async def ytdl_cmd(client, message):
         "<code>https//link1.mp4</code>"
     )
     await task_starter(message, text)
+
+
+@colab_bot.on_message(filters.command(["ig", "instagram"]) & filters.private)
+async def instagram_cmd(client, message):
+    # Instagram download flow
+    log.info("🔍 DEBUG: /ig handler called")
+    log.info(f"  - User: {message.from_user.id}")
+    log.info(f"  - Chat: {message.chat.id}")
+
+    try:
+        log.info("  - Setting mode to 'leech'")
+        BOT.Mode.mode = "leech"
+        BOT.Mode.ytdl = False
+        BOT.Options.service_type = "instagram"
+
+        log.info("  - Preparing message text")
+        text = (
+            "<b>📸 Instagram Leech » Send Me LINK(s) 🔗</b>\n\n"
+            "**Supported:**\n"
+            "• Individual Posts/Reels/IGTV\n"
+            "• **ENTIRE PROFILES** (batch download)\n\n"
+            "**Examples:**\n"
+            "<code>https://instagram.com/username/</code> (all posts)\n"
+            "<code>https://instagram.com/p/xyz</code> (single post)\n"
+            "<code>https://instagram.com/reel/abc</code> (reel)"
+        )
+
+        log.info("  - Calling task_starter()")
+        await task_starter(message, text)
+        log.info("  ✓ task_starter() completed")
+
+    except Exception as e:
+        log.error(f"  ❌ ERROR in /ig handler: {e}", exc_info=True)
 
 
 @colab_bot.on_message(filters.command("count") & filters.private)
