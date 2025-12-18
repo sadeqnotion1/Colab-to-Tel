@@ -185,6 +185,16 @@ def instagram_downloader_instaloader(url):
                     log.error(f"Failed to load Instagram cookies: {cookie_err}")
                     _instagram_state.header = f"⚠️ __Cookie loading failed, trying without auth...__"
 
+        # Alternative: Use sessionid directly from settings
+        elif BOT.Setting.instagram_sessionid:
+            try:
+                log.info("🔐 Loading Instagram session from INSTAGRAM_SESSIONID setting")
+                L.context._session.cookies.set('sessionid', BOT.Setting.instagram_sessionid, domain='.instagram.com')
+                log.info("✅ Loaded Instagram session")
+            except Exception as session_err:
+                log.error(f"Failed to load Instagram sessionid: {session_err}")
+                _instagram_state.header = f"⚠️ __Session loading failed, trying without auth...__"
+
         # Create download directory
         makedirs(Paths.down_path, exist_ok=True)
 
