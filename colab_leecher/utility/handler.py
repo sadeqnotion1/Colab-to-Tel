@@ -615,6 +615,9 @@ async def Zip_Handler(down_path: str, is_split: bool, remove: bool, task_ctx: Ta
          log.error(f"Error in Zip_Handler: {zip_err}", exc_info=True)
          if _task_error: _task_error.state = True; _task_error.text = f"Zip Handler Error: {zip_err}"
 
+    # IMPORTANT: Return here to prevent falling through into Unzip_Handler code below
+    return
+
 
 
     # Messages.status_head = f"\n<b>📂 EXTRACTING » </b>\n\n<code>{os.path.basename(down_path)}</code>\n"
