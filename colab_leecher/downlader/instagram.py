@@ -882,50 +882,85 @@ def instagram_profile_downloader_instaloader(url: str, username: str, max_posts:
             # Download posts
             downloaded_count = 0
             failed_count = 0
+            rate_limit_retries = 0
+            max_rate_limit_retries = 3
 
             log.info(f"🔄 Starting to iterate through posts (max: {max_posts})")
 
             try:
-                for idx, post in enumerate(profile.get_posts(), 1):
-                    log.debug(f"Loop iteration {idx}: Processing post {post.shortcode}")
+                post_iterator = profile.get_posts()
+                idx = 0
 
-                    if idx > max_posts:
-                        log.info(f"✋ Reached max_posts limit ({max_posts})")
-                        break
-
+                while idx < max_posts:
                     try:
-                        _instagram_state.header = f"📥 __Downloading post {idx}/{min(max_posts, profile.mediacount)}...__"
+                        # Get next post
+                        post = next(post_iterator)
+                        idx += 1
 
-                        # Download post
-                        L.download_post(post, target=username)
-                        downloaded_count += 1
+                        log.debug(f"Loop iteration {idx}: Processing post {post.shortcode}")
 
-                        log.info(f"✅ Downloaded post {idx}/{max_posts} (shortcode: {post.shortcode})")
+                        try:
+                            _instagram_state.header = f"📥 __Downloading post {idx}/{min(max_posts, profile.mediacount)}...__"
 
-                        # Small delay to avoid rate limiting
-                        if idx % 10 == 0:
-                            log.debug(f"⏸️ Pausing briefly after {idx} downloads to avoid rate limiting")
-                            time.sleep(2)
+                            # Download post
+                            L.download_post(post, target=username)
+                            downloaded_count += 1
 
-                    except instaloader.exceptions.LoginRequiredException:
-                        log.error(f"❌ Login required for post {idx}")
-                        _instagram_state.header = f"❌ __Login required (private account)__"
-                        TaskError.failed_links.append({
-                            "link": url,
-                            "filename": username,
-                            "reason": "Login required - account may be private"
-                        })
+                            log.info(f"✅ Downloaded post {idx}/{max_posts} (shortcode: {post.shortcode})")
+
+                            # Small delay to avoid rate limiting
+                            if idx % 12 == 0:  # Every page (Instagram returns ~12 posts per page)
+                                wait_time = 5
+                                log.info(f"⏸️ Pausing {wait_time}s after {idx} posts to avoid rate limiting")
+                                _instagram_state.header = f"⏸️ __Rate limit cooldown ({wait_time}s)...__"
+                                time.sleep(wait_time)
+
+                        except instaloader.exceptions.LoginRequiredException:
+                            log.error(f"❌ Login required for post {idx}")
+                            _instagram_state.header = f"❌ __Login required (private account)__"
+                            TaskError.failed_links.append({
+                                "link": url,
+                                "filename": username,
+                                "reason": "Login required - account may be private"
+                            })
+                            break
+                        except Exception as post_err:
+                            failed_count += 1
+                            log.warning(f"⚠️ Failed to download post {idx} (shortcode: {post.shortcode}): {post_err}")
+                            continue
+
+                    except StopIteration:
+                        log.info(f"✅ Reached end of posts at {idx}")
                         break
-                    except Exception as post_err:
-                        failed_count += 1
-                        log.warning(f"⚠️ Failed to download post {idx} (shortcode: {post.shortcode}): {post_err}")
-                        continue
+
+                    except instaloader.exceptions.ConnectionException as conn_err:
+                        error_msg = str(conn_err)
+
+                        # Check if it's a rate limit error
+                        if "429" in error_msg or "Please wait" in error_msg or "401 Unauthorized" in error_msg:
+                            rate_limit_retries += 1
+
+                            if rate_limit_retries > max_rate_limit_retries:
+                                log.error(f"❌ Hit rate limit {rate_limit_retries} times. Stopping download.")
+                                _instagram_state.header = f"❌ __Rate limited by Instagram. Downloaded {downloaded_count} posts.__"
+                                break
+
+                            # Exponential backoff: 60s, 120s, 180s
+                            wait_time = 60 * rate_limit_retries
+                            log.warning(f"⚠️ Rate limited by Instagram after {idx} posts. Waiting {wait_time}s before retry {rate_limit_retries}/{max_rate_limit_retries}...")
+                            _instagram_state.header = f"⏸️ __Rate limited - waiting {wait_time}s (retry {rate_limit_retries}/{max_rate_limit_retries})...__"
+                            time.sleep(wait_time)
+
+                            # Don't increment idx - we'll retry this iteration
+                            continue
+                        else:
+                            # Other connection error
+                            log.error(f"❌ Connection error during iteration: {conn_err}")
+                            break
 
                 # If we exit the loop, log why
                 log.info(f"🏁 Exited download loop at iteration {idx}. Downloaded: {downloaded_count}, Failed: {failed_count}")
 
-            except StopIteration:
-                log.info(f"⚠️ Iterator stopped at {downloaded_count} posts (StopIteration)")
             except Exception as iter_err:
                 log.error(f"❌ Error during iteration: {iter_err}", exc_info=True)
 
