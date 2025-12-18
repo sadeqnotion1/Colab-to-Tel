@@ -879,11 +879,12 @@ def instagram_profile_downloader_instaloader(url: str, username: str, max_posts:
             limit_text = f" (limit: {max_posts})" if max_posts < profile.mediacount else ""
             _instagram_state.header = f"✅ __Found {profile.mediacount} posts__\n⬇️ __Downloading all{limit_text}...__"
 
-            # Download posts
+            # Download posts with aggressive rate limit avoidance
             downloaded_count = 0
             failed_count = 0
             rate_limit_retries = 0
-            max_rate_limit_retries = 3
+            max_rate_limit_retries = 5
+            last_successful_batch = 0
 
             log.info(f"🔄 Starting to iterate through posts (max: {max_posts})")
 
@@ -908,11 +909,25 @@ def instagram_profile_downloader_instaloader(url: str, username: str, max_posts:
 
                             log.info(f"✅ Downloaded post {idx}/{max_posts} (shortcode: {post.shortcode})")
 
-                            # Small delay to avoid rate limiting
+                            # Aggressive rate limit avoidance with multiple delay tiers
                             if idx % 12 == 0:  # Every page (Instagram returns ~12 posts per page)
-                                wait_time = 5
-                                log.info(f"⏸️ Pausing {wait_time}s after {idx} posts to avoid rate limiting")
-                                _instagram_state.header = f"⏸️ __Rate limit cooldown ({wait_time}s)...__"
+                                # Reset retry counter after successful batch
+                                if idx > last_successful_batch:
+                                    if rate_limit_retries > 0:
+                                        log.info(f"✅ Successful batch - resetting retry counter (was {rate_limit_retries})")
+                                    rate_limit_retries = 0
+                                    last_successful_batch = idx
+
+                                # Longer delays every 50 posts
+                                if idx % 50 == 0:
+                                    wait_time = 30
+                                    log.info(f"⏸️ Long break: Pausing {wait_time}s after {idx} posts")
+                                    _instagram_state.header = f"⏸️ __Long break ({wait_time}s after {idx} posts)...__"
+                                else:
+                                    wait_time = 15
+                                    log.info(f"⏸️ Pausing {wait_time}s after {idx} posts to avoid rate limiting")
+                                    _instagram_state.header = f"⏸️ __Rate limit cooldown ({wait_time}s)...__"
+
                                 time.sleep(wait_time)
 
                         except instaloader.exceptions.LoginRequiredException:
@@ -945,11 +960,13 @@ def instagram_profile_downloader_instaloader(url: str, username: str, max_posts:
                                 _instagram_state.header = f"❌ __Rate limited by Instagram. Downloaded {downloaded_count} posts.__"
                                 break
 
-                            # Exponential backoff: 60s, 120s, 180s
-                            wait_time = 60 * rate_limit_retries
+                            # More aggressive exponential backoff: 90s, 180s, 300s, 420s, 540s
+                            wait_time = 90 * rate_limit_retries
                             log.warning(f"⚠️ Rate limited by Instagram after {idx} posts. Waiting {wait_time}s before retry {rate_limit_retries}/{max_rate_limit_retries}...")
-                            _instagram_state.header = f"⏸️ __Rate limited - waiting {wait_time}s (retry {rate_limit_retries}/{max_rate_limit_retries})...__"
+                            _instagram_state.header = f"⏸️ __Rate limited - waiting {wait_time//60}min {wait_time%60}s (retry {rate_limit_retries}/{max_rate_limit_retries})...__"
                             time.sleep(wait_time)
+
+                            log.info(f"⏭️ Resuming after rate limit cooldown...")
 
                             # Don't increment idx - we'll retry this iteration
                             continue
