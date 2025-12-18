@@ -40,6 +40,11 @@ class BOT:
         nzb_cf_clearance = ""
         bitso_identity_cookie = ""
         bitso_phpsessid_cookie = ""
+        # Instagram Authentication
+        instagram_username = ""
+        instagram_password = ""
+        instagram_sessionid = ""  # Alternative: use session cookie instead
+        instagram_cookies_file = ""  # Path to cookies.txt file (Netscape format)
         # NZB/Usenet Settings (Multi-Provider Support)
         nzb_providers = {}  # Dict of provider configs
         nzb_active_provider = "default"  # Currently selected provider
@@ -118,23 +123,29 @@ class BotTimes:
 # Define Paths class for storing file system paths
 class Paths:
     """Stores relevant file system paths used by the bot."""
-    WORK_PATH = "/content/Telegram-Leecher/BOT_WORK"
-    THMB_PATH = "/content/Telegram-Leecher/colab_leecher/Thumbnail.jpg"
-    VIDEO_FRAME = f"{WORK_PATH}/video_frame.jpg"
-    HERO_IMAGE = f"{WORK_PATH}/Hero.jpg"
-    DEFAULT_HERO = "/content/Telegram-Leecher/custom_thmb.jpg"
-    MOUNTED_DRIVE = "/content/drive"
-    down_path = f"{WORK_PATH}/Downloads"
-    temp_dirleech_path = f"{WORK_PATH}/dir_leech_temp"
-    # --- CHOOSE ONE mirror_dir ---
-    mirror_dir = "/content/Mirrored_Files" # Default GDupload path
-    # mirror_dir = "/content/Colab Leecher Uploads" # Example local path (needs mount check removed in task_manager)
-    # --- End mirror_dir choice ---
-    temp_zpath = f"{WORK_PATH}/Leeched_Files"
-    temp_unzip_path = f"{WORK_PATH}/Unzipped_Files"
-    temp_files_dir = f"{WORK_PATH}/leech_temp"
-    thumbnail_ytdl = f"{WORK_PATH}/ytdl_thumbnails"
-    access_token = "/content/token.pickle"
+    # Auto-detect environment (Windows or Linux/Colab)
+    import os as _os
+    if _os.name == 'nt':  # Windows
+        _BASE_PATH = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))), "BOT_WORK")
+        _ROOT_PATH = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
+    else:  # Linux/Colab
+        _BASE_PATH = "/content/Telegram-Leecher/BOT_WORK"
+        _ROOT_PATH = "/content/Telegram-Leecher"
+
+    WORK_PATH = _BASE_PATH
+    THMB_PATH = _os.path.join(_ROOT_PATH, "colab_leecher", "Thumbnail.jpg")
+    VIDEO_FRAME = _os.path.join(_BASE_PATH, "video_frame.jpg")
+    HERO_IMAGE = _os.path.join(_BASE_PATH, "Hero.jpg")
+    DEFAULT_HERO = _os.path.join(_ROOT_PATH, "custom_thmb.jpg")
+    MOUNTED_DRIVE = "/content/drive" if _os.name != 'nt' else _os.path.join(_ROOT_PATH, "drive")
+    down_path = _os.path.join(_BASE_PATH, "Downloads")
+    temp_dirleech_path = _os.path.join(_BASE_PATH, "dir_leech_temp")
+    mirror_dir = "/content/Mirrored_Files" if _os.name != 'nt' else _os.path.join(_ROOT_PATH, "Mirrored_Files")
+    temp_zpath = _os.path.join(_BASE_PATH, "Leeched_Files")
+    temp_unzip_path = _os.path.join(_BASE_PATH, "Unzipped_Files")
+    temp_files_dir = _os.path.join(_BASE_PATH, "leech_temp")
+    thumbnail_ytdl = _os.path.join(_BASE_PATH, "ytdl_thumbnails")
+    access_token = "/content/token.pickle" if _os.name != 'nt' else _os.path.join(_ROOT_PATH, "token.pickle")
 
 
 # Define Messages class for storing message content fragments

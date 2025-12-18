@@ -70,6 +70,22 @@ log.info(f"NZBCloud CF Cookie: {'Set' if BOT.Setting.nzb_cf_clearance else 'Not 
 log.info(f"Bitso Identity Cookie: {'Set' if BOT.Setting.bitso_identity_cookie else 'Not Set'}")
 log.info(f"Bitso PHPSESSID Cookie: {'Set' if BOT.Setting.bitso_phpsessid_cookie else 'Not Set'}")
 
+# --- Load Instagram Authentication ---
+log.info("Loading Instagram authentication...")
+BOT.Setting.instagram_username = credentials.get("INSTAGRAM_USERNAME", "")
+BOT.Setting.instagram_password = credentials.get("INSTAGRAM_PASSWORD", "")
+BOT.Setting.instagram_sessionid = credentials.get("INSTAGRAM_SESSIONID", "")
+BOT.Setting.instagram_cookies_file = credentials.get("INSTAGRAM_COOKIES_FILE", "")
+
+if BOT.Setting.instagram_username and BOT.Setting.instagram_password:
+    log.info(f"Instagram Login: Configured (Username: {BOT.Setting.instagram_username})")
+elif BOT.Setting.instagram_sessionid:
+    log.info("Instagram Login: Configured (Session Cookie)")
+elif BOT.Setting.instagram_cookies_file:
+    log.info(f"Instagram Login: Configured (Cookie File: {BOT.Setting.instagram_cookies_file})")
+else:
+    log.info("Instagram Login: Not Configured (Limited access)")
+
 # --- Load Usenet/NZB Provider Configurations ---
 log.info("Loading Usenet provider configurations...")
 nzb_providers_config = credentials.get("NZB_PROVIDERS", {})
@@ -112,8 +128,12 @@ except RuntimeError:
 try:
     log.info("Initializing Pyrogram client...")
     # Initialize Pyrogram Client - REMOVED retry_delay and sleep_threshold
+    # Use timestamp in session name to avoid lock issues on Windows
+    import time
+    session_name = f"colab_bot_{int(time.time())}" if os.name == 'nt' else "colab_bot"
+
     colab_bot = Client(
-        "colab_bot", # Session name
+        session_name,  # Session name with timestamp on Windows
         api_id=API_ID,
         api_hash=API_HASH,
         bot_token=BOT_TOKEN,
