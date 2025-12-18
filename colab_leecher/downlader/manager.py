@@ -511,7 +511,7 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
                       # Check if it's a profile URL or individual post
                       if is_profile_url(link):
                           log.info("Detected Instagram Profile URL - downloading all posts")
-                          link_success = await instagram_profile_download(link, i + 1, max_posts=50)
+                          link_success = await instagram_profile_download(link, i + 1, max_posts=9999)  # No practical limit
                       else:
                           log.info("Detected Instagram Post/Reel URL")
                           link_success = await instagram_download(link, i + 1)

@@ -868,7 +868,9 @@ def instagram_profile_downloader_instaloader(url: str, username: str, max_posts:
             profile = instaloader.Profile.from_username(L.context, username)
             log.info(f"✅ Found profile @{username} - {profile.mediacount} total posts")
 
-            _instagram_state.header = f"✅ __Found {profile.mediacount} posts__\n⬇️ __Downloading (limit: {max_posts})...__"
+            # Show limit only if it's actually limiting (less than total posts)
+            limit_text = f" (limit: {max_posts})" if max_posts < profile.mediacount else ""
+            _instagram_state.header = f"✅ __Found {profile.mediacount} posts__\n⬇️ __Downloading all{limit_text}...__"
 
             # Download posts
             downloaded_count = 0
