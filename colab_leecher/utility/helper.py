@@ -860,6 +860,28 @@ def is_terabox(link):
     """Checks if the link is likely a Terabox link."""
     return isinstance(link, str) and ("terabox" in link or "1024tera" in link)
 
+def is_instagram(link):
+    """
+    Checks if the link is an Instagram link.
+    Supports posts, reels, stories, IGTV, and profile links.
+
+    Args:
+        link: URL string to check
+
+    Returns:
+        bool: True if URL is from Instagram
+    """
+    if not isinstance(link, str):
+        return False
+
+    instagram_patterns = [
+        'instagram.com',
+        'instagr.am',
+        'ig.me'
+    ]
+
+    return any(pattern in link.lower() for pattern in instagram_patterns)
+
 def is_ytdl_link(link: str) -> bool:
     if not isinstance(link, str):
         return False
