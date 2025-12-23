@@ -1416,7 +1416,7 @@ async def splitVideo(file_path, target_segment_size_mb: int, remove: bool, task_
         return False
 
     # --- Calculate Segment Duration ---
-    MAX_SPLIT_SIZE_BYTES = 1.9 * 1024 * 1024 * 1024 # 1.90 GiB (fixed to match comment)
+    MAX_SPLIT_SIZE_BYTES = 1.5 * 1024 * 1024 * 1024 # 1.5 GiB
 
     min_parts_required = 1
     if total_file_size > MAX_SPLIT_SIZE_BYTES:
