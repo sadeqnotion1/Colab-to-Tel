@@ -115,14 +115,17 @@ async def nzbcloud_cmd(client, message):
 
         log.info("  - Preparing message text")
         text = (
-            "<b>☁️ NZBcloud Leech » Send Me LINK(s) 🔗</b>\n\n"
-            "**Supported:**\n"
-            "• NZBcloud play/download URLs (with token)\n"
-            "• GitHub Gist raw URLs (TITLE=filename\\nurl format)\n"
-            "• Pastebin/Rentry raw URLs\n\n"
-            "**Examples:**\n"
-            "<code>TITLE=video.mkv\nhttps://files.nzbcloud.com/api/v1/files/xxx/play?token=...</code>\n\n"
-            "<code>https://gist.githubusercontent.com/.../raw/...</code>"
+            "<b>☁️ NZBcloud Leech » Send Gist/Pastebin URL 🔗</b>\n\n"
+            "**Required Format:**\n"
+            "Your gist/pastebin MUST use this format:\n"
+            "<code>TITLE=filename.mkv\nhttps://files.nzbcloud.com/api/v1/files/xxx/play?token=...\n\n"
+            "TITLE=another-file.mkv\nhttps://files.nzbcloud.com/api/v1/files/yyy/play?token=...</code>\n\n"
+            "**✅ Browser Extension:**\n"
+            "Use the NZBcloud browser extension's \"Create Gist\" button - it creates the correct format automatically!\n\n"
+            "**Supported Sources:**\n"
+            "• GitHub Gist raw URLs\n"
+            "• Pastebin raw URLs\n"
+            "• Rentry raw URLs"
         )
 
         log.info("  - Calling task_starter()")

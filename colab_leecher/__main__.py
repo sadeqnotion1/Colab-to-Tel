@@ -605,8 +605,11 @@ async def handle_url(client: Client, message: Message):
                 log.info(f"Using {len(parsed_links)} links fetched from external URL: {input_text}")
                 urls = parsed_links
 
-                # AUTO-DETECT service type based on fetched links
-                if urls and len(urls) > 0:
+                # Check if service_type was pre-selected (e.g., via /nzbcloud command)
+                service_already_selected = BOT.Options.service_type is not None
+
+                # AUTO-DETECT service type based on fetched links (only if not already selected)
+                if urls and len(urls) > 0 and not service_already_selected:
                     # Check if ALL links are from the same service
                     all_nzbcloud = all(is_nzbcloud(link) for link in urls)
                     all_instagram = all(is_instagram(link) for link in urls)
@@ -624,6 +627,35 @@ async def handle_url(client: Client, message: Message):
                         BOT.State.mindvalley_waiting = True
                     else:
                         log.info(f"Mixed or unrecognized link types, will ask for service selection")
+
+                # If service is NZBcloud (auto-detected OR pre-selected), extract TITLE= filenames
+                if BOT.Options.service_type == "nzbcloud":
+                    try:
+                        log.info(f"Parsing TITLE= filenames from gist URL for NZBcloud: {input_text}")
+                        filenames_from_gist = await fetch_filenames_from_url(input_text)
+                        if filenames_from_gist and len(filenames_from_gist) > 0:
+                            # Parse TITLE=filename format
+                            parsed_filenames = []
+                            for line in filenames_from_gist:
+                                if line.startswith("TITLE="):
+                                    filename = line[6:].strip()  # Remove "TITLE=" prefix
+                                    if filename:
+                                        parsed_filenames.append(filename)
+                                        log.debug(f"Extracted filename: {filename}")
+
+                            if len(parsed_filenames) == len(urls):
+                                BOT.Options.filenames = parsed_filenames
+                                log.info(f"✅ Extracted {len(parsed_filenames)} filenames from TITLE= lines")
+                            else:
+                                log.warning(f"Filename count mismatch: {len(parsed_filenames)} filenames vs {len(urls)} URLs")
+                                BOT.Options.filenames = []
+                        else:
+                            log.warning("Could not fetch content from gist for filename extraction")
+                            BOT.Options.filenames = []
+                    except Exception as e:
+                        log.error(f"Error parsing TITLE= filenames: {e}")
+                        BOT.Options.filenames = []
+
             else:
                 # Fallback: Process message directly for links and args
                 log.info("Input not recognized as external list URL, processing directly.")
@@ -666,8 +698,16 @@ async def handle_url(client: Client, message: Message):
 
                 # Route to appropriate next step based on auto-detected service
                 if BOT.Options.service_type == "nzbcloud":
-                    # NZBcloud needs filename selection
-                    await ask_filename_option(client, message.chat.id, "NZBCloud")
+                    # NZBcloud filenames should already be extracted from TITLE= lines
+                    if BOT.Options.filenames and len(BOT.Options.filenames) > 0:
+                        log.info(f"✅ NZBcloud filenames already extracted, proceeding to leech type selection")
+                        await message.reply_text(f"☁️ Detected {len(BOT.SOURCE)} NZBcloud files with filenames!\n\nProceeding...")
+                        await ask_leech_type(client, message.chat.id, BOT.Mode.mode)
+                    else:
+                        log.warning("NZBcloud detected but no filenames found in TITLE= format")
+                        await message.reply_text("⚠️ NZBcloud links detected but no TITLE= filenames found.\n\nPlease ensure your gist has format:\nTITLE=filename.mkv\nhttps://files.nzbcloud.com/...")
+                        BOT.State.started = False
+                        return
                 elif BOT.Options.service_type == "mindvalley":
                     # Mindvalley is already handled by mindvalley_waiting state
                     # Just set the SOURCE and let the mindvalley handler process it
