@@ -704,8 +704,13 @@ async def handle_url(client: Client, message: Message):
                         await message.reply_text(f"☁️ Detected {len(BOT.SOURCE)} NZBcloud files with filenames!\n\nProceeding...")
                         await ask_leech_type(client, message.chat.id, BOT.Mode.mode)
                     else:
-                        log.warning("NZBcloud detected but no filenames found in TITLE= format")
-                        await message.reply_text("⚠️ NZBcloud links detected but no TITLE= filenames found.\n\nPlease ensure your gist has format:\nTITLE=filename.mkv\nhttps://files.nzbcloud.com/...")
+                        log.warning("NZBcloud detected but no filenames found")
+                        await message.reply_text(
+                            "⚠️ NZBcloud links detected but no TITLE= filenames found.\n\n"
+                            "**Required Format:**\n"
+                            "<code>TITLE=filename.mkv\nhttps://files.nzbcloud.com/...</code>\n\n"
+                            "**Tip:** Use the extension's \"Create Gist\" button to generate the correct format!"
+                        )
                         BOT.State.started = False
                         return
                 elif BOT.Options.service_type == "mindvalley":
