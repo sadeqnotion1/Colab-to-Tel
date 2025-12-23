@@ -1,13 +1,14 @@
 """
 Registers lightweight commands to reach feature parity without Docker:
 
-- /mirror (/m)       -> same flow as your GDrive upload (prompt → mirror)
-- /leech (/l)        -> same flow as your Telegram upload (prompt → leech)
-- /ytdl  (/y)        -> same flow as your yt-dlp leech
-- /ig (/instagram)   -> Instagram batch downloader (posts, reels, stories)
-- /count             -> size of Drive link
-- /del|/delete       -> delete Drive link
-- /stats             -> CPU/RAM/Disk (psutil)
+- /mirror (/m)          -> same flow as your GDrive upload (prompt → mirror)
+- /leech (/l)           -> same flow as your Telegram upload (prompt → leech)
+- /ytdl  (/y)           -> same flow as your yt-dlp leech
+- /ig (/instagram)      -> Instagram batch downloader (posts, reels, stories)
+- /nzbcloud (/nzbc)     -> NZBcloud direct downloads (supports gist URLs)
+- /count                -> size of Drive link
+- /del|/delete          -> delete Drive link
+- /stats                -> CPU/RAM/Disk (psutil)
 
 These avoid importing existing handlers to prevent circular imports and
 instead replicate the tiny "set mode + prompt" logic those handlers use.
@@ -99,6 +100,37 @@ async def instagram_cmd(client, message):
 
     except Exception as e:
         log.error(f"  ❌ ERROR in /ig handler: {e}", exc_info=True)
+
+
+@colab_bot.on_message(filters.command(["nzbcloud", "nzbc"]) & filters.private)
+async def nzbcloud_cmd(client, message):
+    # NZBcloud download flow
+    log.info(f"🔍 /nzbcloud handler called from {message.from_user.id}")
+
+    try:
+        log.info("  - Setting mode to 'leech'")
+        BOT.Mode.mode = "leech"
+        BOT.Mode.ytdl = False
+        BOT.Options.service_type = "nzbcloud"  # Set service type directly
+
+        log.info("  - Preparing message text")
+        text = (
+            "<b>☁️ NZBcloud Leech » Send Me LINK(s) 🔗</b>\n\n"
+            "**Supported:**\n"
+            "• NZBcloud play/download URLs (with token)\n"
+            "• GitHub Gist raw URLs (TITLE=filename\\nurl format)\n"
+            "• Pastebin/Rentry raw URLs\n\n"
+            "**Examples:**\n"
+            "<code>TITLE=video.mkv\nhttps://files.nzbcloud.com/api/v1/files/xxx/play?token=...</code>\n\n"
+            "<code>https://gist.githubusercontent.com/.../raw/...</code>"
+        )
+
+        log.info("  - Calling task_starter()")
+        await task_starter(message, text)
+        log.info("  ✓ task_starter() completed")
+
+    except Exception as e:
+        log.error(f"  ❌ ERROR in /nzbcloud handler: {e}", exc_info=True)
 
 
 @colab_bot.on_message(filters.command("count") & filters.private)

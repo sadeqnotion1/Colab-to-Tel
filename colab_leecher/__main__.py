@@ -25,7 +25,8 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQ
 from .utility.helper import (
     isLink, setThumbnail, message_deleter, send_settings,
     clean_filename, extract_filename_from_url, apply_dot_style, sizeUnit,
-    keyboard, fetch_links_from_url, fetch_filenames_from_url
+    keyboard, fetch_links_from_url, fetch_filenames_from_url,
+    is_instagram, is_nzbcloud, is_m3u8_url, is_mindvalley_url
 )
 from .downlader.mindvalley import MindvalleyDownloader
 from .uploader.telegram import upload_file
@@ -144,6 +145,15 @@ async def yt_upload(client, message):
     text = "<b>🏮 YTDL Leech » Send Me LINK(s) 🔗</b> ...<code>https//link1.mp4</code>"
     src_request_msg = await task_starter(message, text)
     log.debug(f"/ytupload: task_starter called, src_request_msg set")
+
+@colab_bot.on_message(filters.command("igupload") & filters.private)
+async def instagram_upload(client, message):
+    global BOT, src_request_msg
+    log.info(f"Received /igupload from {message.from_user.id}")
+    BOT.Mode.mode = "leech"; BOT.Mode.ytdl = False; BOT.Options.service_type = "instagram" # Set service type
+    text = "<b>📸 Instagram Leech » Send Me LINK(s) 🔗</b>\n\n(Posts, Reels, Stories, IGTV, Carousels)\n\n<code>https://instagram.com/p/xyz\nhttps://instagram.com/reel/abc</code>"
+    src_request_msg = await task_starter(message, text)
+    log.debug(f"/igupload: task_starter called, src_request_msg set")
 
 # --- REMOVED /nzbclouddownload, /Debriddownload, /bitsodownload handlers ---
 
@@ -594,6 +604,26 @@ async def handle_url(client: Client, message: Message):
                      BOT.State.started = False; return
                 log.info(f"Using {len(parsed_links)} links fetched from external URL: {input_text}")
                 urls = parsed_links
+
+                # AUTO-DETECT service type based on fetched links
+                if urls and len(urls) > 0:
+                    # Check if ALL links are from the same service
+                    all_nzbcloud = all(is_nzbcloud(link) for link in urls)
+                    all_instagram = all(is_instagram(link) for link in urls)
+                    all_m3u8 = all(is_m3u8_url(link) or is_mindvalley_url(link) for link in urls)
+
+                    if all_nzbcloud:
+                        log.info(f"🔍 AUTO-DETECTED: All {len(urls)} links are from NZBcloud, setting service_type to 'nzbcloud'")
+                        BOT.Options.service_type = "nzbcloud"
+                    elif all_instagram:
+                        log.info(f"🔍 AUTO-DETECTED: All {len(urls)} links are from Instagram, setting service_type to 'direct' (Instagram auto-handled)")
+                        BOT.Options.service_type = "direct"
+                    elif all_m3u8:
+                        log.info(f"🔍 AUTO-DETECTED: All {len(urls)} links are M3U8/Mindvalley, setting service_type to 'mindvalley'")
+                        BOT.Options.service_type = "mindvalley"
+                        BOT.State.mindvalley_waiting = True
+                    else:
+                        log.info(f"Mixed or unrecognized link types, will ask for service selection")
             else:
                 # Fallback: Process message directly for links and args
                 log.info("Input not recognized as external list URL, processing directly.")
@@ -630,8 +660,29 @@ async def handle_url(client: Client, message: Message):
             BOT.SOURCE = urls # Store the final list of links
             log.info(f"Received {len(BOT.SOURCE)} URLs for mode {BOT.Mode.mode} in handle_url.")
 
-            # Ask for Service Type (only needed for leech/mirror link modes)
-            await ask_service_type(client, message) # Ensure ask_service_type is imported
+            # Check if service was auto-detected
+            if BOT.Options.service_type is not None:
+                log.info(f"✅ Service auto-detected as '{BOT.Options.service_type}', skipping service selection")
+
+                # Route to appropriate next step based on auto-detected service
+                if BOT.Options.service_type == "nzbcloud":
+                    # NZBcloud needs filename selection
+                    await ask_filename_option(client, message.chat.id, "NZBCloud")
+                elif BOT.Options.service_type == "mindvalley":
+                    # Mindvalley is already handled by mindvalley_waiting state
+                    # Just set the SOURCE and let the mindvalley handler process it
+                    log.info("Mindvalley auto-detected, URLs stored in BOT.SOURCE for processing")
+                    await message.reply_text(f"🎬 Detected {len(BOT.SOURCE)} Mindvalley M3U8 URL(s)!\n\nProcessing...")
+                    # The mindvalley handler will process these URLs
+                elif BOT.Options.service_type in ["direct", "instagram"]:
+                    # Direct/Instagram can go straight to leech type
+                    await ask_leech_type(client, message.chat.id, BOT.Mode.mode)
+                else:
+                    # Fallback to asking for service
+                    await ask_service_type(client, message)
+            else:
+                # No auto-detection, ask user for service type
+                await ask_service_type(client, message) # Ensure ask_service_type is imported
 
     except Exception as e:
         log.error(f"Error handling URL/Path message: {e}", exc_info=True)
@@ -2320,6 +2371,7 @@ async def help_command(client, message):
                  "  `/tupload` - Leech to Telegram\n"
                  "  `/gdupload` - Mirror to GDrive\n"
                  "  `/ytupload` - Leech YouTube-DL links\n"
+                 "  `/igupload` or `/ig` - Instagram downloader (posts, reels, stories)\n"
                  "  `/drupload` - Leech from Colab directory\n"
                  "  `/mindvalley` - Download Mindvalley courses (M3U8)\n"
                  "  `/nzb` - Download from Usenet (NZB files)\n"
@@ -2340,18 +2392,29 @@ async def send_sabnzbd_url_to_telegram():
             with open(sabnzbd_info_file, 'r') as f:
                 lines = f.readlines()
                 if len(lines) >= 2:
-                    public_url = lines[0].strip()
+                    url = lines[0].strip()
                     api_key = lines[1].strip()
+                    url_type = lines[2].strip() if len(lines) >= 3 else 'public'  # default to public for backwards compat
+
+                    # Customize message based on URL type
+                    if url_type == 'local':
+                        icon = "🏠"
+                        title = "SABnzbd Web UI Ready (Local Access)"
+                        note = "<i>⚠️ Local URL only - accessible from this machine only.</i>"
+                    else:
+                        icon = "🌐"
+                        title = "SABnzbd Web UI Ready!"
+                        note = "<i>Click the URL to manage NZB downloads in your browser.</i>"
 
                     message_text = (
-                        f"<b>🌐 SABnzbd Web UI Ready!</b>\n\n"
-                        f"<b>🔗 URL:</b> {public_url}\n"
+                        f"<b>{icon} {title}</b>\n\n"
+                        f"<b>🔗 URL:</b> {url}\n"
                         f"<b>🔑 API Key:</b> <code>{api_key}</code>\n\n"
-                        f"<i>Click the URL to manage NZB downloads in your browser.</i>"
+                        f"{note}"
                     )
 
                     await colab_bot.send_message(OWNER, message_text)
-                    log.info(f"✅ Sent SABnzbd URL to owner via Telegram")
+                    log.info(f"✅ Sent SABnzbd {url_type} URL to owner via Telegram")
 
                     # Delete file after sending
                     os.remove(sabnzbd_info_file)
@@ -2368,6 +2431,23 @@ if __name__ == "__main__":
      log.info("Colab Leecher Script Starting as main...")
      if colab_bot:
           log.info("colab_bot instance found, attempting run()...")
+
+          # Auto-detect SABnzbd and create notification file if running
+          try:
+              from .utility.sabnzbd_autodetect import auto_configure_sabnzbd, create_notification_file
+              from .downlader.sabnzbd_downloader import set_sabnzbd_config
+
+              sabnzbd_config = auto_configure_sabnzbd()
+              if sabnzbd_config:
+                  # Configure bot to use SABnzbd
+                  set_sabnzbd_config(sabnzbd_config)
+                  # Create notification file for Telegram
+                  create_notification_file(sabnzbd_config, url_type='local')
+                  log.info("✅ SABnzbd auto-configured successfully")
+              else:
+                  log.info("SABnzbd not detected - will use custom NNTP downloader")
+          except Exception as e:
+              log.warning(f"SABnzbd auto-detection failed: {e}")
 
           # Schedule SABnzbd URL message as background task
           loop = asyncio.get_event_loop()

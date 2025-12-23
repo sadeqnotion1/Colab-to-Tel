@@ -882,6 +882,27 @@ def is_instagram(link):
 
     return any(pattern in link.lower() for pattern in instagram_patterns)
 
+def is_nzbcloud(link):
+    """
+    Checks if the link is an NZBcloud link.
+    Supports files.nzbcloud.com play/download URLs.
+
+    Args:
+        link: URL string to check
+
+    Returns:
+        bool: True if URL is from NZBcloud
+    """
+    if not isinstance(link, str):
+        return False
+
+    nzbcloud_patterns = [
+        'files.nzbcloud.com/api/v1/files/',  # Direct file URLs
+        'app.nzbcloud.com',                  # App URLs
+    ]
+
+    return any(pattern in link.lower() for pattern in nzbcloud_patterns)
+
 def is_ytdl_link(link: str) -> bool:
     if not isinstance(link, str):
         return False

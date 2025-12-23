@@ -23,7 +23,7 @@ from ..utility.variables import BOT, Gdrive, MSG, Messages, Aria2c, BotTimes, Pa
 from ..utility.task_context import TaskContext  # NEW: Import for multi-task support
 from ..utility.helper import (
     isYtdlComplete, keyboard, sysINFO, is_google_drive, is_mega, is_terabox,
-    is_instagram, is_ytdl_link, is_telegram, status_bar, getTime, sizeUnit, speedETA,
+    is_instagram, is_nzbcloud, is_ytdl_link, is_telegram, status_bar, getTime, sizeUnit, speedETA,
     clean_filename, extract_filename_from_url, apply_dot_style, is_torrent
 )
 from .gdrive import ( 
