@@ -1416,18 +1416,18 @@ async def splitVideo(file_path, target_segment_size_mb: int, remove: bool, task_
         return False
 
     # --- Calculate Segment Duration ---
-    MAX_SPLIT_SIZE_BYTES = 1.5 * 1024 * 1024 * 1024 # Using 1.90 GiB
-    
+    MAX_SPLIT_SIZE_BYTES = 1.9 * 1024 * 1024 * 1024 # 1.90 GiB (fixed to match comment)
+
     min_parts_required = 1
     if total_file_size > MAX_SPLIT_SIZE_BYTES:
         min_parts_required = math.ceil(total_file_size / MAX_SPLIT_SIZE_BYTES)
-    
-    duration_per_part_max = float('inf') 
+
+    duration_per_part_max = float('inf')
     if min_parts_required > 1:
         duration_per_part_max = math.floor(duration_total_seconds / min_parts_required)
         log.info(f"Min parts required based on size ({sizeUnit(total_file_size)} / {sizeUnit(MAX_SPLIT_SIZE_BYTES)}): {min_parts_required}. Max duration/part: {duration_per_part_max}s")
-        
-    duration_per_part_target = float('inf') 
+
+    duration_per_part_target = float('inf')
     if bitrate > 0:
         target_size_bits = target_segment_size_mb * 1024 * 1024 * 8
         duration_per_part_target = int(target_size_bits / bitrate)
@@ -1439,8 +1439,20 @@ async def splitVideo(file_path, target_segment_size_mb: int, remove: bool, task_
 
     if final_segment_duration >= duration_total_seconds:
          log.info(f"Final calculated segment duration ({final_segment_duration}s) >= total duration ({duration_total_seconds:.2f}s). No splitting required.")
-         return True 
-         
+         return True
+
+    # Adjust segment duration to avoid tiny final segment
+    # Calculate how many segments we'll create and check if the last one would be too small
+    estimated_segments = math.ceil(duration_total_seconds / final_segment_duration)
+    remainder_duration = duration_total_seconds % final_segment_duration
+
+    # If the last segment would be less than 30% of target duration, adjust to make segments more equal
+    if remainder_duration > 0 and remainder_duration < (final_segment_duration * 0.3):
+        log.info(f"Last segment would be only {remainder_duration:.1f}s (too small). Adjusting segment duration.")
+        # Redistribute duration evenly across all segments
+        final_segment_duration = int(duration_total_seconds / estimated_segments)
+        log.info(f"Adjusted segment duration to {final_segment_duration}s to create {estimated_segments} more equal segments.")
+
     log.info(f"Final segment duration chosen: {final_segment_duration} seconds.")
 
     # --- Execute FFmpeg Split ---
