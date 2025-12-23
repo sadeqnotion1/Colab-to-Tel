@@ -1529,9 +1529,60 @@ async def splitVideo(file_path, target_segment_size_mb: int, remove: bool, task_
         
         # --- Check success based on return code and output files ---
         if proc.returncode == 0:
-            segment_files = [f for f in os.listdir(_paths.temp_zpath) if f.startswith(f"{just_name}.part") and f.endswith(extension)]
+            segment_files = sorted([f for f in os.listdir(_paths.temp_zpath) if f.startswith(f"{just_name}.part") and f.endswith(extension)])
             if segment_files:
                  log.info(f"FFmpeg split completed successfully for {filename}. Segments found: {len(segment_files)}")
+
+                 # --- Post-process: Detect and merge tiny final segments ---
+                 if len(segment_files) >= 2:
+                     last_file_path = ospath.join(_paths.temp_zpath, segment_files[-1])
+                     second_last_file_path = ospath.join(_paths.temp_zpath, segment_files[-2])
+
+                     last_file_size = getSize(last_file_path) if ospath.exists(last_file_path) else 0
+                     second_last_size = getSize(second_last_file_path) if ospath.exists(second_last_file_path) else 0
+
+                     # If last segment is < 10MB (very small), merge it with the previous one
+                     MIN_SEGMENT_SIZE = 10 * 1024 * 1024  # 10 MB
+                     if last_file_size > 0 and last_file_size < MIN_SEGMENT_SIZE:
+                         log.warning(f"Last segment {segment_files[-1]} is only {sizeUnit(last_file_size)}, merging with previous segment.")
+
+                         # Create merged file
+                         merged_path = ospath.join(_paths.temp_zpath, f"{just_name}.merged{extension}")
+
+                         # Use FFmpeg concat demuxer to merge
+                         concat_file = ospath.join(_paths.temp_zpath, "concat_list.txt")
+                         with open(concat_file, 'w') as f:
+                             f.write(f"file '{segment_files[-2]}'\n")
+                             f.write(f"file '{segment_files[-1]}'\n")
+
+                         merge_cmd = f'ffmpeg -f concat -safe 0 -i "{concat_file}" -c copy "{merged_path}"'
+                         log.info(f"Merging last two segments: {merge_cmd}")
+
+                         try:
+                             merge_proc = await asyncio.create_subprocess_shell(
+                                 merge_cmd,
+                                 stdout=asyncio.subprocess.PIPE,
+                                 stderr=asyncio.subprocess.PIPE,
+                                 cwd=_paths.temp_zpath
+                             )
+                             await merge_proc.wait()
+
+                             if merge_proc.returncode == 0 and ospath.exists(merged_path):
+                                 # Remove old files and rename merged
+                                 os.remove(second_last_file_path)
+                                 os.remove(last_file_path)
+                                 os.rename(merged_path, second_last_file_path)
+                                 os.remove(concat_file)
+
+                                 segment_files = sorted([f for f in os.listdir(_paths.temp_zpath) if f.startswith(f"{just_name}.part") and f.endswith(extension)])
+                                 log.info(f"✅ Successfully merged tiny segment. New segment count: {len(segment_files)}")
+                             else:
+                                 log.warning("Merge failed, keeping original segments")
+                                 if ospath.exists(concat_file): os.remove(concat_file)
+                         except Exception as merge_err:
+                             log.warning(f"Error during merge: {merge_err}. Keeping original segments.")
+                             if ospath.exists(concat_file): os.remove(concat_file)
+
                  ffmpeg_success = True
                  total_parts_size = getSize(_paths.temp_zpath)
                  if abs(total_parts_size - total_file_size) > total_file_size * 0.1:
