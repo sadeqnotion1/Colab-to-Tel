@@ -1418,24 +1418,25 @@ async def splitVideo(file_path, target_segment_size_mb: int, remove: bool, task_
     # --- Calculate Segment Duration ---
     MAX_SPLIT_SIZE_BYTES = 1.5 * 1024 * 1024 * 1024 # 1.5 GiB
 
-    min_parts_required = 1
+    # Priority 1: If file size requires splitting, use that calculation
     if total_file_size > MAX_SPLIT_SIZE_BYTES:
         min_parts_required = math.ceil(total_file_size / MAX_SPLIT_SIZE_BYTES)
-
-    duration_per_part_max = float('inf')
-    if min_parts_required > 1:
-        duration_per_part_max = math.floor(duration_total_seconds / min_parts_required)
-        log.info(f"Min parts required based on size ({sizeUnit(total_file_size)} / {sizeUnit(MAX_SPLIT_SIZE_BYTES)}): {min_parts_required}. Max duration/part: {duration_per_part_max}s")
-
-    duration_per_part_target = float('inf')
-    if bitrate > 0:
-        target_size_bits = target_segment_size_mb * 1024 * 1024 * 8
-        duration_per_part_target = int(target_size_bits / bitrate)
-        log.info(f"Target duration per part based on bitrate ({sizeUnit(bitrate/8)}/s) and target size ({target_segment_size_mb}MB): {duration_per_part_target}s")
+        final_segment_duration = math.floor(duration_total_seconds / min_parts_required)
+        log.info(f"File size ({sizeUnit(total_file_size)}) requires minimum {min_parts_required} parts.")
+        log.info(f"Segment duration set to {final_segment_duration}s to stay within {sizeUnit(MAX_SPLIT_SIZE_BYTES)} per part.")
+    # Priority 2: File is small enough for one part, but we're splitting anyway for other reasons
     else:
-        log.warning("Bitrate is zero or unknown, cannot calculate target duration based on size.")
+        if bitrate > 0:
+            target_size_bits = target_segment_size_mb * 1024 * 1024 * 8
+            final_segment_duration = int(target_size_bits / bitrate)
+            log.info(f"File size OK, using target {target_segment_size_mb}MB segments → {final_segment_duration}s duration")
+        else:
+            # No bitrate info, just split into reasonable chunks
+            final_segment_duration = 1200  # 20 minutes default
+            log.warning("No bitrate info, using default 20min segments")
 
-    final_segment_duration = max(10, min(duration_per_part_max, duration_per_part_target))
+    # Ensure minimum duration
+    final_segment_duration = max(10, final_segment_duration)
 
     if final_segment_duration >= duration_total_seconds:
          log.info(f"Final calculated segment duration ({final_segment_duration}s) >= total duration ({duration_total_seconds:.2f}s). No splitting required.")
