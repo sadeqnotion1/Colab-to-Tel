@@ -675,7 +675,9 @@ async def handle_url(client: Client, message: Message):
             BOT.Options.custom_name = extracted_args["custom_name"]
             BOT.Options.zip_pswd = extracted_args["zip_pswd"]
             BOT.Options.unzip_pswd = extracted_args["unzip_pswd"]
-            BOT.Options.filenames = [] # Reset filenames
+            # Only reset filenames if not already set by NZBcloud TITLE= parsing
+            if BOT.Options.service_type != "nzbcloud":
+                BOT.Options.filenames = []
 
             if not urls:
                 log.warning("No valid URLs found after processing."); await message.reply_text("❌ No valid URLs found in the message."); BOT.State.started = False; return
