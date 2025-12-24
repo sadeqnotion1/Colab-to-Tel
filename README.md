@@ -192,33 +192,66 @@ For additional downloaders:
 
 ```
 Telegram-Leecher/
-├── browser-extension/          # Mindvalley stream detector
+├── colab/                     # Colab setup scripts
+│   └── setup_cell.py         # Main Colab setup script
+├── colab_leecher/            # Main bot module
+│   ├── __init__.py
+│   ├── __main__.py           # Command handlers
+│   ├── downlader/            # Download handlers
+│   │   ├── aria2.py
+│   │   ├── gdrive.py
+│   │   ├── mega.py
+│   │   ├── mindvalley.py    # Mindvalley M3U8 downloader
+│   │   ├── sabnzbd_downloader.py  # SABnzbd downloader
+│   │   ├── telegram.py
+│   │   ├── terabox.py
+│   │   └── ytdl.py
+│   ├── uploader/             # Upload handlers
+│   │   └── telegram.py
+│   └── utility/              # Helper functions
+│       ├── handler.py
+│       ├── helper.py
+│       ├── sabnzbd_autodetect.py
+│       ├── sabnzbd_client.py
+│       ├── sabnzbd_setup.py
+│       ├── task_manager.py
+│       └── variables.py
+├── scripts/                  # Utility scripts
+│   ├── downloaders/          # Download scripts
+│   │   └── download_from_downloadly.py
+│   └── utils/                # Utility tools
+│       ├── capture_existing_logs.py
+│       ├── convert_cookies.py
+│       ├── extract_finra.py
+│       ├── extract_finra_simple.py
+│       └── streaming_extract_function.py
+├── tests/                    # Test files
+│   ├── debug_bot_startup.py
+│   ├── debug_instagram_auth.py
+│   └── debug_nzb_command.py
+├── docs/                     # Documentation
+│   ├── features/             # Feature guides
+│   │   ├── COLAB_SABNZBD_GUIDE.md
+│   │   ├── DOWNLOADLY_GUIDE.md
+│   │   ├── SABNZBD_CONFIG.md
+│   │   ├── SABNZBD_INTEGRATION.md
+│   │   └── streaming.md
+│   ├── setup/                # Setup guides
+│   │   ├── colab-setup.md
+│   │   ├── getting-started.md
+│   │   ├── instagram.md
+│   │   └── local-testing.md
+│   └── ROADMAP.md            # Project roadmap
+├── browser-extension/        # Mindvalley stream detector
 │   ├── manifest.json
 │   ├── background.js
 │   ├── content.js
 │   ├── popup.html
 │   └── popup.js
-├── colab_leecher/             # Main bot module
-│   ├── __init__.py
-│   ├── __main__.py
-│   ├── downlader/             # Download handlers
-│   │   ├── aria2.py
-│   │   ├── gdrive.py
-│   │   ├── mega.py
-│   │   ├── mindvalley.py     # Mindvalley M3U8 downloader
-│   │   ├── telegram.py
-│   │   ├── terabox.py
-│   │   └── ytdl.py
-│   ├── uploader/              # Upload handlers
-│   │   └── telegram.py
-│   └── utility/               # Helper functions
-│       ├── handler.py
-│       ├── helper.py
-│       ├── task_manager.py
-│       └── variables.py
-├── install_mindvalley_deps.sh # Dependency installer
+├── notebooks/                # Jupyter notebooks
+├── install_mindvalley_deps.sh
 ├── requirements.txt
-├── credentials.json           # Your credentials (not in repo)
+├── credentials.json.example  # Credentials template
 └── README.md
 ```
 
@@ -242,9 +275,9 @@ apt-get install ffmpeg aria2
 # For Mindvalley support
 bash install_mindvalley_deps.sh
 
-# Create credentials.json
-cp credentials.example.json credentials.json
-# Edit with your credentials
+# Create credentials.json from template
+cp credentials.json.example credentials.json
+# Edit credentials.json with your actual credentials
 
 # Run bot
 python -m colab_leecher
