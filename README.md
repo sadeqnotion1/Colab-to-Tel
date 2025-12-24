@@ -84,13 +84,14 @@ The Mindvalley downloader allows you to download video courses from Mindvalley u
 ### Prerequisites
 
 1. **Browser Extension** (for detecting streams)
-   - Located in: `browser-extension/`
+   - Get it from: [MindvalleyDownloaderExtension](https://github.com/theSadeQ/MindvalleyDownloaderExtension)
    - Installation:
-     1. Open Chrome/Edge: `chrome://extensions/`
-     2. Enable "Developer mode"
-     3. Click "Load unpacked"
-     4. Select the `browser-extension` folder
-     5. Extension icon will appear in toolbar
+     1. Download/clone the extension repository
+     2. Open Chrome/Edge: `chrome://extensions/`
+     3. Enable "Developer mode"
+     4. Click "Load unpacked"
+     5. Select the extension folder
+     6. Extension icon will appear in toolbar
 
 2. **Dependencies** (auto-installed in Colab)
    - N_m3u8DL-RE (M3U8 downloader)
@@ -192,43 +193,73 @@ For additional downloaders:
 
 ```
 Telegram-Leecher/
-├── colab/                     # Colab setup scripts
-│   └── setup_cell.py         # Main Colab setup script
-├── colab_leecher/            # Main bot module
+├── colab_leecher/            # Main bot module (everything consolidated here)
 │   ├── __init__.py
-│   ├── __main__.py           # Command handlers
+│   ├── __main__.py           # Command handlers and bot entry point
+│   ├── run_local.py          # Local bot runner script
+│   ├── aliases.py            # Command aliases
+│   ├── gdrive_utils.py       # Google Drive utilities
+│   │
+│   ├── colab/                # Colab setup scripts
+│   │   ├── setup_cell.py    # Main Colab setup script
+│   │   ├── sabnzbd_setup.py # SABnzbd setup for Colab
+│   │   └── cells/           # Notebook cells
+│   │       ├── main_setup.py     # Alternative main setup
+│   │       ├── error_logger.py   # Error logging (simple + full modes)
+│   │       ├── streaming_extraction.py  # Streaming ZIP extraction
+│   │       └── fixed_notebook.py # Fixed notebook cell
+│   │
 │   ├── downlader/            # Download handlers
+│   │   ├── base.py          # BaseDownloader (shared functionality)
 │   │   ├── aria2.py
 │   │   ├── gdrive.py
+│   │   ├── instagram.py
 │   │   ├── mega.py
 │   │   ├── mindvalley.py    # Mindvalley M3U8 downloader
-│   │   ├── sabnzbd_downloader.py  # SABnzbd downloader
+│   │   ├── nzb.py           # Native NZB downloader
+│   │   ├── sabnzbd_downloader.py  # SABnzbd-based downloader
 │   │   ├── telegram.py
 │   │   ├── terabox.py
-│   │   └── ytdl.py
+│   │   ├── ytdl.py
+│   │   ├── requests_dl.py   # Simple HTTP downloader
+│   │   └── manager.py       # Auto-detection and routing
+│   │
 │   ├── uploader/             # Upload handlers
-│   │   └── telegram.py
-│   └── utility/              # Helper functions
-│       ├── handler.py
-│       ├── helper.py
-│       ├── sabnzbd_autodetect.py
-│       ├── sabnzbd_client.py
-│       ├── sabnzbd_setup.py
-│       ├── task_manager.py
-│       └── variables.py
-├── scripts/                  # Utility scripts
-│   ├── downloaders/          # Download scripts
-│   │   └── download_from_downloadly.py
-│   └── utils/                # Utility tools
-│       ├── capture_existing_logs.py
-│       ├── convert_cookies.py
-│       ├── extract_finra.py
-│       ├── extract_finra_simple.py
-│       └── streaming_extract_function.py
+│   │   ├── telegram.py      # Telegram uploader
+│   │   └── gdrive.py        # Google Drive uploader
+│   │
+│   ├── utility/              # Helper functions
+│   │   ├── handler.py       # Message handlers
+│   │   ├── helper.py        # General utilities (status_bar, URL detection)
+│   │   ├── variables.py     # Global state (BOT, MSG, Paths)
+│   │   ├── task_manager.py  # Task orchestration
+│   │   ├── task_context.py  # Multi-task support
+│   │   ├── task_dashboard.py # Task progress visualization
+│   │   ├── transfer_state.py # Upload/download state
+│   │   ├── converters.py    # File format converters
+│   │   ├── sabnzbd_client.py # SABnzbd API client
+│   │   ├── sabnzbd_setup.py # SABnzbd configuration
+│   │   └── sabnzbd_autodetect.py # SABnzbd auto-detection
+│   │
+│   └── scripts/              # Utility scripts
+│       ├── downloaders/      # Download scripts
+│       │   └── download_from_downloadly.py
+│       └── utils/            # Utility tools
+│           ├── capture_existing_logs.py
+│           ├── convert_cookies.py
+│           ├── extract_finra_simple.py
+│           └── streaming_extract_function.py
+│
 ├── tests/                    # Test files
-│   ├── debug_bot_startup.py
-│   ├── debug_instagram_auth.py
-│   └── debug_nzb_command.py
+│   ├── test_*.py            # Unit tests
+│   ├── quick_test.py        # Quick integration test
+│   ├── debug/               # Debug scripts
+│   │   ├── instagram_debug.py  # Instagram debugging (unified)
+│   │   ├── check_bot_info.py
+│   │   ├── check_sabnzbd_logs.py
+│   │   ├── debug_bot_startup.py
+│   │   └── debug_nzb_command.py
+│   └── fixtures/            # Test data
 ├── docs/                     # Documentation
 │   ├── features/             # Feature guides
 │   │   ├── COLAB_SABNZBD_GUIDE.md
@@ -237,22 +268,26 @@ Telegram-Leecher/
 │   │   ├── SABNZBD_INTEGRATION.md
 │   │   └── streaming.md
 │   ├── setup/                # Setup guides
-│   │   ├── colab-setup.md
 │   │   ├── getting-started.md
-│   │   ├── instagram.md
-│   │   └── local-testing.md
-│   └── ROADMAP.md            # Project roadmap
-├── browser-extension/        # Mindvalley stream detector
-│   ├── manifest.json
-│   ├── background.js
-│   ├── content.js
-│   ├── popup.html
-│   └── popup.js
+│   │   ├── colab-setup.md
+│   │   ├── local-testing.md
+│   │   └── instagram.md
+│   ├── development/          # Development docs
+│   │   ├── ARCHITECTURE.md  # System architecture
+│   │   ├── CLAUDE.md        # Claude Code guidelines
+│   │   ├── CONTRIBUTING.md  # Contribution guide
+│   │   ├── REORGANIZATION_SUMMARY.md  # Reorganization report
+│   │   └── mirror_function.txt  # Mirror mode docs
+│   ├── tutorials/            # User tutorials
+│   │   └── QUICK_START.txt  # Quick start guide
+│   ├── ROADMAP.md            # Project roadmap
+│   └── README.md             # Documentation index
 ├── notebooks/                # Jupyter notebooks
-├── install_mindvalley_deps.sh
-├── requirements.txt
+├── install_mindvalley_deps.sh  # Mindvalley dependencies installer
+├── requirements.txt          # Python dependencies
+├── credentials.json          # Bot credentials (gitignored)
 ├── credentials.json.example  # Credentials template
-└── README.md
+└── README.md                  # This file
 ```
 
 ## Development
@@ -279,8 +314,9 @@ bash install_mindvalley_deps.sh
 cp credentials.json.example credentials.json
 # Edit credentials.json with your actual credentials
 
-# Run bot
-python -m colab_leecher
+# Run bot (choose one method)
+python -m colab_leecher              # Method 1: As module
+python -m colab_leecher.run_local    # Method 2: Direct script
 ```
 
 ## Credits

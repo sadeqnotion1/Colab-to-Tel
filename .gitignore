@@ -22,8 +22,6 @@ bot_output.log
 # ===================================
 # Working Directories
 # ===================================
-BOT_WORK/
-instagram_downloads/
 Downloads/
 temp/
 tmp/
