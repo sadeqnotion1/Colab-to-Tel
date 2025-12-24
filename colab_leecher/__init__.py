@@ -23,11 +23,8 @@ log = logging.getLogger(__name__) # Use a logger instance
 
 
 # Read the dictionary from the credentials file
-# Use local path if running on Windows, else use Colab path
-if os.name == 'nt':  # Windows
-    credentials_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "credentials.json")
-else:  # Linux/Colab
-    credentials_path = "/content/Telegram-Leecher/credentials.json"
+# Use dynamic path detection for all platforms
+credentials_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "credentials.json")
 credentials = {}
 try:
     with open(credentials_path, "r") as file:
