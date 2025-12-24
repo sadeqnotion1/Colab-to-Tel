@@ -39,20 +39,22 @@ DumpToken_Mapping = {
 # Use the selection to get the bot token
 DUMP_ID = DumpToken_Mapping[Dump_SELECTION]
 
+# @markdown ### **GitHub Access (For Private Repos)**
+# @markdown Leave blank if repository is public. Get token from: https://github.com/settings/tokens
+GITHUB_TOKEN = "" # @param {type:"string"}
+GITHUB_USER = "theSadeQ" # @param {type:"string"}
+GITHUB_REPO = "Colab-to-Tel" # @param {type:"string"}
+GITHUB_BRANCH = "master" # @param {type:"string"}
 
-
-#  ---
-#  ### **Optional Downloader Cookies**
-#  *Leave blank if not needed.*
-NZBCLOUD_CF_CLEARANCE = ""
-BITSO_IDENTITY_COOKIE = ""
-BITSO_PHPSESSID_COOKIE = ""
-# @markdown ---
+# @markdown ### **Optional Downloader Cookies**
+NZBCLOUD_CF_CLEARANCE = "" # @param {type:"string"}
+BITSO_IDENTITY_COOKIE = "" # @param {type:"string"}
+BITSO_PHPSESSID_COOKIE = "" # @param {type:"string"}
 
 
 import subprocess, time, json, shutil, os, logging
 from IPython import get_ipython
-from IPython.display import clear_output
+from IPython.display import clear_output, HTML, display
 from threading import Thread
 
 Working = True
@@ -61,8 +63,24 @@ Working = True
 log = logging.getLogger('ColabLeecherSetup')
 log.setLevel(logging.INFO)
 if log.hasHandlers(): log.handlers.clear()
-handler = logging.StreamHandler(); formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'); handler.setFormatter(formatter); log.addHandler(handler)
+
+# Console handler
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+log.addHandler(handler)
+
+# File handler - saves ALL logs so they don't disappear in Colab
+log_file_path = '/content/setup_full.log'
+file_handler = logging.FileHandler(log_file_path, mode='w')
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(formatter)
+log.addHandler(file_handler)
 # --- End logging setup ---
+
+log.info("=" * 70)
+log.info(f"📝 Full setup log will be saved to: {log_file_path}")
+log.info("=" * 70)
 
 
 banner = '''
@@ -115,8 +133,8 @@ else:
      if valid_creds: log.error("DUMP_ID missing/invalid."); valid_creds = False; Working = False
 
 # --- Environment Setup ---
-# --- MODIFICATION: Use correct repository name for path ---
-repo_name = "Telegram-Leecher" # Assuming this is the folder name created by clone
+# Use repository name from editable parameters
+repo_name = GITHUB_REPO
 repo_path = f"/content/{repo_name}"
 # --- END MODIFICATION ---
 # --- CORRECTED PATH BASED ON IMAGE ---
@@ -137,34 +155,41 @@ if valid_creds and ipython:
      # --- Conditional Git Clone with CORRECT URL ---
      if not os.path.exists(repo_path):
           log.info(f"Repository not found at {repo_path}. Cloning YOUR repo...")
-          # --- MODIFICATION: Correct clone URL ---
-          github_user = "theSadeQ" #@param ["theSadeQ","SadeQ710", "XronTrix10"]
 
-          # Base repository name
-          repository_name = "Telegram-Leecher"
+          # Use editable parameters from top of cell
+          github_user = GITHUB_USER
+          repository_name = GITHUB_REPO
+          branch_name = GITHUB_BRANCH
 
-          # Branch name
-          branch_name = "feature/multi-task-parallel" #@param ["feature/multi-task-parallel", "VanDamme", "main"]
+          log.info(f"📦 Cloning {github_user}/{repository_name} (branch: {branch_name})")
 
-          # Construct the git clone command based on the selected user
-          cmd_clone = f"git clone -b {branch_name} https://github.com/{github_user}/{repository_name}"
+          # Build git URL with token if provided (for private repos)
+          if GITHUB_TOKEN:
+              git_url = f"https://{GITHUB_TOKEN}@github.com/{github_user}/{repository_name}"
+              log.info("🔐 Using GitHub token for private repository access")
+          else:
+              git_url = f"https://github.com/{github_user}/{repository_name}"
+              log.info("🌐 Cloning public repository")
+
+          # Construct the git clone command
+          cmd_clone = f"git clone -b {branch_name} {git_url} {repo_path}"
           # --- END MODIFICATION ---
           proc_clone = subprocess.run(cmd_clone, shell=True, capture_output=True, text=True)
-          if proc_clone.returncode != 0: log.error(f"Git clone failed:\n{proc_clone.stderr}"); Working = False
-          else: log.info("Repository cloned.")
-          # --- MODIFICATION: Ensure repo_path matches cloned directory name ---
-          # If the cloned repo creates a folder with a different name, adjust repo_path here if needed
-          # Example: if clone creates "TheSadeQ-Telegram-Leecher", then:
-          # actual_repo_name = "TheSadeQ-Telegram-Leecher" # Determine actual name
-          # repo_path = f"/content/{actual_repo_name}"
-          # Re-calculate other paths based on the actual repo_path
-          # colab_dir_path = os.path.join(repo_path, "colab_leecher") # Adjusted here too
-          # main_script_path = os.path.join(colab_dir_path, "__main__.py")
-          # requirements_file = os.path.join(repo_path, "requirements.txt")
-          # credentials_path = os.path.join(repo_path, 'credentials.json')
-          # session_file = os.path.join(repo_path, "my_bot.session")
-          log.info(f"Using repository path: {repo_path}")
-          # --- END MODIFICATION ---
+          if proc_clone.returncode != 0:
+              log.error(f"Git clone failed:\n{proc_clone.stderr}")
+              if "could not read Username" in proc_clone.stderr or "Authentication failed" in proc_clone.stderr:
+                  log.error("=" * 70)
+                  log.error("🚨 AUTHENTICATION ERROR:")
+                  log.error("The repository appears to be PRIVATE.")
+                  log.error("")
+                  log.error("Solutions:")
+                  log.error("1. Make repo public: Settings → Danger Zone → Change visibility")
+                  log.error("2. Add GitHub token above (get from: github.com/settings/tokens)")
+                  log.error("=" * 70)
+              Working = False
+          else:
+              log.info("✅ Repository cloned successfully")
+              log.info(f"📁 Repository path: {repo_path}")
 
      else:
          log.warning(f"Repository already exists at {repo_path}. Skipping clone.")
@@ -176,7 +201,7 @@ if valid_creds and ipython:
           else: log.info("OS packages checked/installed.")
 
           log.info("Installing Mindvalley downloader dependencies...")
-          cmd_mindvalley = "bash /content/Telegram-Leecher/install_mindvalley_deps.sh"
+          cmd_mindvalley = f"bash {repo_path}/install_mindvalley_deps.sh"
           proc_mindvalley = subprocess.run(cmd_mindvalley, shell=True, capture_output=True, text=True)
           if proc_mindvalley.returncode != 0:
               log.warning(f"Mindvalley deps install issues:\n{proc_mindvalley.stderr}")
@@ -274,19 +299,32 @@ if valid_creds and ipython:
                  log.info(f"   Base URL: {sabnzbd_config['base_url']}")
                  log.info(f"   API Key: {sabnzbd_config['api_key'][:8]}...")
 
-                 # Display public URL if tunnel was created
+                 # Save URL to file so bot can send it via Telegram on startup
+                 # Prefer public URL, fallback to local URL
+                 url_to_save = sabnzbd_config.get('public_url') or sabnzbd_config.get('base_url')
+                 sabnzbd_info_file = os.path.join(repo_path, '.sabnzbd_url.txt')
+
+                 if url_to_save:
+                     with open(sabnzbd_info_file, 'w') as f:
+                         f.write(f"{url_to_save}\n")
+                         f.write(f"{sabnzbd_config['api_key']}\n")
+                         # Add a flag to indicate if it's local or public
+                         f.write(f"{'public' if sabnzbd_config.get('public_url') else 'local'}\n")
+
+                     url_type = "public" if sabnzbd_config.get('public_url') else "local"
+                     log.info(f"   Saved {url_type} URL info for Telegram notification")
+
+                 # Display URL info
                  if sabnzbd_config.get('public_url'):
                      log.info("=" * 70)
-                     log.info(f"🌐 SABnzbd Web UI: {sabnzbd_config['public_url']}")
+                     log.info(f"🌐 SABnzbd Web UI (Public): {sabnzbd_config['public_url']}")
                      log.info(f"🔑 API Key: {sabnzbd_config['api_key']}")
                      log.info("=" * 70)
-
-                     # Save URL to file so bot can send it via Telegram on startup
-                     sabnzbd_info_file = os.path.join(repo_path, '.sabnzbd_url.txt')
-                     with open(sabnzbd_info_file, 'w') as f:
-                         f.write(f"{sabnzbd_config['public_url']}\n")
-                         f.write(f"{sabnzbd_config['api_key']}\n")
-                     log.info(f"   Saved URL info for Telegram notification")
+                 else:
+                     log.info("=" * 70)
+                     log.info(f"🏠 SABnzbd Web UI (Local): {sabnzbd_config.get('base_url', 'N/A')}")
+                     log.info(f"🔑 API Key: {sabnzbd_config['api_key']}")
+                     log.info("=" * 70)
 
                  log.info(f"✅ SABnzbd is ready for NZB downloads")
              else:
@@ -333,6 +371,12 @@ if setup_ok:
         log.info(f"Executing: python3 -m {bot_main_module}") # Use correct module name
         exit_code = ipython.system(f'python3 -m {bot_main_module}')
         log.info(f"Bot process finished (exit code: {exit_code}).")
+
+        # Print log file location
+        log.info("=" * 70)
+        log.info(f"Complete setup log saved: {log_file_path}")
+        log.info("To view SABnzbd setup logs: !grep -A 50 'Setting up SABnzbd' /content/setup_full.log")
+        log.info("=" * 70)
     except Exception as e: log.critical(f"CRITICAL ERROR during bot startup: {e}", exc_info=True); print(f"\n Bot startup failed: {e}")
 
 elif not valid_creds: print("\n-----------------------------------------------\n Bot setup skipped: Invalid credentials.\n-----------------------------------------------")
