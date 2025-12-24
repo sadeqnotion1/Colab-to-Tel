@@ -1,6 +1,10 @@
 """
 SABnzbd-based NZB Downloader
 
+⚠️ DEVELOPMENT MODE - NOT PRODUCTION READY ⚠️
+This module is currently under active development and may contain bugs.
+Use at your own risk - features are experimental and subject to change.
+
 Uses SABnzbd as backend for reliable NZB downloading with progress tracking
 and integration with Telegram bot frontend.
 """
@@ -8,10 +12,12 @@ and integration with Telegram bot frontend.
 import os
 import time
 import asyncio
+import logging
 from pathlib import Path
 from typing import Optional, Tuple, List
 
-from ..utility.log import log
+log = logging.getLogger(__name__)
+
 from ..utility.helper import status_bar, sizeUnit
 from ..utility.variables import MSG, BOT
 from ..utility.sabnzbd_client import SABnzbdClient

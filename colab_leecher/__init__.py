@@ -83,6 +83,15 @@ elif BOT.Setting.instagram_cookies_file:
 else:
     log.info("Instagram Login: Not Configured (Limited access)")
 
+# --- Load TeraBox Authentication ---
+log.info("Loading TeraBox authentication...")
+BOT.Setting.terabox_cookie = credentials.get("TERABOX_COOKIE", "")
+
+if BOT.Setting.terabox_cookie:
+    log.info("TeraBox Cookie: Configured (Enhanced downloader enabled)")
+else:
+    log.info("TeraBox Cookie: Not Configured (will use API fallback)")
+
 # --- Load Usenet/NZB Provider Configurations ---
 log.info("Loading Usenet provider configurations...")
 nzb_providers_config = credentials.get("NZB_PROVIDERS", {})

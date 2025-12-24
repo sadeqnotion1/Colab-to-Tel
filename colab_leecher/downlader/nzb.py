@@ -1,6 +1,10 @@
 #================================================
 #FILE: colab_leecher/downlader/nzb.py
 #================================================
+# ⚠️ DEVELOPMENT MODE - NOT PRODUCTION READY ⚠️
+# This module is currently under active development and may contain bugs
+# Use at your own risk - features are experimental and subject to change
+#================================================
 # NZB (Usenet) Downloader for Telegram Leecher Bot
 # Supports multiple Usenet providers, parallel downloads, and progress tracking
 

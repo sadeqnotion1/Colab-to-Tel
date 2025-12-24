@@ -13,7 +13,7 @@ from datetime import datetime
 from asyncio import sleep, get_running_loop
 from .mega import megadl
 from ..utility.handler import cancelTask
-from .terabox import terabox_download
+from .terabox_enhanced import TeraBoxDownloader  # Enhanced TeraBox with cookie support & fallback
 from .instagram import instagram_download, instagram_profile_download, is_profile_url
 from .ytdl import YTDL_Status, get_YT_Name 
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
@@ -505,7 +505,9 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
                      link_success = await megadl(link, i + 1, task_ctx) # Pass task_ctx (may not support yet)
                  elif is_terabox(link):
                       log.debug("Detected Terabox Link")
-                      link_success = await terabox_download(link, i + 1, task_ctx) # Pass task_ctx (may not support yet)
+                      # Use enhanced TeraBox downloader with cookie support & fallback
+                      terabox_downloader = TeraBoxDownloader(client=None, message=None, task_ctx=task_ctx)
+                      link_success = await terabox_downloader.download(link, i + 1)
                  elif is_instagram(link):
                       log.debug("Detected Instagram Link")
                       # Check if it's a profile URL or individual post

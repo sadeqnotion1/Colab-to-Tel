@@ -10,38 +10,73 @@ from colab_leecher.utility.handler import cancelTask
 from colab_leecher.utility.variables import YTDL, MSG, Messages, Paths
 from colab_leecher.utility.helper import getTime, keyboard, sizeUnit, status_bar, sysINFO
 
+# Logger instance
+log = logging.getLogger(__name__)
 
-async def YTDL_Status(link, num):
+
+async def YTDL_Status(link, num, max_retries=3):
+    """
+    Download status tracker with retry logic
+
+    Args:
+        link: URL to download
+        num: Link number for tracking
+        max_retries: Maximum retry attempts (default: 3)
+    """
     global Messages, YTDL
-    name = await get_YT_Name(link)
-    Messages.status_head = f"<b>📥 DOWNLOADING FROM » </b><i>🔗Link {str(num).zfill(2)}</i>\n\n<code>{name}</code>\n"
 
-    YTDL_Thread = Thread(target=YouTubeDL, name="YouTubeDL", args=(link,))
-    YTDL_Thread.start()
+    for attempt in range(max_retries):
+        try:
+            name = await get_YT_Name(link)
+            Messages.status_head = f"<b>📥 DOWNLOADING FROM » </b><i>🔗Link {str(num).zfill(2)}</i>\n\n<code>{name}</code>\n"
 
-    while YTDL_Thread.is_alive():  # Until ytdl is downloading
-        if YTDL.header:
-            sys_text = sysINFO()
-            message = YTDL.header
-            try:
-                await MSG.status_msg.edit_text(text=Messages.task_msg + Messages.status_head + message + sys_text, reply_markup=keyboard())
-            except Exception:
-                pass
-        else:
-            try:
-                await status_bar(
-                    down_msg=Messages.status_head,
-                    speed=YTDL.speed,
-                    percentage=float(YTDL.percentage),
-                    eta=YTDL.eta,
-                    done=YTDL.done,
-                    left=YTDL.left,
-                    engine="Xr-YtDL 🏮",
-                )
-            except Exception:
-                pass
+            if attempt > 0:
+                log.info(f"Retry attempt {attempt + 1}/{max_retries} for link {num}")
+                Messages.status_head += f"\n<i>⚠️ Retry attempt {attempt + 1}/{max_retries}</i>\n"
 
-        await sleep(2.5)
+            YTDL_Thread = Thread(target=YouTubeDL, name="YouTubeDL", args=(link,))
+            YTDL_Thread.start()
+
+            while YTDL_Thread.is_alive():  # Until ytdl is downloading
+                if YTDL.header:
+                    sys_text = sysINFO()
+                    message = YTDL.header
+                    try:
+                        await MSG.status_msg.edit_text(text=Messages.task_msg + Messages.status_head + message + sys_text, reply_markup=keyboard())
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        await status_bar(
+                            down_msg=Messages.status_head,
+                            speed=YTDL.speed,
+                            percentage=float(YTDL.percentage),
+                            eta=YTDL.eta,
+                            done=YTDL.done,
+                            left=YTDL.left,
+                            engine="Xr-YtDL 🏮",
+                        )
+                    except Exception:
+                        pass
+
+                await sleep(2.5)
+
+            # Download completed successfully
+            log.info(f"✅ YTDL download completed for link {num}")
+            break  # Exit retry loop on success
+
+        except yt_dlp.utils.DownloadError as e:
+            if attempt < max_retries - 1:
+                log.warning(f"Download failed (attempt {attempt + 1}/{max_retries}): {e}")
+                await sleep(5)  # Wait 5 seconds before retry
+            else:
+                log.error(f"Download failed after {max_retries} attempts: {e}")
+                await cancelTask(f"Download failed after {max_retries} attempts: {str(e)[:100]}")
+
+        except Exception as e:
+            log.error(f"Unexpected error in YTDL_Status: {e}", exc_info=True)
+            await cancelTask(f"YouTube download error: {str(e)[:100]}")
+            break  # Don't retry on unexpected errors
 
 
 class MyLogger:
@@ -96,17 +131,45 @@ def YouTubeDL(url):
             logging.info(d)
 
     ydl_opts = {
-        "format": "best",
+        # Format selection - better quality/size balance
+        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+
+        # Performance improvements
+        "concurrent_fragment_downloads": 4,  # FIXED: Was --concurrent-fragments
+        "http_chunk_size": 10485760,  # 10MB chunks for better speed
+
+        # Retry configuration for reliability
+        "retries": 10,
+        "fragment_retries": 10,
+        "skip_unavailable_fragments": True,
+
+        # Subtitle improvements
+        "writesubtitles": True,
+        "writeautomaticsub": True,  # Auto-download auto-generated subs
+        "subtitleslangs": ["en", "ar"],  # Configurable languages
+        "subtitlesformat": "srt/best",
+
+        # Thumbnail and metadata
+        "writethumbnail": True,
+        "embedthumbnail": True,  # Embed in video file
+        "addmetadata": True,
+        "embedmetadata": True,
+
+        # Stream options
         "allow_multiple_video_streams": True,
         "allow_multiple_audio_streams": True,
-        "writethumbnail": True,
-        "--concurrent-fragments": 4 , # Set the maximum number of concurrent fragments
         "allow_playlist_files": True,
+
+        # Post-processing
+        "postprocessors": [
+            {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
+            {"key": "FFmpegMetadata", "add_metadata": True},
+            {"key": "EmbedThumbnail", "already_have_thumbnail": False}
+        ],
+
+        # Overwrite and hooks
         "overwrites": True,
-        "postprocessors": [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
         "progress_hooks": [my_hook],
-        "writesubtitles": "srt",  # Enable subtitles download
-        "extractor_args": {"subtitlesformat": "srt"},  # Extract subtitles in SRT format
         "logger": MyLogger(),
     }
 

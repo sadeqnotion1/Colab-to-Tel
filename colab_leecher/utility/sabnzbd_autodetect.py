@@ -7,9 +7,11 @@ and configures the bot to use it.
 
 import requests
 import json
+import logging
 from pathlib import Path
 from typing import Optional, Dict
-from .log import log
+
+log = logging.getLogger(__name__)
 
 
 def detect_sabnzbd(host: str = "127.0.0.1", port: int = 8080, api_key: str = "") -> Optional[Dict]:

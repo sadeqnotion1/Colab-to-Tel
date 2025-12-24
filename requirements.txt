@@ -19,3 +19,4 @@ yt_dlp
 pymegatools
 rarfile>=4.2
 sabyenc>=3.3.6
+terabox-downloader>=1.0.0
