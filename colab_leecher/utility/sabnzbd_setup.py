@@ -219,6 +219,13 @@ class SABnzbdManager:
 
     def setup_tunnel(self):
         """Setup cloudflared tunnel to expose SABnzbd web UI"""
+        # Check if platform supports tunnel (Linux only)
+        import platform
+        if platform.system() != 'Linux':
+            print(f"⚠️ Tunnel setup skipped (not supported on {platform.system()})")
+            print(f"   SABnzbd will be accessible locally at http://{self.host}:{self.port}")
+            return None
+
         print("🌐 Setting up public tunnel for SABnzbd web UI...")
 
         try:
@@ -251,20 +258,45 @@ class SABnzbdManager:
 
             # Wait and extract URL from log
             print("   Waiting for tunnel URL...")
-            time.sleep(8)
 
+            # Try multiple times to extract URL (cloudflared takes time to start)
+            import re
+            url_patterns = [
+                r'https://[a-z0-9-]+\.trycloudflare\.com',
+                r'https?://[a-z0-9-]+\.trycloudflare\.com',
+                r'(https://.*?\.trycloudflare\.com)',
+            ]
+
+            for attempt in range(15):  # Try for up to 15 seconds
+                time.sleep(1)
+
+                # Check log file
+                if tunnel_log.exists():
+                    with open(tunnel_log, 'r') as f:
+                        log_content = f.read()
+
+                    for pattern in url_patterns:
+                        match = re.search(pattern, log_content)
+                        if match:
+                            self.tunnel_url = match.group(0)
+                            print(f"✅ Public URL: {self.tunnel_url}")
+                            print(f"   (Found after {attempt + 1} seconds)")
+                            return self.tunnel_url
+
+                # Also check stderr (cloudflared sometimes outputs there)
+                if attempt % 3 == 0:  # Check every 3 seconds
+                    print(f"   Still waiting... ({attempt + 1}s)")
+
+            # Last attempt - dump log content for debugging
+            print("⚠️ Could not extract tunnel URL after 15 seconds")
             if tunnel_log.exists():
+                print(f"   Log file exists at: {tunnel_log}")
                 with open(tunnel_log, 'r') as f:
-                    log_content = f.read()
-                    # Look for trycloudflare.com URL
-                    import re
-                    match = re.search(r'https://[a-z0-9-]+\.trycloudflare\.com', log_content)
-                    if match:
-                        self.tunnel_url = match.group(0)
-                        print(f"✅ Public URL: {self.tunnel_url}")
-                        return self.tunnel_url
+                    log_preview = f.read()[:500]
+                    print(f"   Log preview: {log_preview}")
+            else:
+                print(f"   Log file not found: {tunnel_log}")
 
-            print("⚠️ Could not extract tunnel URL, check logs")
             return None
 
         except Exception as e:
@@ -317,7 +349,62 @@ def setup_sabnzbd(enable_tunnel=True):
     if enable_tunnel:
         manager.setup_tunnel()
 
-    return manager.get_config_info()
+    # Get config info
+    config_info = manager.get_config_info()
+
+    # Save URL to file so bot can send it via Telegram on startup
+    # Use public URL if available (tunnel), otherwise use local URL
+    try:
+        # Get repository root (2 levels up from this file)
+        repo_root = Path(__file__).parent.parent.parent
+        sabnzbd_info_file = repo_root / '.sabnzbd_url.txt'
+
+        print(f"\n📝 Creating notification file for Telegram...")
+        print(f"   Repository root: {repo_root}")
+        print(f"   File path: {sabnzbd_info_file}")
+
+        # Prefer public URL, fallback to local URL
+        url_to_save = config_info.get('public_url') or config_info.get('base_url')
+
+        print(f"   Public URL: {config_info.get('public_url', 'None')}")
+        print(f"   Base URL: {config_info.get('base_url', 'None')}")
+        print(f"   URL to save: {url_to_save}")
+        print(f"   API Key: {config_info.get('api_key', 'None')[:16]}..." if config_info.get('api_key') else "   API Key: None")
+
+        if url_to_save and config_info.get('api_key'):
+            with open(sabnzbd_info_file, 'w') as f:
+                f.write(f"{url_to_save}\n")
+                f.write(f"{config_info['api_key']}\n")
+                # Add a flag to indicate if it's local or public
+                f.write(f"{'public' if config_info.get('public_url') else 'local'}\n")
+
+            url_type = "public" if config_info.get('public_url') else "local"
+
+            # Verify file was created
+            if sabnzbd_info_file.exists():
+                file_size = sabnzbd_info_file.stat().st_size
+                print(f"   ✅ File created successfully ({file_size} bytes)")
+                print(f"   ✅ Saved {url_type} URL info for Telegram notification")
+
+                # Show file contents for verification
+                print(f"\n   File contents:")
+                with open(sabnzbd_info_file, 'r') as f:
+                    for i, line in enumerate(f, 1):
+                        display_line = line.strip()
+                        if i == 2 and len(display_line) > 20:  # Hide most of API key
+                            display_line = display_line[:16] + "..."
+                        print(f"      Line {i}: {display_line}")
+            else:
+                print(f"   ❌ ERROR: File not found after writing!")
+        else:
+            print(f"   ❌ ERROR: Missing URL or API key - cannot create file")
+            print(f"   This means the bot won't send a Telegram notification")
+    except Exception as e:
+        print(f"   ❌ ERROR: Could not save URL info file: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return config_info
 
 
 if __name__ == "__main__":

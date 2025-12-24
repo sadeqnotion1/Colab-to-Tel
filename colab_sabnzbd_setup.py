@@ -48,15 +48,33 @@ if sabnzbd_config:
     print("✅ SABnzbd Setup Complete!")
     print("=" * 70)
 
-    # Show public URL prominently if available
+    # Save URL to file for Telegram notification (public or local)
+    import os
+    sabnzbd_info_file = os.path.join(os.getcwd(), '.sabnzbd_url.txt')
+
+    # Prefer public URL, fallback to local URL
+    url_to_save = sabnzbd_config.get('public_url') or sabnzbd_config.get('base_url')
+
+    if url_to_save:
+        with open(sabnzbd_info_file, 'w') as f:
+            f.write(f"{url_to_save}\n")
+            f.write(f"{sabnzbd_config['api_key']}\n")
+            # Add a flag to indicate if it's local or public
+            f.write(f"{'public' if sabnzbd_config.get('public_url') else 'local'}\n")
+
+        url_type = "public" if sabnzbd_config.get('public_url') else "local"
+        print(f"   ✅ Saved {url_type} URL info for Telegram notification")
+
+    # Show URL prominently
     if sabnzbd_config.get('public_url'):
-        print("\n🌐 SABnzbd Web UI (Click to open):")
+        print("\n🌐 SABnzbd Web UI (Public - Click to open):")
         print(f"   {sabnzbd_config['public_url']}")
-        print(f"\n🔑 API Key (for manual access):")
-        print(f"   {sabnzbd_config['api_key']}")
     else:
-        print("\n📌 IMPORTANT: Save this API key for manual access if needed")
-        print(f"   API Key: {sabnzbd_config['api_key']}")
+        print("\n🏠 SABnzbd Web UI (Local access only):")
+        print(f"   {sabnzbd_config.get('base_url', 'N/A')}")
+
+    print(f"\n🔑 API Key (for manual access):")
+    print(f"   {sabnzbd_config['api_key']}")
 
     print("\n🎯 You can now start the bot and use /nzb command")
     print("   The bot will automatically use SABnzbd for all NZB downloads")

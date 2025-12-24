@@ -651,6 +651,8 @@ async def taskScheduler(task_ctx=None):
         _messages.dump_task += f"\n\n<b>📆 Task Date » </b><i>{dt}</i>"
         src_text.append(_messages.dump_task)
 
+        log.info(f"Prepared {len(src_text)} message(s) for dump channel (total chars: {sum(len(t) for t in src_text)})")
+
         # --- Environment Setup & Thumbnail Handling ---
         log.info("Setting up work environment...")
         # Clean work path if it exists, then recreate needed dirs
@@ -764,7 +766,7 @@ async def taskScheduler(task_ctx=None):
             # Determine which image to send (Custom > Downloaded/Fallback)
             img_to_send = _paths.THMB_PATH if _bot.Setting.thumbnail and ospath.exists(_paths.THMB_PATH) else final_thumb_path
 
-            # Send initial status message with photo
+            # Send initial status message with photo (with fallback to text-only)
             if not ospath.exists(img_to_send):
                  log.error(f"Thumbnail path to send does not exist: {img_to_send}. Attempting absolute fallback.")
                  img_to_send = _paths.DEFAULT_HERO # Use defined fallback path first
@@ -772,9 +774,17 @@ async def taskScheduler(task_ctx=None):
                        log.critical("FATAL: No valid thumbnail image found to send.")
                        _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__ (Thumbnail Error)" + sysINFO(), reply_markup=keyboard(task_ctx))
                  else:
-                       _msg.status_msg = await colab_bot.send_photo( chat_id=OWNER, photo=img_to_send, caption=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx))
+                       try:
+                           _msg.status_msg = await colab_bot.send_photo( chat_id=OWNER, photo=img_to_send, caption=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx))
+                       except Exception as photo_err:
+                           log.warning(f"Failed to send photo (MD5 or other error): {photo_err}. Sending text-only message.")
+                           _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx))
             else:
-                 _msg.status_msg = await colab_bot.send_photo( chat_id=OWNER, photo=img_to_send, caption=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx))
+                 try:
+                     _msg.status_msg = await colab_bot.send_photo( chat_id=OWNER, photo=img_to_send, caption=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx))
+                 except Exception as photo_err:
+                     log.warning(f"Failed to send photo (MD5 or other error): {photo_err}. Sending text-only message.")
+                     _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx))
 
         except Exception as msg_err:
             log.error(f"Error sending initial task messages: {msg_err}", exc_info=True)
