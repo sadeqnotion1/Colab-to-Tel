@@ -517,6 +517,14 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
                       else:
                           log.info("Detected Instagram Post/Reel URL")
                           link_success = await instagram_download(link, i + 1)
+                 elif is_ytdl_link(link):
+                      log.debug("Detected YTDL-compatible link (YouTube, etc.)")
+                      await YTDL_Status(link, i + 1, task_ctx)
+                      # Check if YTDL set error state
+                      link_success = not (_task_error and _task_error.state)
+                      if not link_success and _task_error:
+                          # YTDL_Status should handle error reporting via cancelTask or TaskError
+                          log.warning(f"YTDL download failed for link {i+1}")
                  elif is_torrent(link): # Added torrent check
                       log.debug("Detected Torrent/Magnet link, using Aria2c")
                       link_success = await aria2_Download(link, i + 1, intended_filename_for_error, task_ctx)

@@ -3,13 +3,15 @@
 #================================================
 import aiohttp
 import logging
-from colab_leecher.utility.variables import Aria2c
+from colab_leecher.utility.variables import Aria2c, TRANSFER, TaskError
 from colab_leecher.utility.handler import cancelTask
 from colab_leecher.downlader.aria2 import aria2_Download
 
+log = logging.getLogger(__name__)
+
 
 async def terabox_download(link: str, index, task_ctx = None) -> bool: # Added return type hint and task_ctx
-    global Aria2c, TaskError, log # Add TaskError, log
+    global Aria2c, TaskError # Remove log from global declaration
     payload = {"url": f"{link}"}
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     fast_download_url = ""
