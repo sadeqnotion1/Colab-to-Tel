@@ -111,7 +111,7 @@ async def telegram_upload(client, message):
     global BOT, src_request_msg
     log.info(f"Received /tupload from {message.from_user.id}")
     BOT.Mode.mode = "leech"; BOT.Mode.ytdl = False; BOT.Options.service_type = None # Reset service type
-    text = "<b>⚡ Leech Task » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, NZB, bitso, Downloadly)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
+    text = "<b>⚡ Leech Task » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, Bitso)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
     src_request_msg = await task_starter(message, text)
     log.debug(f"/tupload: task_starter called, src_request_msg set")
 
@@ -473,8 +473,7 @@ async def ask_service_type(client, message):
      # Define keyboard
      keyboard_markup = InlineKeyboardMarkup([
           [InlineKeyboardButton("Aria", callback_data='service_direct'), InlineKeyboardButton("Debrid", callback_data='service_Debrid')],
-          [InlineKeyboardButton("NZBCloud", callback_data='service_nzbcloud'), InlineKeyboardButton("Bitso", callback_data='service_bitso')],
-          [InlineKeyboardButton("Downloadly", callback_data='service_downloadly')],
+          [InlineKeyboardButton("Bitso", callback_data='service_bitso')],
           [InlineKeyboardButton("Cancel Task", callback_data='cancel')]
      ])
      try:
@@ -801,11 +800,11 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             # Set the mode based on user's choice
             if destination == "gdrive":
                 BOT.Mode.mode = "gdrive"
-                text = "<b>☁️ Google Drive Upload » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, NZB, bitso, Downloadly)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
+                text = "<b>☁️ Google Drive Upload » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, Bitso)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
                 log.info("Mode set to 'gdrive' for Google Drive upload")
             elif destination == "mirror":
                 BOT.Mode.mode = "mirror"
-                text = "<b>📂 Local Mirror » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, NZB, bitso, Downloadly)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
+                text = "<b>📂 Local Mirror » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, Bitso)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
                 log.info("Mode set to 'mirror' for local Colab mirror")
             else:
                 log.error(f"Unknown destination: {destination}")
