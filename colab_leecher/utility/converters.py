@@ -1257,8 +1257,16 @@ async def splitArchive(file_path, max_size_bytes, task_ctx: TaskContext = None) 
 
     _, filename = ospath.split(file_path)
     # Output parts TO the temp_zpath directory
-    output_base_path = ospath.join(_paths.temp_zpath, filename)
     makedirs(_paths.temp_zpath, exist_ok=True)
+
+    name_root, ext = ospath.splitext(filename)
+    compound_exts = [".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst"]
+    lower_filename = filename.lower()
+    for compound_ext in compound_exts:
+        if lower_filename.endswith(compound_ext):
+            name_root = filename[:-len(compound_ext)]
+            ext = filename[-len(compound_ext):]
+            break
 
     _messages.status_head = f"<b>✂️ SPLITTING ARCHIVE » </b>\n\n<code>{filename}</code>\n"
     total_size = getSize(file_path)
@@ -1283,7 +1291,10 @@ async def splitArchive(file_path, max_size_bytes, task_ctx: TaskContext = None) 
                 chunk = f_in.read(max_size_bytes)
                 if not chunk: break
 
-                output_filename = f"{output_base_path}.{str(part_num).zfill(3)}"
+                output_filename = ospath.join(
+                    _paths.temp_zpath,
+                    f"{name_root}.part{str(part_num).zfill(3)}{ext}"
+                )
                 log.debug(f"Writing part {part_num}: {output_filename}")
                 with open(output_filename, "wb") as f_out: f_out.write(chunk)
 
