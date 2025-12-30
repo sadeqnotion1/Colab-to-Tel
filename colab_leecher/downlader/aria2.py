@@ -6,7 +6,7 @@ import urllib.parse
 import subprocess
 import asyncio 
 from datetime import datetime
-from ..utility.helper import sizeUnit, status_bar, clean_filename, apply_dot_style, getTime, is_google_drive, is_mega # Import getTime if used by status_bar
+from ..utility.helper import sizeUnit, status_bar, clean_filename, apply_dot_style, getTime, is_google_drive, is_mega, getSize # Import getTime if used by status_bar
 from ..utility.variables import BOT, Aria2c, Paths, Messages, BotTimes, TaskError, TRANSFER # Import TaskError & TRANSFER
 
 log = logging.getLogger(__name__)
@@ -314,17 +314,39 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
             else:
                  log.error(f"Aria2 success code 0 but check failed for: {final_filepath_on_disk}")
                  log.warning(f"Details: File Exists? {file_exists}, File Size: {file_size}")
-                 try:
-                      dir_contents = os.listdir(_paths.down_path)
-                      log.warning(f"Contents of download directory ({_paths.down_path}): {dir_contents}") # DIAGNOSTIC LOG
-                 except Exception as list_err:
-                      log.warning(f"Could not list download directory contents: {list_err}")
-                 error_reason = f"Aria2 success code 0 but expected output file invalid/missing/empty: {expected_filename}"
-                 success = False
                  if file_exists and file_size == 0:
                       log.warning(f"Removing empty file: {final_filepath_on_disk}")
                       try: os.remove(final_filepath_on_disk)
                       except OSError as cl_err: log.warning(f"Failed cleanup empty aria2 file: {cl_err}")
+
+                 try:
+                      dir_contents = [name for name in os.listdir(_paths.down_path) if not name.endswith(".aria2")]
+                      log.warning(f"Contents of download directory ({_paths.down_path}): {dir_contents}") # DIAGNOSTIC LOG
+                 except Exception as list_err:
+                      log.warning(f"Could not list download directory contents: {list_err}")
+                      dir_contents = []
+
+                 if dir_contents:
+                      if len(dir_contents) == 1:
+                           resolved_name = dir_contents[0]
+                           resolved_path = os.path.join(_paths.down_path, resolved_name)
+                      else:
+                           resolved_name = expected_filename
+                           resolved_path = _paths.down_path
+
+                      resolved_size = getSize(resolved_path)
+                      if resolved_size > 0:
+                           log.warning(f"Expected file missing; using actual output '{resolved_name}' for link {num}.")
+                           expected_filename = resolved_name
+                           final_filepath_on_disk = resolved_path
+                           file_size = resolved_size
+                           success = True
+                      else:
+                           error_reason = f"Aria2 success code 0 but output invalid/empty: {expected_filename}"
+                           success = False
+                 else:
+                      error_reason = f"Aria2 success code 0 but expected output file invalid/missing/empty: {expected_filename}"
+                      success = False
         else:
             # Handle failure codes
             if exit_code == 3: error_reason = "Aria2 Error: Resource Not Found (404?)"
