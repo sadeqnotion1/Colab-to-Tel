@@ -123,7 +123,7 @@ async def Leech(path: str, remove_source: bool, task_ctx: TaskContext = None):
                      all_parts_uploaded = True
                      for file_index, sub_item_name in enumerate(files_in_dir):
                          sub_item_path = ospath.join(upload_source_location, sub_item_name)
-                         part_display_name = f"{current_item_name}.part{str(file_index + 1).zfill(3)}"
+                         part_display_name = sub_item_name
                          log.info(f"Leech: Uploading file from directory: {sub_item_name} (Display: {part_display_name})")
                          uploaded = await upload_file(sub_item_path, part_display_name, task_ctx) # Ensure upload_file is imported
 
