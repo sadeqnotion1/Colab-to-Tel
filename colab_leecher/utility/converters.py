@@ -412,6 +412,15 @@ async def sizeChecker(file_path, remove: bool, task_ctx: TaskContext = None) -> 
         ext_lower = extension.lower()
         processing_done = False
 
+        archive_exts = {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz", ".tbz", ".tbz2", ".txz"}
+
+        if ext_lower in archive_exts:
+            log.info(f"File '{filename}' is already an archive > limit. Splitting archive directly.")
+            await splitArchive(file_path, max_size_bytes, task_ctx) # Pass task_ctx
+            if _task_error.state:
+                log.error(f"splitArchive failed. Reason: {_task_error.text}")
+            return True
+
         # Check if MP4 or MKV
         if ext_lower in ['.mp4', '.mkv']:
             if _bot.Options.is_split:
