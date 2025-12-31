@@ -4,6 +4,7 @@
 #Telegra-Leecher/colab_leecher/downlader/mega.py
 import subprocess
 import logging 
+import shutil
 from datetime import datetime
 from colab_leecher.utility.helper import status_bar, getTime
 from colab_leecher.utility.variables import BotTimes, Messages, Paths, TaskError, TRANSFER 
@@ -36,7 +37,18 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
 
     log.info(f"Starting Mega download for link index {num}") 
     _bot_times.task_start = datetime.now()
-    mega = Megatools()
+
+    executable = os.getenv("MEGATOOLS_EXECUTABLE") or os.getenv("MEGATOOLS_BIN")
+    if executable:
+        if not (os.path.isfile(executable) and os.access(executable, os.X_OK)):
+            log.warning(f"MEGATOOLS_EXECUTABLE set but not usable: {executable}")
+            executable = None
+    if not executable:
+        executable = shutil.which("megatools")
+        if executable:
+            log.info(f"Using system megatools: {executable}")
+
+    mega = Megatools(executable=executable) if executable else Megatools()
     success = False
     try:
         _messages.download_name = ""
@@ -68,6 +80,16 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
     except MegaError as e:
         error_reason = f"MegaError: {e}"
         log.error(f"An Error occurred during Mega download for link {num}: {error_reason}")
+
+        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
+        if _task_error: _task_error.failed_links.append(failed_info)
+        success = False
+    except OSError as e:
+        if getattr(e, "errno", None) == 8:
+            error_reason = "Megatools binary invalid (Exec format). Install system megatools or set MEGATOOLS_EXECUTABLE."
+        else:
+            error_reason = f"OS error: {str(e)[:100]}"
+        log.error(f"Unexpected error during Mega download {link}: {error_reason}", exc_info=True)
 
         failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
         if _task_error: _task_error.failed_links.append(failed_info)

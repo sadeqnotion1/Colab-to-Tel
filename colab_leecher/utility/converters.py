@@ -564,13 +564,24 @@ async def extract(zip_filepath, remove: bool, task_ctx: TaskContext = None):
             memory_limit_mb=800,
             task_ctx=task_ctx
         )
-        return streaming_success
+        if streaming_success:
+            return True
+        log.warning("Streaming RAR extraction failed; attempting command-line fallback.")
+        if _task_error and _task_error.state:
+            _task_error.state = False
+            _task_error.text = ""
 
-    # --- Determine command list based on extension (OLD COMMAND-LINE METHOD - NOW UNREACHABLE FOR RAR) ---
-    if ext_lower == ".rar__DEPRECATED":
-        command_list = ['unrar', 'e', '-kb', '-o+', '-y'] # Base command
-        if password: command_list.append(f'-p{password}') # Add password arg IF set
-        command_list.extend([zip_filepath, temp_unzip_path + os.sep]) # Add file and target dir
+    # --- Determine command list based on extension ---
+    if ext_lower == ".rar":
+        unrar_path = shutil.which("unrar")
+        if unrar_path:
+            command_list = [unrar_path, 'x', '-o+', '-y']
+            if password: command_list.append(f'-p{password}')
+            command_list.extend([zip_filepath, temp_unzip_path + os.sep])
+        else:
+            command_list = ['7z', 'x', f'-o{temp_unzip_path}', '-y']
+            if password: command_list.append(f'-p{password}')
+            command_list.append(zip_filepath)
         if ".part" in name.lower(): file_pattern = "rar"
     elif ext_lower in [".tar", ".tar.gz", ".tgz"]:
         if ext_lower == ".tar": command_list = ['tar', '-xf', zip_filepath, '-C', temp_unzip_path]

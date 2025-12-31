@@ -193,7 +193,7 @@ if valid_creds and ipython:
 
      # --- Install Dependencies ---
      if Working and os.path.exists(repo_path):
-          log.info("Checking/Installing OS packages..."); cmd_apt = "apt-get update && apt-get install -y ffmpeg aria2"; proc_apt = subprocess.run(cmd_apt, shell=True, capture_output=True, text=True)
+          log.info("Checking/Installing OS packages..."); cmd_apt = "apt-get update && apt-get install -y ffmpeg aria2 megatools"; proc_apt = subprocess.run(cmd_apt, shell=True, capture_output=True, text=True)
           if proc_apt.returncode != 0: log.warning(f"Apt install issues:\n{proc_apt.stderr}")
           else: log.info("OS packages checked/installed.")
 
