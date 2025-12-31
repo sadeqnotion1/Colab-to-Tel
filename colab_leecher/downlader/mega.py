@@ -16,10 +16,22 @@ log = logging.getLogger(__name__)
 
 
 def _is_folder_url(url: str) -> bool:
-    """Detect if a Mega URL is a folder URL that may not work with megadl."""
+    """Detect if a Mega URL is a folder URL that may not work with megadl.
+
+    Returns True only for actual folder URLs, not for file URLs within folders.
+    Examples:
+        - https://mega.nz/folder/ABC#key -> True (folder)
+        - https://mega.nz/folder/ABC#key/file/XYZ -> False (file within folder)
+        - https://mega.nz/file/XYZ#key -> False (direct file)
+    """
     url_lower = url.lower()
-    # Folder URLs typically contain /folder/ or have /file/ after a folder path
-    return '/folder/' in url_lower or ('/file/' in url_lower and '#' in url and url.index('/file/') < url.index('#'))
+
+    # If URL has /file/ anywhere, it's a file URL (even if in a folder path)
+    if '/file/' in url_lower:
+        return False
+
+    # Only return True if it has /folder/ and no /file/
+    return '/folder/' in url_lower
 
 
 async def megadl(link: str, num: int, task_ctx=None) -> bool:
@@ -49,30 +61,33 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
     if is_folder_url:
         log.info(f"Detected folder-type Mega URL: {link}")
 
-    executable = os.getenv("MEGATOOLS_EXECUTABLE") or os.getenv("MEGATOOLS_BIN")
-    use_megadl = False
-    use_megatools_dl = False
+    # For folder URLs, skip ALL CLI tools and use pymegatools library directly
+    # CLI tools like megadl cannot handle folder URLs properly
+    if is_folder_url:
+        log.info("Folder URL detected. Skipping CLI tools and using pymegatools library (may handle folder URLs better)...")
+        executable = None
+        use_megadl = False
+        use_megatools_dl = False
+    else:
+        # For direct file URLs, try to find CLI tools
+        executable = os.getenv("MEGATOOLS_EXECUTABLE") or os.getenv("MEGATOOLS_BIN")
+        use_megadl = False
+        use_megatools_dl = False
 
-    if executable:
-        if not (os.path.isfile(executable) and os.access(executable, os.X_OK)):
-            log.warning(f"MEGATOOLS_EXECUTABLE set but not usable: {executable}")
-            executable = None
-        else:
-            basename = os.path.basename(executable).lower()
-            if basename.startswith("megadl"):
-                use_megadl = True
-                log.info(f"Using megadl executable: {executable}")
-            elif basename == "megatools":
-                use_megatools_dl = True
-                log.info(f"Using megatools executable: {executable}")
+        if executable:
+            if not (os.path.isfile(executable) and os.access(executable, os.X_OK)):
+                log.warning(f"MEGATOOLS_EXECUTABLE set but not usable: {executable}")
+                executable = None
+            else:
+                basename = os.path.basename(executable).lower()
+                if basename.startswith("megadl"):
+                    use_megadl = True
+                    log.info(f"Using megadl executable: {executable}")
+                elif basename == "megatools":
+                    use_megatools_dl = True
+                    log.info(f"Using megatools executable: {executable}")
 
-    if not executable:
-        # For folder URLs, try pymegatools library first as it may handle them better
-        if is_folder_url:
-            log.info("Folder URL detected. Trying pymegatools library (may handle folder URLs)...")
-            # Skip CLI tools for folder URLs and go straight to pymegatools
-            # We'll set executable=None to trigger the pymegatools fallback below
-        else:
+        if not executable:
             # For direct file URLs, prefer megadl for simplicity
             system_megadl = shutil.which("megadl")
             if system_megadl:
