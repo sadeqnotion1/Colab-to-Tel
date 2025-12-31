@@ -1058,12 +1058,12 @@ async def extract_rar_streaming(
 
     # Open RAR file
     try:
+        rar_ref = rarfile.RarFile(rar_filepath)
         if password:
+            rar_ref.setpassword(password)
             log.info(f"Opening password-protected RAR: {rar_filename}")
-            rar_ref = rarfile.RarFile(rar_filepath, pwd=password)
         else:
             log.info(f"Opening RAR: {rar_filename}")
-            rar_ref = rarfile.RarFile(rar_filepath)
 
     except rarfile.BadRarFile as e:
         log.error(f"Invalid RAR file: {e}")
@@ -1092,7 +1092,7 @@ async def extract_rar_streaming(
         log.info("Waiting for user to provide password via Telegram...")
         return False
 
-    except rarfile.BadPassword:
+    except rarfile.RarWrongPassword:
         log.warning(f"Incorrect password for RAR. Prompting user for correct password...")
 
         # Store context for password retry
@@ -1873,11 +1873,11 @@ async def extract_and_upload_streaming(
 
     # Open RAR archive
     try:
+        rar_ref = rarfile.RarFile(rar_filepath)
         if password:
-            rar_ref = rarfile.RarFile(rar_filepath, pwd=password)
+            rar_ref.setpassword(password)
             log.info(f"Opened password-protected RAR archive: {os.path.basename(rar_filepath)}")
         else:
-            rar_ref = rarfile.RarFile(rar_filepath)
             log.info(f"Opened RAR archive: {os.path.basename(rar_filepath)}")
     except rarfile.BadRarFile as e:
         log.error(f"Invalid RAR archive: {e}")
@@ -1904,7 +1904,7 @@ async def extract_and_upload_streaming(
         log.info("Waiting for user to provide password via Telegram...")
         return False
 
-    except rarfile.BadRarPassword:
+    except rarfile.RarWrongPassword:
         log.warning(f"Incorrect password for RAR. Prompting user for correct password...")
 
         # Store context for password retry
@@ -1944,7 +1944,7 @@ async def extract_and_upload_streaming(
         # Return False but don't set task error yet - we're waiting for password
         log.info("Waiting for user to provide password via Telegram...")
         return False
-    except rarfile.BadRarPassword:
+    except rarfile.RarWrongPassword:
         log.warning(f"Incorrect password for RAR (deferred check during infolist). Prompting user...")
 
         # Store context for password retry
@@ -2060,7 +2060,7 @@ async def extract_and_upload_streaming(
                 await prompt_for_password(os.path.basename(rar_filepath), error_type="required")
                 log.info("Waiting for user to provide password via Telegram...")
                 return False
-            except rarfile.BadRarPassword:
+            except rarfile.RarWrongPassword:
                 log.warning(f"Incorrect password for RAR (deferred check during extraction). Prompting user...")
                 rar_ref.close()
 
