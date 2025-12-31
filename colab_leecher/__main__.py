@@ -382,13 +382,24 @@ async def handle_reply(client: Client, message: Message):
 
             try:
                 # Import converters to access extract functions
-                from colab_leecher.utility.converters import extract_rar_streaming, extract
+                from colab_leecher.utility.converters import extract_rar_streaming, extract, extract_and_upload_streaming
 
                 # Update the password in BOT.Options
                 BOT.Options.unzip_pswd = user_password
 
                 # Determine which extraction method to retry based on context
-                if 'rar_filepath' in retry_ctx:
+                function_name = retry_ctx.get('function')
+
+                if function_name == 'extract_and_upload_streaming':
+                    # RAR extract-and-upload streaming
+                    log.info(f"Retrying RAR extract-and-upload streaming with provided password...")
+                    success = await extract_and_upload_streaming(
+                        rar_filepath=retry_ctx['rar_filepath'],
+                        password=user_password,  # Use the provided password
+                        file_filter=retry_ctx.get('file_filter'),
+                        task_ctx=retry_ctx.get('task_ctx')
+                    )
+                elif 'rar_filepath' in retry_ctx:
                     # RAR streaming extraction
                     log.info(f"Retrying RAR streaming extraction with provided password...")
                     success = await extract_rar_streaming(

@@ -1886,16 +1886,41 @@ async def extract_and_upload_streaming(
             _task_error.text = "Invalid RAR archive"
         return False
     except rarfile.PasswordRequired:
-        log.error("Password required for RAR archive")
-        if _task_error:
-            _task_error.state = True
-            _task_error.text = "Password required"
+        log.warning(f"RAR requires password but none provided. Prompting user...")
+
+        # Store context for password retry
+        BOT.State.password_retry_context = {
+            'rar_filepath': rar_filepath,
+            'password': password,
+            'file_filter': file_filter,
+            'task_ctx': task_ctx,
+            'function': 'extract_and_upload_streaming'
+        }
+
+        # Prompt user for password
+        await prompt_for_password(os.path.basename(rar_filepath), error_type="required")
+
+        # Return False but don't set task error yet - we're waiting for password
+        log.info("Waiting for user to provide password via Telegram...")
         return False
+
     except rarfile.BadRarPassword:
-        log.error("Incorrect password for RAR archive")
-        if _task_error:
-            _task_error.state = True
-            _task_error.text = "Incorrect RAR password"
+        log.warning(f"Incorrect password for RAR. Prompting user for correct password...")
+
+        # Store context for password retry
+        BOT.State.password_retry_context = {
+            'rar_filepath': rar_filepath,
+            'password': password,
+            'file_filter': file_filter,
+            'task_ctx': task_ctx,
+            'function': 'extract_and_upload_streaming'
+        }
+
+        # Prompt user for correct password
+        await prompt_for_password(os.path.basename(rar_filepath), error_type="incorrect")
+
+        # Return False but don't set task error yet - we're waiting for password
+        log.info("Waiting for user to provide correct password via Telegram...")
         return False
 
     # Get list of members to extract
