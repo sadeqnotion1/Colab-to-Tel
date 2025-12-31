@@ -1873,11 +1873,11 @@ async def extract_and_upload_streaming(
 
     # Open RAR archive
     try:
-        rar_ref = rarfile.RarFile(rar_filepath)
         if password:
-            rar_ref.setpassword(password)
+            rar_ref = rarfile.RarFile(rar_filepath, pwd=password)
             log.info(f"Opened password-protected RAR archive: {os.path.basename(rar_filepath)}")
         else:
+            rar_ref = rarfile.RarFile(rar_filepath)
             log.info(f"Opened RAR archive: {os.path.basename(rar_filepath)}")
     except rarfile.BadRarFile as e:
         log.error(f"Invalid RAR archive: {e}")
