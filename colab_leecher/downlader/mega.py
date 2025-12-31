@@ -245,14 +245,45 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
         except OSError as e:
             # errno 8 = Exec format error (binary download is broken/HTML)
             if getattr(e, "errno", None) == 8 or "Exec format error" in str(e):
-                error_reason = "pymegatools binary download failed (404/HTML). Install system megatools: apt-get install megatools"
-                log.error(f"pymegatools binary download is broken. Install system megatools: {error_reason}")
-                if is_folder_url:
-                    error_reason += ". For folder URLs, try converting to direct file link format."
+                log.error(f"pymegatools binary download failed. Attempting to install system megatools package...")
+
+                # Try to install system megatools as fallback
+                try:
+                    log.info("Running: apt-get update && apt-get install -y megatools")
+                    install_result = subprocess.run(
+                        "apt-get update && apt-get install -y megatools",
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=120
+                    )
+
+                    if install_result.returncode == 0:
+                        log.info("Successfully installed system megatools package.")
+
+                        # Check if megatools is now available
+                        megatools_path = shutil.which("megatools")
+                        if megatools_path:
+                            log.info(f"System megatools found at {megatools_path}. Retrying download with CLI tool...")
+
+                            # Retry with megatools CLI - use recursive call with environment variable set
+                            os.environ["MEGATOOLS_EXECUTABLE"] = megatools_path
+                            return await megadl(link, num, task_ctx)
+                        else:
+                            log.warning("megatools installed but not found in PATH")
+                    else:
+                        log.error(f"Failed to install megatools: {install_result.stderr}")
+
+                except Exception as install_err:
+                    log.error(f"Error installing megatools: {install_err}")
+
+                error_reason = "pymegatools binary download failed (404/HTML). Tried to install system megatools but failed"
+                if is_folder_url or is_file_in_folder:
+                    error_reason += ". For folder/file-in-folder URLs, try converting to direct file link format."
             else:
                 error_reason = f"OS error: {str(e)[:100]}"
                 log.error(f"Unexpected OS error during Mega download {link}: {error_reason}", exc_info=True)
-                if is_folder_url:
+                if is_folder_url or is_file_in_folder:
                     error_reason += ". Folder URLs may require special handling."
 
             failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:250]}
