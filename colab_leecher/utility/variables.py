@@ -80,6 +80,9 @@ class BOT:
         mindvalley_waiting = False
         extract_waiting = False  # Waiting for extract path input
         nzb_waiting = False  # Waiting for NZB file/URL
+        password_waiting = False  # Waiting for archive password input
+        password_retry_context = None  # Stores context for password retry (filepath, extract_to, etc.)
+        reply_prompt_msg_id = None  # Shared message ID for reply tracking
 
 
 # --- Original YTDL State Class (Restored as requested) ---

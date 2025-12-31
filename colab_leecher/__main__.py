@@ -170,9 +170,10 @@ async def handle_reply(client: Client, message: Message):
     log = logging.getLogger(__name__) # Ensure logger access
     log.debug(f"Received reply (ID: {message.id}) from user {message.from_user.id}")
 
-    # Check if the reply is for the expected prompt message ID
-    if not reply_prompt_message_id or not message.reply_to_message_id or message.reply_to_message_id != reply_prompt_message_id:
-        log.debug(f"Reply (ID: {message.id}) is not for the expected prompt message ID ({reply_prompt_message_id}). Ignoring.")
+    # Check if the reply is for the expected prompt message ID (check both local and BOT.State)
+    expected_msg_id = reply_prompt_message_id or BOT.State.reply_prompt_msg_id
+    if not expected_msg_id or not message.reply_to_message_id or message.reply_to_message_id != expected_msg_id:
+        log.debug(f"Reply (ID: {message.id}) is not for the expected prompt message ID ({expected_msg_id}). Ignoring.")
         return
 
     # Try to get the original prompt message (optional, for deletion/context)
@@ -355,6 +356,76 @@ async def handle_reply(client: Client, message: Message):
             else:
                 await message.reply_text("Suffix set!") # Fallback confirmation
 
+        elif BOT.State.password_waiting:
+            log.info("Processing password reply for archive extraction...")
+            user_password = message.text.strip() if message.text else ""
+
+            if not user_password:
+                await message.reply_text("❌ Password cannot be empty. Please reply with a valid password.", quote=True)
+                return  # Keep waiting for valid password
+
+            # Get the extraction context
+            retry_ctx = BOT.State.password_retry_context
+            if not retry_ctx:
+                log.error("Password reply received but no retry context found!")
+                await message.reply_text("❌ Error: Extraction context lost. Please restart the download.", quote=True)
+                BOT.State.password_waiting = False
+                state_handled = True
+                return
+
+            # Reset waiting state
+            BOT.State.password_waiting = False
+            state_handled = True
+
+            # Send confirmation message
+            status_msg = await message.reply_text("🔐 Password received. Retrying extraction...", quote=True)
+
+            try:
+                # Import converters to access extract functions
+                from colab_leecher.utility.converters import extract_rar_streaming, extract
+
+                # Update the password in BOT.Options
+                BOT.Options.unzip_pswd = user_password
+
+                # Determine which extraction method to retry based on context
+                if 'rar_filepath' in retry_ctx:
+                    # RAR streaming extraction
+                    log.info(f"Retrying RAR streaming extraction with provided password...")
+                    success = await extract_rar_streaming(
+                        rar_filepath=retry_ctx['rar_filepath'],
+                        extract_to=retry_ctx['extract_to'],
+                        remove=retry_ctx['remove'],
+                        password=user_password,  # Use the provided password
+                        file_filter=retry_ctx.get('file_filter'),
+                        chunk_size=retry_ctx.get('chunk_size', 1024*1024),
+                        resume_state_file=retry_ctx.get('resume_state_file'),
+                        memory_limit_mb=retry_ctx.get('memory_limit_mb', 800),
+                        task_ctx=retry_ctx.get('task_ctx')
+                    )
+                else:
+                    # Command-line extraction
+                    log.info(f"Retrying command-line extraction with provided password...")
+                    success = await extract(
+                        zip_filepath=retry_ctx['zip_filepath'],
+                        remove=retry_ctx['remove'],
+                        task_ctx=retry_ctx.get('task_ctx')
+                    )
+
+                # Clear the retry context
+                BOT.State.password_retry_context = None
+
+                if success:
+                    await status_msg.edit_text("✅ Extraction completed successfully with the provided password!")
+                    log.info("Password-protected extraction succeeded.")
+                else:
+                    await status_msg.edit_text("❌ Extraction failed. The password might be incorrect or there's another issue. Check logs for details.")
+                    log.error("Password-protected extraction failed even with user-provided password.")
+
+            except Exception as extract_err:
+                log.error(f"Error during password-retry extraction: {extract_err}", exc_info=True)
+                await status_msg.edit_text(f"❌ Error during extraction: {str(extract_err)[:100]}")
+                BOT.State.password_retry_context = None
+
         else:
             # This case should ideally not be reached if the prompt ID check works
             log.warning(f"Received reply (for msg {reply_prompt_message_id}) but no matching state active. Ignoring.")
@@ -370,6 +441,7 @@ async def handle_reply(client: Client, message: Message):
         if state_handled:
             log.debug(f"State handled for reply {message.id}. Resetting prompt ID.")
             reply_prompt_message_id = None # Reset prompt ID as it's been handled
+            BOT.State.reply_prompt_msg_id = None  # Also reset shared state
             try:
                 # Check if message exists before deleting
                 if message: await message.delete() # Delete user's reply
@@ -377,8 +449,9 @@ async def handle_reply(client: Client, message: Message):
                  log.warning(f"Could not delete user reply message {message.id if message else 'N/A'}: {del_err}")
         else:
             # Only log if we were actually expecting a reply (prompt ID was set)
-            if reply_prompt_message_id == message.reply_to_message_id:
-                 log.debug(f"State not handled for reply {message.id}. Prompt ID {reply_prompt_message_id} remains active.")
+            expected_msg_id = reply_prompt_message_id or BOT.State.reply_prompt_msg_id
+            if expected_msg_id == message.reply_to_message_id:
+                 log.debug(f"State not handled for reply {message.id}. Prompt ID {expected_msg_id} remains active.")
             # No need to log if the reply wasn't for our prompt anyway
 
 

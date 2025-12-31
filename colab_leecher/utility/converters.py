@@ -21,8 +21,55 @@ from .helper import (
     getSize,fileType,keyboard, multipartArchive, sizeUnit,speedETA,status_bar,sysINFO,getTime
 )
 from .task_context import TaskContext
+from .. import colab_bot, OWNER  # Import bot client and owner ID for password prompts
 
 log = logging.getLogger(__name__)
+
+
+async def prompt_for_password(archive_filename: str, error_type: str = "required") -> bool:
+    """Send a Telegram message to the user asking for archive password.
+
+    Args:
+        archive_filename: Name of the archive file that needs a password
+        error_type: Type of password error - "required" or "incorrect"
+
+    Returns:
+        bool: True if prompt was sent successfully, False otherwise
+    """
+    global BOT
+
+    try:
+        if error_type == "incorrect":
+            message_text = (
+                f"🔐 **Password Required**\n\n"
+                f"The password you provided is **incorrect** for:\n"
+                f"`{archive_filename}`\n\n"
+                f"Please reply to this message with the correct password."
+            )
+        else:  # required
+            message_text = (
+                f"🔐 **Password Required**\n\n"
+                f"The archive file requires a password:\n"
+                f"`{archive_filename}`\n\n"
+                f"Please reply to this message with the password."
+            )
+
+        # Send prompt message to owner
+        prompt_msg = await colab_bot.send_message(
+            chat_id=OWNER,
+            text=message_text
+        )
+
+        # Store message ID in shared state for reply tracking
+        BOT.State.reply_prompt_msg_id = prompt_msg.id
+        BOT.State.password_waiting = True
+
+        log.info(f"Password prompt sent for {archive_filename}. Waiting for user reply...")
+        return True
+
+    except Exception as e:
+        log.error(f"Failed to send password prompt: {e}")
+        return False
 
 async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: TaskContext = None) -> tuple[str | None, int]:
     """Creates a single archive using 7z (.zip format) from the source path.
@@ -656,6 +703,32 @@ async def extract(zip_filepath, remove: bool, task_ctx: TaskContext = None):
             if stderr:
                  last_stderr_line = stderr.strip().splitlines()[-1] if stderr.strip() else 'None'
                  error_reason += f" Stderr: {last_stderr_line}"
+
+            # Check if error is password-related
+            stderr_lower = stderr.lower() if stderr else ""
+            is_password_error = any(keyword in stderr_lower for keyword in [
+                "password", "encrypted", "incorrect password", "wrong password"
+            ])
+
+            if is_password_error:
+                log.warning(f"Command-line extraction failed due to password error. Prompting user...")
+
+                # Store context for password retry
+                BOT.State.password_retry_context = {
+                    'zip_filepath': zip_filepath,
+                    'remove': remove,
+                    'task_ctx': task_ctx
+                }
+
+                # Determine error type based on whether password was provided
+                error_type = "incorrect" if password else "required"
+
+                # Prompt user for password
+                await prompt_for_password(filename, error_type=error_type)
+
+                log.info("Waiting for user to provide password via Telegram...")
+                return False  # Don't set task error yet
+
             log.error(f"Extraction failed for '{filename}'. Reason: {error_reason}")
             extract_success = False
             _task_error.state = True
@@ -998,15 +1071,49 @@ async def extract_rar_streaming(
         _task_error.text = f"Invalid RAR file: {str(e)[:50]}"
         return False
     except rarfile.PasswordRequired:
-        log.error(f"RAR requires password but none provided")
-        _task_error.state = True
-        _task_error.text = "RAR requires password"
+        log.warning(f"RAR requires password but none provided. Prompting user...")
+
+        # Store context for password retry
+        BOT.State.password_retry_context = {
+            'rar_filepath': rar_filepath,
+            'extract_to': extract_to,
+            'remove': remove,
+            'file_filter': file_filter,
+            'chunk_size': chunk_size,
+            'resume_state_file': resume_state_file,
+            'memory_limit_mb': memory_limit_mb,
+            'task_ctx': task_ctx
+        }
+
+        # Prompt user for password
+        await prompt_for_password(rar_filename, error_type="required")
+
+        # Return False but don't set task error yet - we're waiting for password
+        log.info("Waiting for user to provide password via Telegram...")
         return False
+
     except rarfile.BadPassword:
-        log.error(f"Incorrect password for RAR")
-        _task_error.state = True
-        _task_error.text = "Incorrect RAR password"
+        log.warning(f"Incorrect password for RAR. Prompting user for correct password...")
+
+        # Store context for password retry
+        BOT.State.password_retry_context = {
+            'rar_filepath': rar_filepath,
+            'extract_to': extract_to,
+            'remove': remove,
+            'file_filter': file_filter,
+            'chunk_size': chunk_size,
+            'resume_state_file': resume_state_file,
+            'memory_limit_mb': memory_limit_mb,
+            'task_ctx': task_ctx
+        }
+
+        # Prompt user for correct password
+        await prompt_for_password(rar_filename, error_type="incorrect")
+
+        # Return False but don't set task error yet - we're waiting for password
+        log.info("Waiting for user to provide correct password via Telegram...")
         return False
+
     except Exception as e:
         log.error(f"Failed to open RAR: {e}")
         _task_error.state = True
