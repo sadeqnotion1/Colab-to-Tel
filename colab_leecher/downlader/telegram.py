@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 from .. import colab_bot 
 from ..utility.handler import cancelTask 
-from ..utility.variables import Paths, Messages, BotTimes, TRANSFER, MSG
+from ..utility.variables import Paths, Messages, BotTimes, TRANSFER, MSG, TaskError
 from ..utility.helper import speedETA, getTime, sizeUnit, status_bar, getSize, clean_filename 
 import time
 
@@ -101,14 +101,29 @@ async def download_progress(current, total):
 # --- End download_progress function ---
 
 # Replace TelegramDownload in colab_leecher/downlader/telegram.py
-async def TelegramDownload(link, num) -> bool: # Added return type hint
+async def TelegramDownload(link, num, task_ctx=None) -> bool: # Added return type hint
     global TRANSFER, BotTimes, Messages, Paths, TaskError, log # Add TaskError, log
+    if task_ctx:
+        _paths = task_ctx.paths
+        _messages = task_ctx.messages
+        _task_error = task_ctx.task_error
+        _transfer = task_ctx.transfer
+        _bot_times = task_ctx.bot_times
+        log.info(f"TelegramDownload() using TaskContext for task_id: {task_ctx.task_id}")
+    else:
+        _paths = Paths
+        _messages = Messages
+        _task_error = TaskError
+        _transfer = TRANSFER
+        _bot_times = BotTimes
+        log.info("TelegramDownload() using global state (single-task mode)")
+
     media, message = await media_Identifier(link)
     if media is None or message is None:
         log.error(f"Failed identify media for link {link}.")
         # Add failure - filename might be unknown here
         failed_info = {"link": link, "filename": "Unknown (Media Identify Fail)", "index": num, "reason": "Failed to identify media"}
-        if TaskError: TaskError.failed_links.append(failed_info)
+        if _task_error: _task_error.failed_links.append(failed_info)
         return False # Failed
 
     name = "Unknown_Telegram_File"
@@ -120,20 +135,72 @@ async def TelegramDownload(link, num) -> bool: # Added return type hint
     if hasattr(media, "file_size") and media.file_size: file_size = media.file_size
     else: log.warning(f"Could not get file size for msg {message.id}")
 
-    Messages.status_head = f"<b>📥 DOWNLOADING FROM TG » </b><i>🔗Link {str(num).zfill(2)}</i>\n\n<code>{name}</code>\n"
+    _messages.status_head = f"<b>???? DOWNLOADING FROM TG ?? </b><i>????Link {str(num).zfill(2)}</i>
+
+<code>{name}</code>
+"
     log.info(f"Starting TG download: {name} (Size: {sizeUnit(file_size)})")
-    os.makedirs(Paths.down_path, exist_ok=True)
-    file_path = os.path.join(Paths.down_path, name)
+    os.makedirs(_paths.down_path, exist_ok=True)
+    file_path = os.path.join(_paths.down_path, name)
 
     download_successful = False
     try:
+        _bot_times.task_start = datetime.now()
         # Ensure download path exists before calling download
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        await message.download(progress=download_progress, in_memory=False, file_name=file_path)
+
+        async def progress(current, total):
+            upload_speed = 0
+            if isinstance(_bot_times.task_start, datetime):
+                elapsed_time_seconds = (datetime.now() - _bot_times.task_start).seconds
+            else:
+                log.warning(f"download_progress: BotTimes.task_start invalid type ({type(_bot_times.task_start)}).")
+                elapsed_time_seconds = 0
+
+            current_overall = sum(_transfer.down_bytes) + current
+
+            if current_overall > 0 and elapsed_time_seconds > 0:
+                try:
+                    upload_speed = current_overall / elapsed_time_seconds
+                except ZeroDivisionError:
+                    upload_speed = 0
+
+            eta = float('inf')
+            display_total = _transfer.total_down_size if _transfer.total_down_size > 0 else total
+
+            remaining_bytes = display_total - current_overall
+            if upload_speed > 0 and remaining_bytes > 0:
+                try:
+                    eta = remaining_bytes / upload_speed
+                except ZeroDivisionError:
+                    eta = float('inf')
+
+            percentage = 0.0
+            if display_total > 0:
+                percentage = min(100.0, (current_overall / display_total) * 100)
+
+            speed_string = sizeUnit(upload_speed) + "/s" if upload_speed > 0 else "N/A"
+
+            try:
+                formatted_eta_str = getTime(eta)
+                await status_bar(
+                    down_msg=_messages.status_head,
+                    speed=speed_string,
+                    percentage=percentage,
+                    eta=formatted_eta_str,
+                    done=sizeUnit(current_overall),
+                    total_size=sizeUnit(display_total),
+                    engine="Pyrogram ????",
+                    task_ctx=task_ctx
+                )
+            except Exception as e:
+                log.warning(f"download_progress: Failed to call status_bar: {e}")
+
+        await message.download(progress=progress, in_memory=False, file_name=file_path)
         # Check if file actually exists after download call returns
         if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
-             log.error(f"Pyrogram download finished for {name} but file is missing or empty.")
-             raise Exception("Downloaded file missing or empty") # Treat as error
+            log.error(f"Pyrogram download finished for {name} but file is missing or empty.")
+            raise Exception("Downloaded file missing or empty") # Treat as error
 
         download_successful = True; log.info(f"Finished TG download: {name}")
     except Exception as e:
@@ -141,18 +208,18 @@ async def TelegramDownload(link, num) -> bool: # Added return type hint
         log.error(f"Error downloading TG file {name}: {e}", exc_info=True);
         # <<< ADD TO FAILED LINKS >>>
         failed_info = {"link": link, "filename": name, "index": num, "reason": error_reason}
-        if TaskError: TaskError.failed_links.append(failed_info)
+        if _task_error: _task_error.failed_links.append(failed_info)
         # Cleanup partial file
         try:
-             if os.path.exists(file_path): os.remove(file_path)
+            if os.path.exists(file_path): os.remove(file_path)
         except OSError as cl_err: log.warning(f"Failed cleanup TG file {file_path}: {cl_err}")
         download_successful = False
 
     if download_successful:
-        actual_size = file_size if file_size > 0 else getSize(file_path) if ospath.exists(file_path) else 0
-        TRANSFER.down_bytes.append(actual_size)
+        actual_size = file_size if file_size > 0 else getSize(file_path) if os.path.exists(file_path) else 0
+        _transfer.down_bytes.append(actual_size)
         # <<< ADD TO SUCCESSFUL DOWNLOADS >>>
-        TRANSFER.successful_downloads.append({'url': link, 'filename': name})
+        _transfer.successful_downloads.append({'url': link, 'filename': name})
         if file_size == 0 and actual_size > 0: log.info(f"Downloaded unknown size TG file, actual: {sizeUnit(actual_size)}")
         return True # Success
     else:
