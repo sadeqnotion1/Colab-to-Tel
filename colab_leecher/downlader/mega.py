@@ -67,19 +67,11 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
                 log.info(f"Using megatools executable: {executable}")
 
     if not executable:
-        # For folder URLs, prefer megatools over megadl since megadl can't handle them
+        # For folder URLs, try pymegatools library first as it may handle them better
         if is_folder_url:
-            system_megatools = shutil.which("megatools")
-            if system_megatools:
-                executable = system_megatools
-                use_megatools_dl = True
-                log.info(f"Using system megatools for folder URL: {executable}")
-            else:
-                system_megadl = shutil.which("megadl")
-                if system_megadl:
-                    executable = system_megadl
-                    use_megadl = True
-                    log.warning(f"Folder URL detected but only megadl available (may fail): {executable}")
+            log.info("Folder URL detected. Trying pymegatools library (may handle folder URLs)...")
+            # Skip CLI tools for folder URLs and go straight to pymegatools
+            # We'll set executable=None to trigger the pymegatools fallback below
         else:
             # For direct file URLs, prefer megadl for simplicity
             system_megadl = shutil.which("megadl")
@@ -88,6 +80,7 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
                 use_megadl = True
                 log.info(f"Using system megadl: {executable}")
             else:
+                # Try other megatools commands
                 system_megatools = shutil.which("megatools")
                 if system_megatools:
                     executable = system_megatools
@@ -156,13 +149,14 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
             if proc.returncode == 0 and "unrecognized" not in (proc.stderr or "").lower():
                 break
 
-        # Special error message for folder URLs with megadl
-        if is_folder_url and use_megadl:
-            error_reason = "megadl cannot handle folder URLs. Install 'megatools' package or use direct file links."
-        else:
-            error_reason = (last_stderr or last_stdout or f"{tool_name} failed").strip()
-            if not error_reason:
-                error_reason = f"{tool_name} finished but no output file detected (exit {last_returncode})"
+        # Build error message
+        error_reason = (last_stderr or last_stdout or f"{tool_name} failed").strip()
+        if not error_reason:
+            error_reason = f"{tool_name} finished but no output file detected (exit {last_returncode})"
+
+        # Add context for folder URLs
+        if is_folder_url:
+            error_reason = f"{error_reason} (Note: This is a folder URL which may not be supported by {tool_name})"
 
         failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:200]}
         if _task_error: _task_error.failed_links.append(failed_info)
@@ -170,9 +164,12 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
         return False
 
     if not executable:
-        log.warning("No megatools/megadl CLI binary found; falling back to pymegatools library (may have issues)")
+        if is_folder_url:
+            log.info("Attempting pymegatools library for folder URL (may handle folder links better than CLI tools)")
+        else:
+            log.warning("No megatools/megadl CLI binary found; falling back to pymegatools library (may have issues)")
 
-        # Try to use pymegatools library as last resort
+        # Try to use pymegatools library as last resort (or primary for folder URLs)
         mega = Megatools()
         success = False
         try:
@@ -205,26 +202,36 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
             error_reason = f"MegaError: {e}"
             log.error(f"An Error occurred during Mega download for link {num}: {error_reason}")
 
-            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
+            if is_folder_url:
+                error_reason += ". Folder URLs may not be supported. Try using the direct file link instead."
+
+            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:250]}
             if _task_error: _task_error.failed_links.append(failed_info)
             success = False
         except OSError as e:
             # errno 8 = Exec format error (binary download is broken/HTML)
             if getattr(e, "errno", None) == 8 or "Exec format error" in str(e):
-                error_reason = "pymegatools binary download failed (404/HTML). Run: apt-get install megatools"
+                error_reason = "pymegatools binary download failed (404/HTML). Install system megatools: apt-get install megatools"
                 log.error(f"pymegatools binary download is broken. Install system megatools: {error_reason}")
+                if is_folder_url:
+                    error_reason += ". For folder URLs, try converting to direct file link format."
             else:
                 error_reason = f"OS error: {str(e)[:100]}"
                 log.error(f"Unexpected OS error during Mega download {link}: {error_reason}", exc_info=True)
+                if is_folder_url:
+                    error_reason += ". Folder URLs may require special handling."
 
-            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
+            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:250]}
             if _task_error: _task_error.failed_links.append(failed_info)
             success = False
         except Exception as e:
             error_reason = f"Unexpected Mega Error: {str(e)[:100]}"
             log.error(f"Unexpected error during Mega download {link}: {e}", exc_info=True)
 
-            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
+            if is_folder_url:
+                error_reason += ". Folder URLs may not be supported. Try converting to direct file link."
+
+            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:250]}
             if _task_error: _task_error.failed_links.append(failed_info)
             success = False
 
@@ -263,26 +270,36 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
         error_reason = f"MegaError: {e}"
         log.error(f"An Error occurred during Mega download for link {num}: {error_reason}")
 
-        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
+        if is_folder_url:
+            error_reason += ". Folder URLs may not be supported. Try using the direct file link instead."
+
+        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:250]}
         if _task_error: _task_error.failed_links.append(failed_info)
         success = False
     except OSError as e:
         # errno 8 = Exec format error (binary download is broken/HTML)
         if getattr(e, "errno", None) == 8 or "Exec format error" in str(e):
-            error_reason = "pymegatools binary download failed (404/HTML). Run: apt-get install megatools"
+            error_reason = "pymegatools binary download failed (404/HTML). Install system megatools: apt-get install megatools"
             log.error(f"pymegatools binary download is broken. Install system megatools: {error_reason}")
+            if is_folder_url:
+                error_reason += ". For folder URLs, try converting to direct file link format."
         else:
             error_reason = f"OS error: {str(e)[:100]}"
             log.error(f"Unexpected OS error during Mega download {link}: {error_reason}", exc_info=True)
+            if is_folder_url:
+                error_reason += ". Folder URLs may require special handling."
 
-        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
+        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:250]}
         if _task_error: _task_error.failed_links.append(failed_info)
         success = False
     except Exception as e:
         error_reason = f"Unexpected Mega Error: {str(e)[:100]}"
         log.error(f"Unexpected error during Mega download {link}: {e}", exc_info=True)
 
-        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
+        if is_folder_url:
+            error_reason += ". Folder URLs may not be supported. Try converting to direct file link."
+
+        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:250]}
         if _task_error: _task_error.failed_links.append(failed_info)
         success = False
 
