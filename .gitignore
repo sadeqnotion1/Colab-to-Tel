@@ -4,6 +4,7 @@
 credentials.json
 *.session
 *.session-journal
+cell.py
 instagram_cookies*.json
 instagram_cookies*.txt
 *.cookie

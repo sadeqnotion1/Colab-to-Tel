@@ -39,16 +39,88 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
     _bot_times.task_start = datetime.now()
 
     executable = os.getenv("MEGATOOLS_EXECUTABLE") or os.getenv("MEGATOOLS_BIN")
+    use_megadl = False
+
     if executable:
         if not (os.path.isfile(executable) and os.access(executable, os.X_OK)):
             log.warning(f"MEGATOOLS_EXECUTABLE set but not usable: {executable}")
             executable = None
-    if not executable:
-        executable = shutil.which("megatools")
-        if executable:
-            log.info(f"Using system megatools: {executable}")
+        else:
+            if os.path.basename(executable).lower().startswith("megadl"):
+                use_megadl = True
+                log.info(f"Using megadl executable: {executable}")
 
-    mega = Megatools(executable=executable) if executable else Megatools()
+    if not executable and not use_megadl:
+        system_megatools = shutil.which("megatools")
+        if system_megatools:
+            executable = system_megatools
+            log.info(f"Using system megatools: {executable}")
+        else:
+            system_megadl = shutil.which("megadl")
+            if system_megadl:
+                executable = system_megadl
+                use_megadl = True
+                log.info(f"Using system megadl: {executable}")
+
+    def _pick_downloaded_file(before_files):
+        try:
+            after_files = [
+                f for f in os.listdir(_paths.down_path)
+                if os.path.isfile(os.path.join(_paths.down_path, f))
+            ]
+        except OSError:
+            return None
+
+        new_files = [f for f in after_files if f not in before_files]
+        candidates = new_files if new_files else after_files
+        if not candidates:
+            return None
+        return max(candidates, key=lambda f: os.path.getmtime(os.path.join(_paths.down_path, f)))
+
+    if use_megadl:
+        _messages.status_head = f"<b>DOWNLOADING FROM MEGA</b>\n\n<code>Link {str(num).zfill(2)}</code>\n"
+        before_files = set()
+        try:
+            before_files = {
+                f for f in os.listdir(_paths.down_path)
+                if os.path.isfile(os.path.join(_paths.down_path, f))
+            }
+        except OSError:
+            pass
+
+        cmd = [executable, "--path", _paths.down_path, link]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0 and "unrecognized" in (proc.stderr or "").lower():
+            cmd = [executable, f"--path={_paths.down_path}", link]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+
+        if proc.returncode != 0:
+            error_reason = (proc.stderr or proc.stdout or "megadl failed").strip()
+            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:200]}
+            if _task_error: _task_error.failed_links.append(failed_info)
+            log.error(f"Megadl failed for link {num}: {error_reason}")
+            return False
+
+        downloaded_name = _pick_downloaded_file(before_files)
+        if not downloaded_name:
+            error_reason = "Megadl finished but no output file detected"
+            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
+            if _task_error: _task_error.failed_links.append(failed_info)
+            log.error(error_reason)
+            return False
+
+        _transfer.successful_downloads.append({'url': link, 'filename': downloaded_name})
+        log.info(f"Megadl download complete: {downloaded_name}")
+        return True
+
+    if not executable:
+        error_reason = "Megatools binary not found; install megatools or provide MEGATOOLS_EXECUTABLE."
+        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
+        if _task_error: _task_error.failed_links.append(failed_info)
+        log.error(error_reason)
+        return False
+
+    mega = Megatools(executable=executable)
     success = False
     try:
         _messages.download_name = ""
