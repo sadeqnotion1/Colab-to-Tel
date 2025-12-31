@@ -15,10 +15,17 @@ log = logging.getLogger(__name__)
 
 
 
-async def megadl(link: str, num: int, task_ctx=None) -> bool: 
-    global BotTimes, Messages, Paths, TaskError, log, TRANSFER 
+def _is_folder_url(url: str) -> bool:
+    """Detect if a Mega URL is a folder URL that may not work with megadl."""
+    url_lower = url.lower()
+    # Folder URLs typically contain /folder/ or have /file/ after a folder path
+    return '/folder/' in url_lower or ('/file/' in url_lower and '#' in url and url.index('/file/') < url.index('#'))
 
-    intended_filename = "Unknown Mega File" 
+
+async def megadl(link: str, num: int, task_ctx=None) -> bool:
+    global BotTimes, Messages, Paths, TaskError, log, TRANSFER
+
+    intended_filename = "Unknown Mega File"
 
     if task_ctx:
         _paths = task_ctx.paths
@@ -35,32 +42,57 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
         _bot_times = BotTimes
         log.info("megadl() using global state (single-task mode)")
 
-    log.info(f"Starting Mega download for link index {num}") 
+    log.info(f"Starting Mega download for link index {num}")
     _bot_times.task_start = datetime.now()
+
+    is_folder_url = _is_folder_url(link)
+    if is_folder_url:
+        log.info(f"Detected folder-type Mega URL: {link}")
 
     executable = os.getenv("MEGATOOLS_EXECUTABLE") or os.getenv("MEGATOOLS_BIN")
     use_megadl = False
+    use_megatools_dl = False
 
     if executable:
         if not (os.path.isfile(executable) and os.access(executable, os.X_OK)):
             log.warning(f"MEGATOOLS_EXECUTABLE set but not usable: {executable}")
             executable = None
         else:
-            if os.path.basename(executable).lower().startswith("megadl"):
+            basename = os.path.basename(executable).lower()
+            if basename.startswith("megadl"):
                 use_megadl = True
                 log.info(f"Using megadl executable: {executable}")
+            elif basename == "megatools":
+                use_megatools_dl = True
+                log.info(f"Using megatools executable: {executable}")
 
-    if not executable and not use_megadl:
-        system_megatools = shutil.which("megatools")
-        if system_megatools:
-            executable = system_megatools
-            log.info(f"Using system megatools: {executable}")
+    if not executable:
+        # For folder URLs, prefer megatools over megadl since megadl can't handle them
+        if is_folder_url:
+            system_megatools = shutil.which("megatools")
+            if system_megatools:
+                executable = system_megatools
+                use_megatools_dl = True
+                log.info(f"Using system megatools for folder URL: {executable}")
+            else:
+                system_megadl = shutil.which("megadl")
+                if system_megadl:
+                    executable = system_megadl
+                    use_megadl = True
+                    log.warning(f"Folder URL detected but only megadl available (may fail): {executable}")
         else:
+            # For direct file URLs, prefer megadl for simplicity
             system_megadl = shutil.which("megadl")
             if system_megadl:
                 executable = system_megadl
                 use_megadl = True
                 log.info(f"Using system megadl: {executable}")
+            else:
+                system_megatools = shutil.which("megatools")
+                if system_megatools:
+                    executable = system_megatools
+                    use_megatools_dl = True
+                    log.info(f"Using system megatools: {executable}")
 
     def _pick_downloaded_file(before_files):
         try:
@@ -77,7 +109,8 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
             return None
         return max(candidates, key=lambda f: os.path.getmtime(os.path.join(_paths.down_path, f)))
 
-    if use_megadl:
+    if use_megadl or use_megatools_dl:
+        tool_name = "megadl" if use_megadl else "megatools"
         _messages.status_head = f"<b>DOWNLOADING FROM MEGA</b>\n\n<code>Link {str(num).zfill(2)}</code>\n"
         before_files = set()
         try:
@@ -88,18 +121,27 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
         except OSError:
             pass
 
-        variants = [
-            {"cmd": [executable, "--path", _paths.down_path, link], "cwd": None},
-            {"cmd": [executable, f"--path={_paths.down_path}", link], "cwd": None},
-            {"cmd": [executable, "-o", _paths.down_path, link], "cwd": None},
-            {"cmd": [executable, link], "cwd": _paths.down_path},
-        ]
+        # Build command variants based on the tool
+        if use_megatools_dl:
+            # megatools uses: megatools dl --path <dir> <url>
+            variants = [
+                {"cmd": [executable, "dl", "--path", _paths.down_path, link], "cwd": None},
+                {"cmd": [executable, "dl", f"--path={_paths.down_path}", link], "cwd": None},
+            ]
+        else:
+            # megadl uses: megadl --path <dir> <url> or megadl <url> (in target dir)
+            variants = [
+                {"cmd": [executable, "--path", _paths.down_path, link], "cwd": None},
+                {"cmd": [executable, f"--path={_paths.down_path}", link], "cwd": None},
+                {"cmd": [executable, link], "cwd": _paths.down_path},
+            ]
 
         last_stdout = ""
         last_stderr = ""
         last_returncode = None
 
-        for variant in variants:
+        for i, variant in enumerate(variants):
+            log.debug(f"Trying {tool_name} variant {i+1}/{len(variants)}: {' '.join(variant['cmd'])}")
             proc = subprocess.run(variant["cmd"], capture_output=True, text=True, cwd=variant["cwd"])
             last_stdout = proc.stdout or ""
             last_stderr = proc.stderr or ""
@@ -108,27 +150,87 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
             downloaded_name = _pick_downloaded_file(before_files)
             if downloaded_name:
                 _transfer.successful_downloads.append({'url': link, 'filename': downloaded_name})
-                log.info(f"Megadl download complete: {downloaded_name}")
+                log.info(f"{tool_name} download complete: {downloaded_name}")
                 return True
 
             if proc.returncode == 0 and "unrecognized" not in (proc.stderr or "").lower():
                 break
 
-        error_reason = (last_stderr or last_stdout or "megadl failed").strip()
-        if not error_reason:
-            error_reason = f"Megadl finished but no output file detected (exit {last_returncode})"
+        # Special error message for folder URLs with megadl
+        if is_folder_url and use_megadl:
+            error_reason = "megadl cannot handle folder URLs. Install 'megatools' package or use direct file links."
+        else:
+            error_reason = (last_stderr or last_stdout or f"{tool_name} failed").strip()
+            if not error_reason:
+                error_reason = f"{tool_name} finished but no output file detected (exit {last_returncode})"
+
         failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:200]}
         if _task_error: _task_error.failed_links.append(failed_info)
-        log.error(f"Megadl failed for link {num}: {error_reason}")
+        log.error(f"{tool_name} failed for link {num}: {error_reason}")
         return False
 
     if not executable:
-        error_reason = "Megatools binary not found; install megatools or provide MEGATOOLS_EXECUTABLE."
-        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
-        if _task_error: _task_error.failed_links.append(failed_info)
-        log.error(error_reason)
-        return False
+        log.warning("No megatools/megadl CLI binary found; falling back to pymegatools library (may have issues)")
 
+        # Try to use pymegatools library as last resort
+        mega = Megatools()
+        success = False
+        try:
+            _messages.download_name = ""
+
+            async def progress_cb(stream, process):
+                await pro_for_mega(stream, process, task_ctx)
+
+            await mega.async_download(link, progress=progress_cb, path=_paths.down_path)
+
+            intended_filename = _messages.download_name or intended_filename
+
+            final_filename = _messages.download_name or "Unknown Mega Download"
+            if not final_filename.startswith("Unknown"):
+                if os.path.exists(os.path.join(_paths.down_path, final_filename)):
+                    _transfer.successful_downloads.append({'url': link, 'filename': final_filename})
+                    success = True
+                else:
+                    log.error(f"Mega download finished for {link} but output file '{final_filename}' not found.")
+                    failed_info = {"link": link, "filename": final_filename, "index": num, "reason": "Output file not found post-download"}
+                    if _task_error: _task_error.failed_links.append(failed_info)
+                    success = False
+            else:
+                log.warning(f"Mega download finished for link {num}, but filename is unknown. Cannot confirm success.")
+                failed_info = {"link": link, "filename": "Unknown", "index": num, "reason": "Could not determine filename"}
+                if _task_error: _task_error.failed_links.append(failed_info)
+                success = False
+
+        except MegaError as e:
+            error_reason = f"MegaError: {e}"
+            log.error(f"An Error occurred during Mega download for link {num}: {error_reason}")
+
+            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
+            if _task_error: _task_error.failed_links.append(failed_info)
+            success = False
+        except OSError as e:
+            # errno 8 = Exec format error (binary download is broken/HTML)
+            if getattr(e, "errno", None) == 8 or "Exec format error" in str(e):
+                error_reason = "pymegatools binary download failed (404/HTML). Run: apt-get install megatools"
+                log.error(f"pymegatools binary download is broken. Install system megatools: {error_reason}")
+            else:
+                error_reason = f"OS error: {str(e)[:100]}"
+                log.error(f"Unexpected OS error during Mega download {link}: {error_reason}", exc_info=True)
+
+            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
+            if _task_error: _task_error.failed_links.append(failed_info)
+            success = False
+        except Exception as e:
+            error_reason = f"Unexpected Mega Error: {str(e)[:100]}"
+            log.error(f"Unexpected error during Mega download {link}: {e}", exc_info=True)
+
+            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
+            if _task_error: _task_error.failed_links.append(failed_info)
+            success = False
+
+        return success
+
+    # Use pymegatools with the found executable
     mega = Megatools(executable=executable)
     success = False
     try:
@@ -139,9 +241,9 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
 
         await mega.async_download(link, progress=progress_cb, path=_paths.down_path)
 
-        intended_filename = _messages.download_name or intended_filename 
+        intended_filename = _messages.download_name or intended_filename
 
-        final_filename = _messages.download_name or "Unknown Mega Download" 
+        final_filename = _messages.download_name or "Unknown Mega Download"
         if not final_filename.startswith("Unknown"):
             if os.path.exists(os.path.join(_paths.down_path, final_filename)):
                 _transfer.successful_downloads.append({'url': link, 'filename': final_filename})
@@ -153,7 +255,6 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
                 success = False
         else:
             log.warning(f"Mega download finished for link {num}, but filename is unknown. Cannot confirm success.")
-            # Assume failure if we don't know the filename? Or success? Let's assume failure.
             failed_info = {"link": link, "filename": "Unknown", "index": num, "reason": "Could not determine filename"}
             if _task_error: _task_error.failed_links.append(failed_info)
             success = False
@@ -166,11 +267,13 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
         if _task_error: _task_error.failed_links.append(failed_info)
         success = False
     except OSError as e:
-        if getattr(e, "errno", None) == 8:
-            error_reason = "Megatools binary invalid (Exec format). Install system megatools or set MEGATOOLS_EXECUTABLE."
+        # errno 8 = Exec format error (binary download is broken/HTML)
+        if getattr(e, "errno", None) == 8 or "Exec format error" in str(e):
+            error_reason = "pymegatools binary download failed (404/HTML). Run: apt-get install megatools"
+            log.error(f"pymegatools binary download is broken. Install system megatools: {error_reason}")
         else:
             error_reason = f"OS error: {str(e)[:100]}"
-        log.error(f"Unexpected error during Mega download {link}: {error_reason}", exc_info=True)
+            log.error(f"Unexpected OS error during Mega download {link}: {error_reason}", exc_info=True)
 
         failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
         if _task_error: _task_error.failed_links.append(failed_info)
@@ -178,7 +281,7 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
     except Exception as e:
         error_reason = f"Unexpected Mega Error: {str(e)[:100]}"
         log.error(f"Unexpected error during Mega download {link}: {e}", exc_info=True)
-  
+
         failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
         if _task_error: _task_error.failed_links.append(failed_info)
         success = False
