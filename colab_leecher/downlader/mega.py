@@ -116,10 +116,10 @@ async def pro_for_mega(stream, process, task_ctx=None):
         pass
 
     _messages.download_name = file_name
-    _messages.status_head = f"<b>???? DOWNLOADING FROM MEGA ?? </b>
-
-<b>??????? Name ?? </b><code>{file_name}</code>
-"
+    _messages.status_head = (
+        f"<b>DOWNLOADING FROM MEGA</b>\n\n"
+        f"<b>Name</b> <code>{file_name}</code>\n"
+    )
 
     await status_bar(
         _messages.status_head,
