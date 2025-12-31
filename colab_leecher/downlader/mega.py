@@ -46,8 +46,24 @@ def _is_file_in_folder_url(url: str) -> bool:
     return '/folder/' in url_lower and '/file/' in url_lower
 
 
-async def megadl(link: str, num: int, task_ctx=None) -> bool:
+async def megadl(link: str, num: int, task_ctx=None, _recursion_depth: int = 0) -> bool:
+    """Download a file from Mega.nz.
+
+    Args:
+        link: Mega URL to download
+        num: Link index number for logging
+        task_ctx: Optional task context for multi-task support
+        _recursion_depth: Internal parameter to prevent infinite recursion (max 1 retry)
+
+    Returns:
+        bool: True if download succeeded, False otherwise
+    """
     global BotTimes, Messages, Paths, TaskError, log, TRANSFER
+
+    # Prevent infinite recursion from installation retry
+    if _recursion_depth > 1:
+        log.error(f"Maximum recursion depth exceeded for Mega download {link}. Aborting to prevent infinite loop.")
+        return False
 
     intended_filename = "Unknown Mega File"
 
@@ -99,12 +115,16 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
                 executable = None
             else:
                 basename = os.path.basename(executable).lower()
-                if basename.startswith("megadl"):
+                # Use exact match to avoid matching unwanted binaries like "megadl.old" or "megadl_backup"
+                if basename == "megadl":
                     use_megadl = True
                     log.info(f"Using megadl executable: {executable}")
                 elif basename == "megatools":
                     use_megatools_dl = True
                     log.info(f"Using megatools executable: {executable}")
+                else:
+                    log.warning(f"MEGATOOLS_EXECUTABLE points to unknown binary: {basename}. Ignoring.")
+                    executable = None
 
         if not executable:
             # For direct file URLs, prefer megadl for simplicity
@@ -122,19 +142,32 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
                     log.info(f"Using system megatools: {executable}")
 
     def _pick_downloaded_file(before_files):
+        """Pick the most recently downloaded file from the download directory.
+
+        Args:
+            before_files: Set of filenames that existed before download
+
+        Returns:
+            str: Filename of the downloaded file, or None if not found
+        """
         try:
             after_files = [
                 f for f in os.listdir(_paths.down_path)
                 if os.path.isfile(os.path.join(_paths.down_path, f))
             ]
-        except OSError:
+        except OSError as e:
+            log.warning(f"Failed to list download directory {_paths.down_path}: {e}")
             return None
 
         new_files = [f for f in after_files if f not in before_files]
         candidates = new_files if new_files else after_files
         if not candidates:
+            log.debug("No candidate files found in download directory")
             return None
-        return max(candidates, key=lambda f: os.path.getmtime(os.path.join(_paths.down_path, f)))
+
+        picked_file = max(candidates, key=lambda f: os.path.getmtime(os.path.join(_paths.down_path, f)))
+        log.debug(f"Picked downloaded file: {picked_file} (from {len(candidates)} candidates)")
+        return picked_file
 
     if use_megadl or use_megatools_dl:
         tool_name = "megadl" if use_megadl else "megatools"
@@ -248,34 +281,67 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
                 log.error(f"pymegatools binary download failed. Attempting to install system megatools package...")
 
                 # Try to install system megatools as fallback
-                try:
-                    log.info("Running: apt-get update && apt-get install -y megatools")
-                    install_result = subprocess.run(
-                        "apt-get update && apt-get install -y megatools",
-                        shell=True,
-                        capture_output=True,
-                        text=True,
-                        timeout=120
-                    )
+                # Only attempt if recursion depth allows and OS is Debian-based
+                if _recursion_depth == 0 and shutil.which("apt-get") is not None:
+                    try:
+                        # Check if we have necessary permissions (can write to /tmp as proxy)
+                        import tempfile
+                        try:
+                            with tempfile.NamedTemporaryFile(dir="/tmp", delete=True):
+                                pass
+                            has_write_access = True
+                        except (OSError, PermissionError):
+                            has_write_access = False
 
-                    if install_result.returncode == 0:
-                        log.info("Successfully installed system megatools package.")
-
-                        # Check if megatools is now available
-                        megatools_path = shutil.which("megatools")
-                        if megatools_path:
-                            log.info(f"System megatools found at {megatools_path}. Retrying download with CLI tool...")
-
-                            # Retry with megatools CLI - use recursive call with environment variable set
-                            os.environ["MEGATOOLS_EXECUTABLE"] = megatools_path
-                            return await megadl(link, num, task_ctx)
+                        if not has_write_access:
+                            log.warning("Insufficient permissions to install system packages. Try running as root or with sudo.")
                         else:
-                            log.warning("megatools installed but not found in PATH")
-                    else:
-                        log.error(f"Failed to install megatools: {install_result.stderr}")
+                            log.info("Running: apt-get update && apt-get install -y megatools")
 
-                except Exception as install_err:
-                    log.error(f"Error installing megatools: {install_err}")
+                            # Run apt-get update first (separate command for better error handling)
+                            update_result = subprocess.run(
+                                ["apt-get", "update"],
+                                capture_output=True,
+                                text=True,
+                                timeout=60
+                            )
+
+                            if update_result.returncode != 0:
+                                log.warning(f"apt-get update failed: {update_result.stderr[:200]}")
+
+                            # Try to install megatools
+                            install_result = subprocess.run(
+                                ["apt-get", "install", "-y", "megatools"],
+                                capture_output=True,
+                                text=True,
+                                timeout=120
+                            )
+
+                            if install_result.returncode == 0:
+                                log.info("Successfully installed system megatools package.")
+
+                                # Check if megatools is now available
+                                megatools_path = shutil.which("megatools")
+                                if megatools_path:
+                                    log.info(f"System megatools found at {megatools_path}. Retrying download with CLI tool...")
+
+                                    # Retry with megatools CLI - pass incremented recursion depth
+                                    os.environ["MEGATOOLS_EXECUTABLE"] = megatools_path
+                                    return await megadl(link, num, task_ctx, _recursion_depth=_recursion_depth + 1)
+                                else:
+                                    log.warning("megatools installed but not found in PATH")
+                            else:
+                                log.error(f"Failed to install megatools (exit {install_result.returncode}): {install_result.stderr[:200]}")
+
+                    except subprocess.TimeoutExpired:
+                        log.error("Installation timed out after 120 seconds")
+                    except Exception as install_err:
+                        log.error(f"Error installing megatools: {install_err}")
+                else:
+                    if _recursion_depth > 0:
+                        log.warning("Skipping megatools installation retry (already attempted once)")
+                    elif shutil.which("apt-get") is None:
+                        log.warning("apt-get not found. System is not Debian/Ubuntu-based. Cannot auto-install megatools.")
 
                 error_reason = "pymegatools binary download failed (404/HTML). Tried to install system megatools but failed"
                 if is_folder_url or is_file_in_folder:
@@ -302,73 +368,12 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
 
         return success
 
-    # Use pymegatools with the found executable
-    mega = Megatools(executable=executable)
-    success = False
-    try:
-        _messages.download_name = ""
-
-        async def progress_cb(stream, process):
-            await pro_for_mega(stream, process, task_ctx)
-
-        await mega.async_download(link, progress=progress_cb, path=_paths.down_path)
-
-        intended_filename = _messages.download_name or intended_filename
-
-        final_filename = _messages.download_name or "Unknown Mega Download"
-        if not final_filename.startswith("Unknown"):
-            if os.path.exists(os.path.join(_paths.down_path, final_filename)):
-                _transfer.successful_downloads.append({'url': link, 'filename': final_filename})
-                success = True
-            else:
-                log.error(f"Mega download finished for {link} but output file '{final_filename}' not found.")
-                failed_info = {"link": link, "filename": final_filename, "index": num, "reason": "Output file not found post-download"}
-                if _task_error: _task_error.failed_links.append(failed_info)
-                success = False
-        else:
-            log.warning(f"Mega download finished for link {num}, but filename is unknown. Cannot confirm success.")
-            failed_info = {"link": link, "filename": "Unknown", "index": num, "reason": "Could not determine filename"}
-            if _task_error: _task_error.failed_links.append(failed_info)
-            success = False
-
-    except MegaError as e:
-        error_reason = f"MegaError: {e}"
-        log.error(f"An Error occurred during Mega download for link {num}: {error_reason}")
-
-        if is_folder_url:
-            error_reason += ". Folder URLs may not be supported. Try using the direct file link instead."
-
-        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:250]}
-        if _task_error: _task_error.failed_links.append(failed_info)
-        success = False
-    except OSError as e:
-        # errno 8 = Exec format error (binary download is broken/HTML)
-        if getattr(e, "errno", None) == 8 or "Exec format error" in str(e):
-            error_reason = "pymegatools binary download failed (404/HTML). Install system megatools: apt-get install megatools"
-            log.error(f"pymegatools binary download is broken. Install system megatools: {error_reason}")
-            if is_folder_url:
-                error_reason += ". For folder URLs, try converting to direct file link format."
-        else:
-            error_reason = f"OS error: {str(e)[:100]}"
-            log.error(f"Unexpected OS error during Mega download {link}: {error_reason}", exc_info=True)
-            if is_folder_url:
-                error_reason += ". Folder URLs may require special handling."
-
-        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:250]}
-        if _task_error: _task_error.failed_links.append(failed_info)
-        success = False
-    except Exception as e:
-        error_reason = f"Unexpected Mega Error: {str(e)[:100]}"
-        log.error(f"Unexpected error during Mega download {link}: {e}", exc_info=True)
-
-        if is_folder_url:
-            error_reason += ". Folder URLs may not be supported. Try converting to direct file link."
-
-        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:250]}
-        if _task_error: _task_error.failed_links.append(failed_info)
-        success = False
-
-    return success
+    # If we reach here, something went wrong in the logic
+    # This should never happen based on the flow above
+    log.error(f"Unexpected code path reached for Mega download {link}. No download method was triggered.")
+    failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": "Internal error: No download method selected"}
+    if _task_error: _task_error.failed_links.append(failed_info)
+    return False
 
 async def pro_for_mega(stream, process, task_ctx=None):
     global Messages, BotTimes
@@ -400,8 +405,12 @@ async def pro_for_mega(stream, process, task_ctx=None):
             remaining_seconds = remaining_bytes / bytes_per_second
             eta = getTime(remaining_seconds)
 
-    except Exception:
-        pass
+    except (IndexError, ValueError, AttributeError) as e:
+        # Progress line format doesn't match expected pattern - use defaults
+        log.debug(f"Could not parse Mega progress line (using defaults): {e}")
+    except Exception as e:
+        # Unexpected error - log it but continue
+        log.warning(f"Unexpected error parsing Mega progress: {e}")
 
     _messages.download_name = file_name
     _messages.status_head = (
