@@ -88,30 +88,39 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
         except OSError:
             pass
 
-        cmd = [executable, "--path", _paths.down_path, link]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode != 0 and "unrecognized" in (proc.stderr or "").lower():
-            cmd = [executable, f"--path={_paths.down_path}", link]
-            proc = subprocess.run(cmd, capture_output=True, text=True)
+        variants = [
+            {"cmd": [executable, "--path", _paths.down_path, link], "cwd": None},
+            {"cmd": [executable, f"--path={_paths.down_path}", link], "cwd": None},
+            {"cmd": [executable, "-o", _paths.down_path, link], "cwd": None},
+            {"cmd": [executable, link], "cwd": _paths.down_path},
+        ]
 
-        if proc.returncode != 0:
-            error_reason = (proc.stderr or proc.stdout or "megadl failed").strip()
-            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:200]}
-            if _task_error: _task_error.failed_links.append(failed_info)
-            log.error(f"Megadl failed for link {num}: {error_reason}")
-            return False
+        last_stdout = ""
+        last_stderr = ""
+        last_returncode = None
 
-        downloaded_name = _pick_downloaded_file(before_files)
-        if not downloaded_name:
-            error_reason = "Megadl finished but no output file detected"
-            failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
-            if _task_error: _task_error.failed_links.append(failed_info)
-            log.error(error_reason)
-            return False
+        for variant in variants:
+            proc = subprocess.run(variant["cmd"], capture_output=True, text=True, cwd=variant["cwd"])
+            last_stdout = proc.stdout or ""
+            last_stderr = proc.stderr or ""
+            last_returncode = proc.returncode
 
-        _transfer.successful_downloads.append({'url': link, 'filename': downloaded_name})
-        log.info(f"Megadl download complete: {downloaded_name}")
-        return True
+            downloaded_name = _pick_downloaded_file(before_files)
+            if downloaded_name:
+                _transfer.successful_downloads.append({'url': link, 'filename': downloaded_name})
+                log.info(f"Megadl download complete: {downloaded_name}")
+                return True
+
+            if proc.returncode == 0 and "unrecognized" not in (proc.stderr or "").lower():
+                break
+
+        error_reason = (last_stderr or last_stdout or "megadl failed").strip()
+        if not error_reason:
+            error_reason = f"Megadl finished but no output file detected (exit {last_returncode})"
+        failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason[:200]}
+        if _task_error: _task_error.failed_links.append(failed_info)
+        log.error(f"Megadl failed for link {num}: {error_reason}")
+        return False
 
     if not executable:
         error_reason = "Megatools binary not found; install megatools or provide MEGATOOLS_EXECUTABLE."
