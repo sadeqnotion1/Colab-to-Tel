@@ -34,6 +34,18 @@ def _is_folder_url(url: str) -> bool:
     return '/folder/' in url_lower
 
 
+def _is_file_in_folder_url(url: str) -> bool:
+    """Detect if a Mega URL is a file within a folder path.
+
+    These URLs have both /folder/ and /file/ components and typically look like:
+    https://mega.nz/folder/ABC#key/file/XYZ
+
+    These URLs cannot be handled by megadl CLI tool and require pymegatools library.
+    """
+    url_lower = url.lower()
+    return '/folder/' in url_lower and '/file/' in url_lower
+
+
 async def megadl(link: str, num: int, task_ctx=None) -> bool:
     global BotTimes, Messages, Paths, TaskError, log, TRANSFER
 
@@ -58,13 +70,20 @@ async def megadl(link: str, num: int, task_ctx=None) -> bool:
     _bot_times.task_start = datetime.now()
 
     is_folder_url = _is_folder_url(link)
+    is_file_in_folder = _is_file_in_folder_url(link)
+
     if is_folder_url:
         log.info(f"Detected folder-type Mega URL: {link}")
+    if is_file_in_folder:
+        log.info(f"Detected file-within-folder Mega URL: {link}")
 
-    # For folder URLs, skip ALL CLI tools and use pymegatools library directly
-    # CLI tools like megadl cannot handle folder URLs properly
-    if is_folder_url:
-        log.info("Folder URL detected. Skipping CLI tools and using pymegatools library (may handle folder URLs better)...")
+    # For folder URLs or file-within-folder URLs, skip ALL CLI tools and use pymegatools library directly
+    # CLI tools like megadl cannot handle these URL formats properly
+    if is_folder_url or is_file_in_folder:
+        if is_folder_url:
+            log.info("Folder URL detected. Skipping CLI tools and using pymegatools library (may handle folder URLs better)...")
+        else:
+            log.info("File-within-folder URL detected. Skipping CLI tools (megadl doesn't support this format) and using pymegatools library...")
         executable = None
         use_megadl = False
         use_megatools_dl = False
