@@ -1924,7 +1924,44 @@ async def extract_and_upload_streaming(
         return False
 
     # Get list of members to extract
-    members = rar_ref.infolist()
+    try:
+        members = rar_ref.infolist()
+    except rarfile.PasswordRequired:
+        log.warning(f"RAR requires password (deferred check during infolist). Prompting user...")
+
+        # Store context for password retry
+        BOT.State.password_retry_context = {
+            'rar_filepath': rar_filepath,
+            'password': password,
+            'file_filter': file_filter,
+            'task_ctx': task_ctx,
+            'function': 'extract_and_upload_streaming'
+        }
+
+        # Prompt user for password
+        await prompt_for_password(os.path.basename(rar_filepath), error_type="required")
+
+        # Return False but don't set task error yet - we're waiting for password
+        log.info("Waiting for user to provide password via Telegram...")
+        return False
+    except rarfile.BadRarPassword:
+        log.warning(f"Incorrect password for RAR (deferred check during infolist). Prompting user...")
+
+        # Store context for password retry
+        BOT.State.password_retry_context = {
+            'rar_filepath': rar_filepath,
+            'password': password,
+            'file_filter': file_filter,
+            'task_ctx': task_ctx,
+            'function': 'extract_and_upload_streaming'
+        }
+
+        # Prompt user for correct password
+        await prompt_for_password(os.path.basename(rar_filepath), error_type="incorrect")
+
+        # Return False but don't set task error yet - we're waiting for password
+        log.info("Waiting for user to provide correct password via Telegram...")
+        return False
 
     # Apply file filter if provided
     if file_filter:
@@ -2006,6 +2043,40 @@ async def extract_and_upload_streaming(
                         import shutil
                         shutil.copyfileobj(source, dest, length=1024 * 1024)  # 1 MB chunks
                 log.info(f"Extracted to temp: {temp_file_path}")
+            except rarfile.PasswordRequired:
+                log.warning(f"RAR requires password (deferred check during extraction). Prompting user...")
+                rar_ref.close()
+
+                # Store context for password retry
+                BOT.State.password_retry_context = {
+                    'rar_filepath': rar_filepath,
+                    'password': password,
+                    'file_filter': file_filter,
+                    'task_ctx': task_ctx,
+                    'function': 'extract_and_upload_streaming'
+                }
+
+                # Prompt user for password
+                await prompt_for_password(os.path.basename(rar_filepath), error_type="required")
+                log.info("Waiting for user to provide password via Telegram...")
+                return False
+            except rarfile.BadRarPassword:
+                log.warning(f"Incorrect password for RAR (deferred check during extraction). Prompting user...")
+                rar_ref.close()
+
+                # Store context for password retry
+                BOT.State.password_retry_context = {
+                    'rar_filepath': rar_filepath,
+                    'password': password,
+                    'file_filter': file_filter,
+                    'task_ctx': task_ctx,
+                    'function': 'extract_and_upload_streaming'
+                }
+
+                # Prompt user for correct password
+                await prompt_for_password(os.path.basename(rar_filepath), error_type="incorrect")
+                log.info("Waiting for user to provide correct password via Telegram...")
+                return False
             except rarfile.BadRarFile as e:
                 # Handle corrupt/incomplete RAR members
                 log.error(f"RAR extraction error for {member.filename}: {e}")
