@@ -135,10 +135,10 @@ async def TelegramDownload(link, num, task_ctx=None) -> bool: # Added return typ
     if hasattr(media, "file_size") and media.file_size: file_size = media.file_size
     else: log.warning(f"Could not get file size for msg {message.id}")
 
-    _messages.status_head = f"<b>???? DOWNLOADING FROM TG ?? </b><i>????Link {str(num).zfill(2)}</i>
-
-<code>{name}</code>
-"
+    _messages.status_head = (
+        f"<b>DOWNLOADING FROM TG</b> <i>Link {str(num).zfill(2)}</i>\n\n"
+        f"<code>{name}</code>\n"
+    )
     log.info(f"Starting TG download: {name} (Size: {sizeUnit(file_size)})")
     os.makedirs(_paths.down_path, exist_ok=True)
     file_path = os.path.join(_paths.down_path, name)

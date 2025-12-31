@@ -14,58 +14,82 @@ log = logging.getLogger(__name__)
 
 
 
-async def megadl(link: str, num: int) -> bool: 
+async def megadl(link: str, num: int, task_ctx=None) -> bool: 
     global BotTimes, Messages, Paths, TaskError, log, TRANSFER 
 
     intended_filename = "Unknown Mega File" 
 
+    if task_ctx:
+        _paths = task_ctx.paths
+        _messages = task_ctx.messages
+        _task_error = task_ctx.task_error
+        _transfer = task_ctx.transfer
+        _bot_times = task_ctx.bot_times
+        log.info(f"megadl() using TaskContext for task_id: {task_ctx.task_id}")
+    else:
+        _paths = Paths
+        _messages = Messages
+        _task_error = TaskError
+        _transfer = TRANSFER
+        _bot_times = BotTimes
+        log.info("megadl() using global state (single-task mode)")
+
     log.info(f"Starting Mega download for link index {num}") 
-    BotTimes.task_start = datetime.now()
+    _bot_times.task_start = datetime.now()
     mega = Megatools()
     success = False
     try:
+        _messages.download_name = ""
 
-        Messages.download_name = ""
-        await mega.async_download(link, progress=pro_for_mega, path=Paths.down_path)
+        async def progress_cb(stream, process):
+            await pro_for_mega(stream, process, task_ctx)
 
-        intended_filename = Messages.download_name or intended_filename 
+        await mega.async_download(link, progress=progress_cb, path=_paths.down_path)
 
-        final_filename = Messages.download_name or "Unknown Mega Download" 
+        intended_filename = _messages.download_name or intended_filename 
+
+        final_filename = _messages.download_name or "Unknown Mega Download" 
         if not final_filename.startswith("Unknown"):
-            
-             if os.path.exists(os.path.join(Paths.down_path, final_filename)):
-                  TRANSFER.successful_downloads.append({'url': link, 'filename': final_filename})
-                  success = True
-             else:
-                  log.error(f"Mega download finished for {link} but output file '{final_filename}' not found.")
-                  failed_info = {"link": link, "filename": final_filename, "index": num, "reason": "Output file not found post-download"}
-                  if TaskError: TaskError.failed_links.append(failed_info)
-                  success = False
+            if os.path.exists(os.path.join(_paths.down_path, final_filename)):
+                _transfer.successful_downloads.append({'url': link, 'filename': final_filename})
+                success = True
+            else:
+                log.error(f"Mega download finished for {link} but output file '{final_filename}' not found.")
+                failed_info = {"link": link, "filename": final_filename, "index": num, "reason": "Output file not found post-download"}
+                if _task_error: _task_error.failed_links.append(failed_info)
+                success = False
         else:
-             log.warning(f"Mega download finished for link {num}, but filename is unknown. Cannot confirm success.")
-             # Assume failure if we don't know the filename? Or success? Let's assume failure.
-             failed_info = {"link": link, "filename": "Unknown", "index": num, "reason": "Could not determine filename"}
-             if TaskError: TaskError.failed_links.append(failed_info)
-             success = False
+            log.warning(f"Mega download finished for link {num}, but filename is unknown. Cannot confirm success.")
+            # Assume failure if we don't know the filename? Or success? Let's assume failure.
+            failed_info = {"link": link, "filename": "Unknown", "index": num, "reason": "Could not determine filename"}
+            if _task_error: _task_error.failed_links.append(failed_info)
+            success = False
 
     except MegaError as e:
         error_reason = f"MegaError: {e}"
         log.error(f"An Error occurred during Mega download for link {num}: {error_reason}")
 
         failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
-        if TaskError: TaskError.failed_links.append(failed_info)
+        if _task_error: _task_error.failed_links.append(failed_info)
         success = False
     except Exception as e:
         error_reason = f"Unexpected Mega Error: {str(e)[:100]}"
         log.error(f"Unexpected error during Mega download {link}: {e}", exc_info=True)
   
         failed_info = {"link": link, "filename": intended_filename, "index": num, "reason": error_reason}
-        if TaskError: TaskError.failed_links.append(failed_info)
+        if _task_error: _task_error.failed_links.append(failed_info)
         success = False
 
     return success
 
-async def pro_for_mega(stream, process):
+async def pro_for_mega(stream, process, task_ctx=None):
+    global Messages, BotTimes
+    if task_ctx:
+        _messages = task_ctx.messages
+        log.info(f"pro_for_mega() using TaskContext for task_id: {task_ctx.task_id}")
+    else:
+        _messages = Messages
+
     line = stream[-1]
     file_name = "N/A"
     percentage = 0
@@ -82,7 +106,6 @@ async def pro_for_mega(stream, process):
         total_size = ok[7] + " " + ok[8]
         speed = ok[9][1:] + " " + ok[10][:-1]
 
-        
         remaining_bytes = float(ok[7]) - float(ok[2])
         bytes_per_second = float(ok[9][1:]) * (1024 if ok[10][-1] == 'K' else 1)  # Convert KB/s to bytes/s if necessary
         if bytes_per_second != 0:
@@ -92,15 +115,19 @@ async def pro_for_mega(stream, process):
     except Exception:
         pass
 
-    Messages.download_name = file_name
-    Messages.status_head = f"<b>📥 DOWNLOADING FROM MEGA » </b>\n\n<b>🏷️ Name » </b><code>{file_name}</code>\n"
+    _messages.download_name = file_name
+    _messages.status_head = f"<b>???? DOWNLOADING FROM MEGA ?? </b>
+
+<b>??????? Name ?? </b><code>{file_name}</code>
+"
 
     await status_bar(
-        Messages.status_head,
+        _messages.status_head,
         speed,
         percentage,
         eta,
         downloaded_size,
         total_size,
         "Mega",
+        task_ctx=task_ctx,
     )
