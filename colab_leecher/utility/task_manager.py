@@ -1053,6 +1053,13 @@ async def Do_Leech(source, is_dir, is_ytdl, is_zip, is_unzip, is_dualzip, is_str
                         _task_error.text = ""
                     continue # Skip to the next iteration of the loop
 
+                # 4.5. Smart Name Update - Update download_name based on what was actually downloaded
+                # This ensures batch downloads get correct archive names (not just the last file)
+                from ..utility.helper import update_download_name_from_directory
+                log.info(f"Updating download_name based on files in: {batch_download_path}")
+                smart_name = update_download_name_from_directory(batch_download_path, task_ctx)
+                log.info(f"Smart name determined: {smart_name}")
+
                 # --- 5. Process and Upload Step (Inside its own try/except) ---
                 # This block executes only if download succeeded (or failed but left files) AND dir is not empty
                 log.info(f"Processing/Uploading downloaded files for batch {i//batch_size + 1}...")

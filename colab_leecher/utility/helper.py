@@ -21,6 +21,11 @@ from pyrogram.errors import MessageNotModified
 from .variables import BOT, MSG, BotTimes, Messages, Paths, TRANSFER
 from .task_context import TaskContext  # NEW: Import for multi-task support
 
+# Enhanced UI Components
+from .ui_components import Emoji, ProgressBar, TimeFormatter, SizeFormatter
+from .keyboard_layouts import quick_cancel
+from .enhanced_status import create_download_status, create_upload_status
+
 # Setup logger
 log = logging.getLogger(__name__)
 
@@ -1396,98 +1401,129 @@ async def send_settings(client, message, msg_id, is_command: bool):
 
 async def status_bar(down_msg, speed, percentage, eta, done, total_size, engine, use_custom_text: bool = False, task_ctx: TaskContext = None):
     """
-    Update progress bar for download/upload tasks.
+    Update progress bar for download/upload tasks - NOW WITH ENHANCED UI!
 
     Args:
-        task_ctx: Optional TaskContext for per-task state (NEW in Phase 3)
-                  If provided, uses task_ctx.status_msg and task_ctx.started_at
-                  If None, falls back to global MSG and BotTimes (backward compat)
+        down_msg: Header text or custom formatted message
+        speed: Speed in MB/s (will be converted to bytes/s for formatter)
+        percentage: Progress percentage (0-100)
+        eta: ETA string or seconds
+        done: Downloaded bytes or formatted string
+        total_size: Total bytes or formatted string
+        engine: Download engine name
+        use_custom_text: If True, use down_msg as complete text
+        task_ctx: Optional TaskContext for per-task state
     """
-    global MSG, Messages, BotTimes, log # Ensure necessary globals are accessible
+    global MSG, Messages, BotTimes, log
 
-    # Debug logging added as requested
     task_id_str = f"[{task_ctx.get_short_id()}]" if task_ctx else "[legacy]"
-    log.debug(f"status_bar {task_id_str} called. use_custom_text={use_custom_text}, Speed='{speed}', Pct='{percentage}', ETA='{eta}', Done='{done}', Total='{total_size}'")
+    log.debug(f"status_bar {task_id_str} called. Enhanced UI mode!")
 
-    # Throttle updates using isTimeOver helper function
+    # Throttle updates
     if not isTimeOver(2.5):
         log.debug(f"status_bar {task_id_str}: Interval not passed, skipping update.")
-        return  # Check interval
+        return
 
-    # NEW: Use task_ctx.status_msg if available, otherwise fall back to global MSG
+    # Get status message
     status_msg = task_ctx.status_msg if task_ctx else MSG.status_msg
 
     if status_msg and hasattr(status_msg, 'edit_text'):
-        final_text = ""
         try:
             if use_custom_text:
-                # Using custom text (likely from 7z archive progress)
+                # Custom text mode (for 7z etc.)
                 log.debug("status_bar using custom text mode.")
-                # Assumes down_msg is the full pre-formatted text from the caller
-                final_text = down_msg + sysINFO() # Append system info
+                final_text = down_msg + sysINFO()
+                kb_markup = keyboard(task_ctx.task_id if task_ctx else None)
             else:
-                # Standard formatting mode
-                log.debug("status_bar using standard formatting mode.")
-                bar_length = 12 # Length of the progress bar
+                # ✨ ENHANCED UI MODE ✨
+                log.debug("status_bar using ENHANCED UI mode!")
 
-                # Ensure percentage is treated as a number for calculation
+                # Get task info
+                task_id = task_ctx.task_id if task_ctx else None
+
+                # Get filename from Transfer or down_msg
+                from .variables import Transfer
+                filename = Transfer.name if hasattr(Transfer, 'name') else "Downloading..."
+
+                # Convert speed from MB/s string to bytes/s if needed
                 try:
-                    percentage_float = float(percentage)
-                except (ValueError, TypeError):
-                    log.warning(f"status_bar received invalid percentage type: {percentage}. Defaulting to 0.")
-                    percentage_float = 0.0
+                    if isinstance(speed, str):
+                        # Remove "MB/s" and convert
+                        speed_value = float(speed.replace("MB/s", "").strip())
+                        speed_bytes = int(speed_value * 1024 * 1024)
+                    else:
+                        speed_bytes = int(float(speed) * 1024 * 1024)
+                except:
+                    speed_bytes = 0
 
-                # Calculate filled part of the bar
-                filled_length = min(bar_length, max(0, int(percentage_float / 100 * bar_length)))
-                # Create the bar string (Corrected variable name from previous analysis)
-                bar = "█" * filled_length + "░" * (bar_length - filled_length)
+                # Convert done/total to bytes if they're strings
+                try:
+                    if isinstance(done, str):
+                        # Already formatted, parse it back
+                        done_bytes = int(done.split()[0].replace(",", ""))  # Rough approximation
+                    else:
+                        done_bytes = int(done)
+                except:
+                    done_bytes = 0
 
-                eta_str = eta # Use eta string passed directly
+                try:
+                    if isinstance(total_size, str):
+                        total_bytes = int(total_size.split()[0].replace(",", ""))
+                    else:
+                        total_bytes = int(total_size)
+                except:
+                    total_bytes = 1
 
-                # NEW: Calculate elapsed time from task_ctx if available, otherwise use global
-                if task_ctx and task_ctx.started_at:
-                    elapsed_seconds = (datetime.now() - task_ctx.started_at).seconds
-                else:
-                    elapsed_seconds = (datetime.now() - BotTimes.task_start).seconds
-                elapsed_str = getTime(elapsed_seconds)
+                # Convert ETA to seconds if it's a string
+                try:
+                    if isinstance(eta, str):
+                        # Parse strings like "2m 30s" - rough approximation
+                        eta_seconds = 0
+                        if 'h' in eta:
+                            eta_seconds += int(eta.split('h')[0]) * 3600
+                        if 'm' in eta:
+                            eta_seconds += int(eta.split('m')[0].split()[-1]) * 60
+                        if 's' in eta:
+                            eta_seconds += int(eta.split('s')[0].split()[-1])
+                    else:
+                        eta_seconds = float(eta)
+                except:
+                    eta_seconds = None
 
-                # Format the main body of the status message
-                text_body = (f"\n╭「{bar}」 **»** __{percentage_float:.1f}%__" # Display percentage with one decimal
-                             f"\n├⚡️ **Speed »** **{str(speed)}**"
-                             f"\n├⚙️ **Engine »** **{str(engine)}**"
-                             f"\n├⏳ **ETA »** __{eta_str}__"
-                             f"\n├⏱️ **Elapsed »** __{elapsed_str}__"
-                             f"\n├✅ **Done »** **{str(done)}**"
-                             f"\n╰📦 **Total »** __{str(total_size)}__")
+                # 🎨 Create beautiful status message!
+                final_text, kb_markup = create_download_status(
+                    filename=filename,
+                    progress=float(percentage),
+                    speed=speed_bytes,
+                    downloaded=done_bytes,
+                    total_size=total_bytes,
+                    eta=eta_seconds,
+                    engine=engine,
+                    task_id=task_id,
+                    style="modern"  # Change to "compact" or "classic" if you prefer
+                )
 
-                # Combine the header (down_msg), body, and system info
-                final_text = down_msg + text_body + sysINFO()
+                # Add system info
+                final_text += sysINFO()
 
-            # --- Edit the Telegram message ---
-            kb_markup = keyboard() # Get the cancel keyboard
             log.debug(f"Attempting to edit status message {status_msg.id}")
 
-            # Check if message is a photo (has thumbnail) or plain text
+            # Edit message (handles both photo and text)
             if hasattr(status_msg, 'photo') and status_msg.photo:
-                # Message has a photo/thumbnail - edit caption to preserve thumbnail
                 await status_msg.edit_caption(caption=final_text, reply_markup=kb_markup)
-                log.debug(f"Status message caption edited (thumbnail preserved).")
+                log.debug(f"Status message caption edited (enhanced UI).")
             else:
-                # Plain text message - edit text normally
                 await status_msg.edit_text(text=final_text, disable_web_page_preview=True, reply_markup=kb_markup)
-                log.debug(f"Status message text edited.")
+                log.debug(f"Status message text edited (enhanced UI).")
 
         except MessageNotModified:
-            # This is expected if the message content hasn't changed, ignore it silently
             log.debug("Status message content hasn't changed, skipping edit.")
             pass
         except Exception as e:
-            # Log other errors during message editing
-            if "Message to edit not found" not in str(e): # Avoid logging if message was deleted
+            if "Message to edit not found" not in str(e):
                 log.warning(f"Status bar update failed: {str(e)}")
 
     else:
-         # Log if the status message object is missing or invalid
          if not status_msg:
              log.debug(f"status_bar {task_id_str}: status_msg is not set.")
          elif not hasattr(status_msg, 'edit_text'):
@@ -1751,3 +1787,116 @@ async def fetch_filenames_from_url(url: str) -> list[str] | None:
         return None # Return None on other errors
 
 # <<< END OF NEW FUNCTION >>>
+
+
+def update_download_name_from_directory(directory_path: str, task_ctx: TaskContext = None) -> str:
+    """Intelligently updates download_name based on files in the directory.
+
+    This function inspects the downloaded files and creates a smart archive name:
+    - Single file: uses that filename
+    - Multiple files: extracts common prefix or uses smart naming
+
+    Args:
+        directory_path: Path to directory containing downloaded files
+        task_ctx: Optional TaskContext for multi-task support
+
+    Returns:
+        The determined name (without path, without extension for archives)
+    """
+    global Messages, log
+
+    # Multi-task support
+    if task_ctx:
+        _messages = task_ctx.messages
+    else:
+        _messages = Messages
+
+    if not ospath.exists(directory_path) or not ospath.isdir(directory_path):
+        log.warning(f"update_download_name_from_directory: Invalid path: {directory_path}")
+        return _messages.download_name or "Download"
+
+    try:
+        # Get all files in directory (excluding .aria2 temp files)
+        all_items = os.listdir(directory_path)
+        files = [f for f in all_items if ospath.isfile(ospath.join(directory_path, f)) and not f.endswith('.aria2')]
+
+        if not files:
+            log.warning(f"No files found in {directory_path}")
+            return _messages.download_name or "Download"
+
+        log.info(f"Found {len(files)} file(s) in {directory_path}: {files}")
+
+        # Case 1: Single file - use its name (without extension for archive naming)
+        if len(files) == 1:
+            filename = files[0]
+            name_without_ext, _ = ospath.splitext(filename)
+            log.info(f"Single file detected, using name: {name_without_ext} (from {filename})")
+            _messages.download_name = filename  # Store full filename
+            return name_without_ext
+
+        # Case 2: Multiple files - extract common prefix or use smart naming
+        log.info(f"Multiple files detected ({len(files)}), applying smart naming...")
+
+        # Strategy 1: Extract common prefix from all filenames
+        common_prefix = _extract_common_prefix(files)
+        if common_prefix and len(common_prefix) >= 3:  # Minimum 3 chars to be meaningful
+            log.info(f"Using common prefix: {common_prefix}")
+            _messages.download_name = common_prefix
+            return common_prefix
+
+        # Strategy 2: Use first file's name (strip numbers/extension)
+        first_file = files[0]
+        name_without_ext, _ = ospath.splitext(first_file)
+        # Remove trailing numbers/episode indicators (e.g., "Movie1" -> "Movie", "S01E01" -> "S01")
+        cleaned_name = re.sub(r'[-_\s]*\d+$', '', name_without_ext)
+        if cleaned_name and len(cleaned_name) >= 3:
+            log.info(f"Using cleaned first filename: {cleaned_name} (from {first_file})")
+            _messages.download_name = cleaned_name
+            return cleaned_name
+
+        # Strategy 3: Use first file as-is
+        log.info(f"Using first filename as-is: {name_without_ext}")
+        _messages.download_name = first_file
+        return name_without_ext
+
+    except Exception as e:
+        log.error(f"Error in update_download_name_from_directory: {e}", exc_info=True)
+        return _messages.download_name or "Download"
+
+
+def _extract_common_prefix(filenames: list) -> str:
+    """Extract common prefix from a list of filenames.
+
+    Args:
+        filenames: List of filename strings
+
+    Returns:
+        Common prefix string, or empty string if no meaningful prefix found
+    """
+    if not filenames or len(filenames) < 2:
+        return ""
+
+    # Remove extensions for comparison
+    names_no_ext = [ospath.splitext(f)[0] for f in filenames]
+
+    # Find common prefix
+    prefix = names_no_ext[0]
+    for name in names_no_ext[1:]:
+        # Find common characters from start
+        common = ""
+        for i, (c1, c2) in enumerate(zip(prefix, name)):
+            if c1 == c2:
+                common += c1
+            else:
+                break
+        prefix = common
+        if not prefix:  # No common prefix at all
+            break
+
+    # Clean up the prefix - remove trailing separators/numbers
+    prefix = re.sub(r'[-_\s.]+$', '', prefix)  # Remove trailing separators
+    prefix = re.sub(r'\d+$', '', prefix)  # Remove trailing numbers (e.g., "Movie1" -> "Movie")
+    prefix = re.sub(r'[-_\s.]+$', '', prefix)  # Remove trailing separators again after number removal
+    prefix = prefix.strip()
+
+    return prefix
