@@ -115,10 +115,32 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
          return None, 0
 
 
-    if _bot.Options.custom_name: name = _bot.Options.custom_name
-    elif ospath.isfile(path): name, _ = ospath.splitext(ospath.basename(path))
-    elif ospath.isdir(path): name = ospath.basename(path)
-    else: name = _messages.download_name if _messages.download_name else "archive"
+    # Determine archive name with priority: custom_name > download_name > file basename > filenames > dir basename > "archive"
+    # NOTE: download_name is checked BEFORE filenames because smart naming (from batch downloads) sets it most accurately
+    if _bot.Options.custom_name:
+        name = _bot.Options.custom_name
+        log.info(f"Using custom_name for archive: {name}")
+    elif _messages.download_name:
+        # Use download_name - set by smart naming or initial guess (aria2/ytdl/gdrive etc.)
+        name, _ = ospath.splitext(_messages.download_name)  # Strip extension in case it has one
+        log.info(f"Using download_name for archive: {name} (from {_messages.download_name})")
+    elif ospath.isfile(path):
+        # Single file: use its filename without extension
+        name, _ = ospath.splitext(ospath.basename(path))
+        log.info(f"Using file basename for archive: {name}")
+    elif _bot.Options.filenames and len(_bot.Options.filenames) > 0:
+        # Use first filename from NZBcloud/Debrid/bitso TITLE= (strip extension for archive name)
+        first_filename = _bot.Options.filenames[0]
+        name, _ = ospath.splitext(first_filename)  # Remove extension like .mkv, .mp4 etc.
+        log.info(f"Using filename from TITLE= for archive: {name} (from {first_filename})")
+    elif ospath.isdir(path):
+        # Fallback to directory basename (might be "Download")
+        name = ospath.basename(path)
+        log.warning(f"Using directory basename for archive name: {name} - consider setting custom_name if unexpected")
+    else:
+        # Ultimate fallback
+        name = "archive"
+        log.warning("Using fallback archive name: archive")
     clean_name = name.replace('/', '_')
 
 
