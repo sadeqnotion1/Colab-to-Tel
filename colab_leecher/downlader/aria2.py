@@ -361,8 +361,81 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
                  try: os.remove(final_filepath_on_disk)
                  except OSError as cl_err: log.warning(f"Failed cleanup aria2 file: {cl_err}")
 
+    except FileNotFoundError as fnf:
+        # aria2c executable not found - fall back to aiohttp
+        log.warning(f"aria2c executable not found. Falling back to aiohttp for link index {num}")
+        log.info(f"Installing aria2 is recommended for better download performance. Continuing with aiohttp...")
+
+        # Fall back to aiohttp download
+        import aiohttp
+        import time
+        from ..utility.helper import speedETA, sizeUnit, getTime, status_bar
+
+        try:
+            file_path = os.path.join(_paths.down_path, expected_filename)
+            download_start_time = time.time()
+            _messages.status_head = f"<b>📥 DOWNLOADING » </b><i>🔗Link {str(num).zfill(2)}</i>\n\n<b>🏷️ Name » </b><code>{display_name_for_status}</code>\n"
+
+            timeout = aiohttp.ClientTimeout(total=None, connect=180, sock_read=600)
+            connector = aiohttp.TCPConnector(limit=10, limit_per_host=5, ttl_dns_cache=300)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Referer": link.split('?')[0] if '?' in link else link
+            }
+
+            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                async with session.get(link, headers=headers, allow_redirects=True) as response:
+                    response.raise_for_status()
+                    total_size = int(response.headers.get('content-length', 0))
+                    log.info(f"🚀 aiohttp download started: {expected_filename} | Total size: {sizeUnit(total_size)}")
+
+                    downloaded_size = 0
+                    block_size = 1024 * 1024  # 1MB chunks
+                    last_update_call = 0
+
+                    with open(file_path, "wb") as file:
+                        async for chunk in response.content.iter_chunked(block_size):
+                            if _task_error and _task_error.state:
+                                log.warning(f"Download cancelled for {expected_filename}")
+                                file.close()
+                                if os.path.exists(file_path): os.remove(file_path)
+                                error_reason = "Cancelled by User/Error"
+                                success = False
+                                break
+
+                            if chunk:
+                                file.write(chunk)
+                                downloaded_size += len(chunk)
+                                now = time.time()
+
+                                # Update status periodically
+                                if now - last_update_call > 2:
+                                    last_update_call = now
+                                    if total_size > 0:
+                                        speed_string, eta, percentage = speedETA(download_start_time, downloaded_size, total_size)
+                                        log.info(f"📥 aiohttp progress: {sizeUnit(downloaded_size)}/{sizeUnit(total_size)} ({percentage:.1f}%) | {speed_string} | ETA: {getTime(eta)}")
+                                        await status_bar(_messages.status_head, speed_string, percentage, getTime(eta),
+                                                       sizeUnit(downloaded_size), sizeUnit(total_size), "aiohttp 🌐", task_ctx=task_ctx)
+                        else:
+                            # Download completed successfully
+                            log.info(f"aiohttp download complete: {expected_filename} ({sizeUnit(downloaded_size)})")
+                            success = True
+                            file_size = downloaded_size
+
+        except Exception as aiohttp_err:
+            error_reason = f"aiohttp fallback error: {str(aiohttp_err)[:100]}"
+            log.error(f"aiohttp fallback failed for link index {num}: {aiohttp_err}")
+            success = False
+            if os.path.exists(file_path):
+                try: os.remove(file_path)
+                except: pass
+
     except Exception as e:
-        # Handle general exceptions
+        # Handle other general exceptions
         error_reason = f"Aria2 Process Error: {str(e)[:100]}"
         log.error(f"Error running Aria2c process for link index {num}: {e}", exc_info=True)
         if proc and proc.returncode is None:

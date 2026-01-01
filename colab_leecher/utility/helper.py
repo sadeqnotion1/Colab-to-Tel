@@ -1309,13 +1309,18 @@ def keyboard(task_id: str = None):
                  If provided, callback_data="cancel:{task_id}"
                  If None, callback_data="cancel" (legacy single-task mode)
     """
+    import logging
+    log = logging.getLogger(__name__)
+
     # pyrogram imports moved to top
     if task_id:
         # Multi-task mode: include task_id in callback data
         callback_data = f"cancel:{task_id}"
+        log.info(f"🔍 keyboard() called with task_id='{task_id}' | callback_data='{callback_data}' | length={len(callback_data)}")
     else:
         # Legacy mode: simple cancel
         callback_data = "cancel"
+        log.info(f"🔍 keyboard() called with NO task_id | callback_data='cancel'")
 
     return InlineKeyboardMarkup([[InlineKeyboardButton("Cancel ❌", callback_data=callback_data)]])
 
@@ -1407,12 +1412,23 @@ async def status_bar(down_msg, speed, percentage, eta, done, total_size, engine,
 
     # Debug logging added as requested
     task_id_str = f"[{task_ctx.get_short_id()}]" if task_ctx else "[legacy]"
-    log.debug(f"status_bar {task_id_str} called. use_custom_text={use_custom_text}, Speed='{speed}', Pct='{percentage}', ETA='{eta}', Done='{done}', Total='{total_size}'")
+    log.info(f"📊 status_bar {task_id_str} called. Pct={percentage}%, Speed={speed}")
 
-    # Throttle updates using isTimeOver helper function
-    if not isTimeOver(2.5):
-        log.debug(f"status_bar {task_id_str}: Interval not passed, skipping update.")
-        return  # Check interval
+    # Throttle updates using per-task timing (parallel-safe) or global timing (legacy)
+    current_time = time()
+    if task_ctx:
+        # Multi-task mode: Use per-task timer (parallel-safe!)
+        if current_time - task_ctx.last_status_update < 2.5:
+            log.info(f"⏸️ status_bar {task_id_str}: Throttled (per-task timer), skipping.")
+            return
+        task_ctx.last_status_update = current_time
+        log.info(f"✅ status_bar {task_id_str}: Timer OK, will update Telegram message")
+    else:
+        # Legacy single-task mode: Use global timer
+        if not isTimeOver(2.5):
+            log.info(f"⏸️ status_bar {task_id_str}: Throttled (global timer), skipping.")
+            return
+        log.info(f"✅ status_bar {task_id_str}: Global timer OK, will update")
 
     # NEW: Use task_ctx.status_msg if available, otherwise fall back to global MSG
     status_msg = task_ctx.status_msg if task_ctx else MSG.status_msg
@@ -1464,7 +1480,7 @@ async def status_bar(down_msg, speed, percentage, eta, done, total_size, engine,
                 final_text = down_msg + text_body + sysINFO()
 
             # --- Edit the Telegram message ---
-            kb_markup = keyboard() # Get the cancel keyboard
+            kb_markup = keyboard(task_ctx.get_short_id()) if task_ctx else keyboard() # Get the cancel keyboard with task ID
             log.debug(f"Attempting to edit status message {status_msg.id}")
 
             # Check if message is a photo (has thumbnail) or plain text

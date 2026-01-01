@@ -177,8 +177,8 @@ async def run_parallel_task(client, message, task_ctx):
         TASK_QUEUE.add_task(task_ctx)
         log.info(f"Task {task_id_str} registered in TASK_QUEUE. Total active: {TASK_QUEUE.get_task_count()}")
 
-        # Update dashboard
-        await force_update_summary()
+        # Don't update dashboard here - let it update via progress callbacks
+        # (force_update_summary will be called after all tasks launch)
 
         # Run the task via taskScheduler (already supports task_ctx)
         log.info(f"Task {task_id_str} calling taskScheduler...")
@@ -1236,7 +1236,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
     query_data = callback_query.data
     # Use message context safely
     msg_id = message.id if message else None
-    chat_id = message.chat.id if message and hasattr(message, 'chat') else OWNER # Default to OWNER if chat missing
+    chat_id = message.chat.id if message and hasattr(message, 'chat') and message.chat else OWNER # Default to OWNER if chat missing
 
     # Authorization Checks (ensure correct indentation)
     if BOT.State.started and not BOT.State.task_going and user_id != OWNER:
@@ -1281,13 +1281,27 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 # User wants parallel downloads!
                 log.info(f"User chose PARALLEL downloads for {len(links)} links")
 
-                # Send confirmation
-                await message.reply_text(
-                    f"🚀 **Launching {len(links)} parallel downloads!**\n\n"
-                    f"Each file will download independently.\n"
-                    f"You can monitor each task separately.\n\n"
-                    f"<i>Starting now...</i>"
+                # Create ONE shared status message for all tasks
+                shared_status_msg = await message.reply_text(
+                    f"🚀 **Parallel Downloads** ({len(links)} files)\n\n"
+                    f"📊 Initializing tasks...\n\n"
+                    f"<i>Please wait...</i>"
                 )
+
+                # Store in TASK_QUEUE for dashboard updates
+                TASK_QUEUE.summary_msg = shared_status_msg
+
+                # Start background task to update the shared message periodically
+                async def update_shared_message_loop():
+                    """Periodically update the shared message with all task progress"""
+                    while TASK_QUEUE.get_task_count() > 0:
+                        await asyncio.sleep(3)  # Update every 3 seconds
+                        try:
+                            await update_summary_dashboard()
+                        except Exception as e:
+                            log.error(f"Error updating shared message: {e}")
+
+                asyncio.create_task(update_shared_message_loop())
 
                 # Create a separate TaskContext for EACH link and launch them
                 launched_tasks = []
@@ -1341,6 +1355,15 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                     sub_task.messages = sub_task.messages
                     sub_task.task_error = sub_task.error
 
+                    # Share the single status message across all tasks
+                    sub_task.status_msg = shared_status_msg
+
+                    # Initialize msg object (required by converters and handlers)
+                    sub_task.msg = type('obj', (object,), {
+                        'status_msg': shared_status_msg,
+                        'sent_msg': sub_task.sent_msg
+                    })()
+
                     # Launch task asynchronously
                     log.info(f"Launching parallel task {idx}/{len(links)}: {sub_task.get_short_id()}")
                     launched_tasks.append(sub_task.get_short_id())
@@ -1385,6 +1408,12 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
                 task_ctx.messages = task_ctx.messages
                 task_ctx.task_error = task_ctx.error
+
+                # Initialize msg object (required by converters and handlers)
+                task_ctx.msg = type('obj', (object,), {
+                    'status_msg': task_ctx.status_msg,
+                    'sent_msg': task_ctx.sent_msg
+                })()
 
                 # Launch parallel task
                 asyncio.create_task(run_parallel_task(client, message, task_ctx))

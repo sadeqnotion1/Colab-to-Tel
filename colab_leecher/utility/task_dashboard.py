@@ -40,41 +40,59 @@ async def update_summary_dashboard(client=None) -> Optional[Message]:
                 log.warning(f"Failed to delete summary: {e}")
         return None
 
-    # Build summary text
+    # Build summary text with better formatting
     summary_lines = [
-        f"📊 **Multi-Task Dashboard**",
-        f"",
-        f"**Active Tasks: {len(tasks)}**",
-        f""
+        f"🚀 **Parallel Downloads** ({len(tasks)} active)\n"
     ]
 
-    for task_id, task_ctx in tasks.items():
+    for idx, (task_id, task_ctx) in enumerate(tasks.items(), 1):
         short_id = task_ctx.get_short_id()
-        mode_display = f"{task_ctx.mode_type.capitalize()} {task_ctx.mode.capitalize()}"
+
+        # Get filename from source URL or messages
+        filename = "Unknown"
+        if task_ctx.source_urls:
+            # Extract filename from URL
+            url = task_ctx.source_urls[0]
+            try:
+                from urllib.parse import urlparse, unquote
+                path = urlparse(url).path
+                filename = unquote(path.split('/')[-1]) if path else url[:50]
+            except:
+                filename = url[:50]
+        elif task_ctx.messages.download_name:
+            filename = task_ctx.messages.download_name
+
+        # Limit filename length for display
+        if len(filename) > 35:
+            filename = filename[:32] + "..."
 
         # Calculate progress
-        if task_ctx.transfer.down_bytes > 0:
-            # TODO: Need total size to calculate accurate percentage
-            # For now, just show bytes downloaded
+        if task_ctx.transfer.up_bytes > 0:
+            # Uploading phase
+            speed = task_ctx.transfer.get_speed()
+            uploaded_count = len(task_ctx.transfer.sent_file_names)
+            status_emoji = "⬆️"
+            status = f"Uploading ({uploaded_count} files) • {speed}"
+        elif task_ctx.transfer.down_bytes > 0:
+            # Downloading phase
             speed = task_ctx.transfer.get_speed()
             elapsed = task_ctx.get_elapsed_time()
             elapsed_str = getTime(elapsed) if elapsed > 0 else "0s"
-
-            status_line = (
-                f"🎯 `{short_id}` - {mode_display}\n"
-                f"├ Speed: {speed}\n"
-                f"├ Elapsed: {elapsed_str}\n"
-                f"├ Downloaded: {len(task_ctx.source_urls)} files\n"
-                f"╰ Uploaded: {len(task_ctx.transfer.sent_file_names)} files\n"
-            )
+            status_emoji = "⬇️"
+            status = f"Downloading • {speed} • {elapsed_str}"
         else:
-            # Task starting or waiting
-            status_line = (
-                f"🎯 `{short_id}` - {mode_display}\n"
-                f"╰ Status: Initializing...\n"
-            )
+            # Initializing
+            status_emoji = "⏳"
+            status = "Initializing..."
 
-        summary_lines.append(status_line)
+        # Format task line
+        task_line = (
+            f"{status_emoji} **Task {idx}** [`{short_id}`]\n"
+            f"├ 📄 `{filename}`\n"
+            f"╰ {status}\n"
+        )
+
+        summary_lines.append(task_line)
 
     summary_text = "\n".join(summary_lines)
 
@@ -82,19 +100,28 @@ async def update_summary_dashboard(client=None) -> Optional[Message]:
     try:
         if TASK_QUEUE.summary_msg:
             # Update existing message
-            await TASK_QUEUE.summary_msg.edit_text(summary_text)
-            log.debug(f"Summary dashboard updated ({len(tasks)} tasks)")
+            try:
+                await TASK_QUEUE.summary_msg.edit_text(
+                    summary_text,
+                    disable_web_page_preview=True
+                )
+                log.debug(f"Summary dashboard updated ({len(tasks)} tasks)")
+            except Exception as edit_err:
+                # Message might have been deleted, try creating new one
+                log.warning(f"Failed to edit summary, creating new: {edit_err}")
+                TASK_QUEUE.summary_msg = await client.send_message(
+                    OWNER,
+                    summary_text,
+                    disable_web_page_preview=True
+                )
         else:
-            # Create new message and pin it
+            # Create new message (shouldn't happen with parallel downloads, but fallback)
             TASK_QUEUE.summary_msg = await client.send_message(
                 OWNER,
-                summary_text
+                summary_text,
+                disable_web_page_preview=True
             )
-            try:
-                await TASK_QUEUE.summary_msg.pin(disable_notification=True)
-                log.info("Summary dashboard created and pinned")
-            except Exception as pin_err:
-                log.warning(f"Failed to pin summary: {pin_err}")
+            log.info("Summary dashboard created")
 
         # Mark as updated
         TASK_QUEUE.mark_summary_updated()

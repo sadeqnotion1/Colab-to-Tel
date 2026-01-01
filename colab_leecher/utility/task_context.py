@@ -26,14 +26,18 @@ class TaskTransfer:
     """Per-task transfer statistics"""
     down_bytes: int = 0
     up_bytes: int = 0
+    sent_file: List = field(default_factory=list)  # List of successfully sent message objects (from Pyrogram)
     sent_file_names: List[str] = field(default_factory=list)
+    successful_downloads: List[dict] = field(default_factory=list)  # List of {'url': url, 'filename': filename}
     start_time: float = field(default_factory=time.time)
 
     def reset(self):
         """Reset transfer statistics"""
         self.down_bytes = 0
         self.up_bytes = 0
+        self.sent_file = []
         self.sent_file_names = []
+        self.successful_downloads = []
         self.start_time = time.time()
 
     def get_percentage(self, total_size: int = 0) -> float:
@@ -67,16 +71,21 @@ class TaskError:
     """Per-task error tracking"""
     state: bool = False  # True if error occurred
     message: str = ""    # Error message
+    text: str = ""       # Alias for message (used by task_manager)
+    failed_links: List[dict] = field(default_factory=list)  # List of {'url': url, 'error': error}
 
     def set_error(self, message: str):
         """Set error state"""
         self.state = True
         self.message = message
+        self.text = message
 
     def clear(self):
         """Clear error state"""
         self.state = False
         self.message = ""
+        self.text = ""
+        self.failed_links = []
 
 
 @dataclass
@@ -87,6 +96,20 @@ class TaskMessages:
     status_head: str = ""
     dump_task: str = ""
     src_link: str = ""
+
+
+@dataclass
+class TaskBotTimes:
+    """Per-task timing information"""
+    current_time: float = field(default_factory=time.time)
+    start_time: datetime = field(default_factory=datetime.now)
+    task_start: datetime = field(default_factory=datetime.now)
+
+    def reset(self):
+        """Reset timing information"""
+        self.current_time = time.time()
+        self.start_time = datetime.now()
+        self.task_start = datetime.now()
 
 
 @dataclass
@@ -133,6 +156,7 @@ class TaskContext:
     transfer: TaskTransfer = field(default_factory=TaskTransfer)
     error: TaskError = field(default_factory=TaskError)
     messages: TaskMessages = field(default_factory=TaskMessages)
+    bot_times: TaskBotTimes = field(default_factory=TaskBotTimes)
 
     # Asyncio task reference
     async_task: Optional[asyncio.Task] = None
@@ -141,6 +165,7 @@ class TaskContext:
     created_at: datetime = field(default_factory=datetime.now)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    last_status_update: float = 0.0  # Timestamp of last status bar update (for throttling)
 
     # State flags
     is_cancelled: bool = False

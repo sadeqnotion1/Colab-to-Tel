@@ -560,11 +560,11 @@ async def taskScheduler(task_ctx=None):
     # Multi-task support: Use task_ctx if provided, otherwise fallback to globals
     if task_ctx:
         _bot = task_ctx.bot
-        _msg = task_ctx.msg
+        _msg = task_ctx  # TaskContext has status_msg and sent_msg directly!
         _messages = task_ctx.messages
         _paths = task_ctx.paths
         _transfer = task_ctx.transfer
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error
         log.info(f"taskScheduler using TaskContext for task_id: {task_ctx.task_id}")
     else:
         _bot = BOT
@@ -760,31 +760,33 @@ async def taskScheduler(task_ctx=None):
             task_title = f"{type_display_name} {mode_display_name}{service_str}"
             _messages.task_msg += f"__[{task_title}]({_messages.src_link})__\n\n" # Prepend task context to status message base
 
-            # Delete previous status message if it exists
-            if _msg.status_msg: await _msg.status_msg.delete()
+            # Only create/delete status message if it doesn't exist (parallel tasks share one message)
+            if not _msg.status_msg:
+                # Determine which image to send (Custom > Downloaded/Fallback)
+                img_to_send = _paths.THMB_PATH if _bot.Setting.thumbnail and ospath.exists(_paths.THMB_PATH) else final_thumb_path
 
-            # Determine which image to send (Custom > Downloaded/Fallback)
-            img_to_send = _paths.THMB_PATH if _bot.Setting.thumbnail and ospath.exists(_paths.THMB_PATH) else final_thumb_path
-
-            # Send initial status message with photo (with fallback to text-only)
-            if not ospath.exists(img_to_send):
-                 log.error(f"Thumbnail path to send does not exist: {img_to_send}. Attempting absolute fallback.")
-                 img_to_send = _paths.DEFAULT_HERO # Use defined fallback path first
-                 if not ospath.exists(img_to_send):
-                       log.critical("FATAL: No valid thumbnail image found to send.")
-                       _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__ (Thumbnail Error)" + sysINFO(), reply_markup=keyboard(task_ctx))
-                 else:
-                       try:
-                           _msg.status_msg = await colab_bot.send_photo( chat_id=OWNER, photo=img_to_send, caption=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx))
-                       except Exception as photo_err:
-                           log.warning(f"Failed to send photo (MD5 or other error): {photo_err}. Sending text-only message.")
-                           _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx))
+                # Send initial status message with photo (with fallback to text-only)
+                if not img_to_send or not ospath.exists(img_to_send):
+                     log.error(f"Thumbnail path to send does not exist: {img_to_send}. Attempting absolute fallback.")
+                     img_to_send = _paths.DEFAULT_HERO # Use defined fallback path first
+                     if not img_to_send or not ospath.exists(img_to_send):
+                           log.critical("FATAL: No valid thumbnail image found to send.")
+                           _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__ (Thumbnail Error)" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()) if task_ctx else keyboard())
+                     else:
+                           try:
+                               _msg.status_msg = await colab_bot.send_photo( chat_id=OWNER, photo=img_to_send, caption=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()) if task_ctx else keyboard())
+                           except Exception as photo_err:
+                               log.warning(f"Failed to send photo (MD5 or other error): {photo_err}. Sending text-only message.")
+                               _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()) if task_ctx else keyboard())
+                else:
+                     try:
+                         _msg.status_msg = await colab_bot.send_photo( chat_id=OWNER, photo=img_to_send, caption=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()) if task_ctx else keyboard())
+                     except Exception as photo_err:
+                         log.warning(f"Failed to send photo (MD5 or other error): {photo_err}. Sending text-only message.")
+                         _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()) if task_ctx else keyboard())
             else:
-                 try:
-                     _msg.status_msg = await colab_bot.send_photo( chat_id=OWNER, photo=img_to_send, caption=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx))
-                 except Exception as photo_err:
-                     log.warning(f"Failed to send photo (MD5 or other error): {photo_err}. Sending text-only message.")
-                     _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + f"\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx))
+                # Status message already exists (shared message for parallel tasks)
+                log.info(f"Skipping status message creation - using existing shared message for task {task_ctx.get_short_id() if task_ctx else 'N/A'}")
 
         except Exception as msg_err:
             log.error(f"Error sending initial task messages: {msg_err}", exc_info=True)
@@ -805,7 +807,7 @@ async def taskScheduler(task_ctx=None):
                  else: _messages.download_name = "Task_No_Sources"; log.warning("_bot.SOURCE empty.")
             elif not is_dir and selected_service in ['nzbcloud', 'delta', 'bitso']:
                  # Name/size handled later or manually provided
-                 if _msg.status_msg: await _msg.status_msg.edit_caption(caption=_messages.task_msg + _messages.status_head + f"\n📝 __Waiting for downloader...__" + sysINFO(), reply_markup=keyboard(task_ctx))
+                 if _msg.status_msg: await _msg.status_msg.edit_caption(caption=_messages.task_msg + _messages.status_head + f"\n📝 __Waiting for downloader...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()))
 
         # --- Adjust Download Path for Zip Mode ---
         # Only if no error has occurred yet
