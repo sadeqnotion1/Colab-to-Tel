@@ -1,0 +1,479 @@
+"""
+Enhanced Keyboard Layouts for Telegram Bot
+Provides reusable, beautiful inline keyboard configurations
+"""
+
+from typing import List, Optional, Dict, Union
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+
+class KeyboardBuilder:
+    """Fluent interface for building keyboards"""
+
+    def __init__(self):
+        self.rows: List[List[InlineKeyboardButton]] = []
+        self.current_row: List[InlineKeyboardButton] = []
+
+    def button(self, text: str, callback_data: str = None, url: str = None,
+               emoji: str = None) -> 'KeyboardBuilder':
+        """Add a button to the current row"""
+        display_text = f"{emoji} {text}" if emoji else text
+
+        if callback_data:
+            btn = InlineKeyboardButton(display_text, callback_data=callback_data)
+        elif url:
+            btn = InlineKeyboardButton(display_text, url=url)
+        else:
+            raise ValueError("Either callback_data or url must be provided")
+
+        self.current_row.append(btn)
+        return self
+
+    def row(self) -> 'KeyboardBuilder':
+        """Start a new row"""
+        if self.current_row:
+            self.rows.append(self.current_row)
+            self.current_row = []
+        return self
+
+    def add_row(self, *buttons: InlineKeyboardButton) -> 'KeyboardBuilder':
+        """Add a complete row of buttons"""
+        if self.current_row:
+            self.rows.append(self.current_row)
+            self.current_row = []
+        self.rows.append(list(buttons))
+        return self
+
+    def build(self) -> InlineKeyboardMarkup:
+        """Build and return the keyboard"""
+        if self.current_row:
+            self.rows.append(self.current_row)
+            self.current_row = []
+        return InlineKeyboardMarkup(self.rows)
+
+
+class CommonKeyboards:
+    """Pre-built common keyboard layouts"""
+
+    @staticmethod
+    def cancel(task_id: str = None, text: str = "Cancel", emoji: str = "❌") -> InlineKeyboardMarkup:
+        """Single cancel button"""
+        callback_data = f"cancel:{task_id}" if task_id else "cancel"
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"{text} {emoji}", callback_data=callback_data)]
+        ])
+
+    @staticmethod
+    def confirm_cancel(
+        confirm_text: str = "Confirm",
+        confirm_data: str = "confirm",
+        cancel_text: str = "Cancel",
+        cancel_data: str = "cancel"
+    ) -> InlineKeyboardMarkup:
+        """Confirm and cancel buttons side by side"""
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(f"✅ {confirm_text}", callback_data=confirm_data),
+                InlineKeyboardButton(f"❌ {cancel_text}", callback_data=cancel_data)
+            ]
+        ])
+
+    @staticmethod
+    def yes_no(
+        yes_data: str = "yes",
+        no_data: str = "no",
+        yes_text: str = "Yes",
+        no_text: str = "No"
+    ) -> InlineKeyboardMarkup:
+        """Yes/No buttons"""
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(f"✅ {yes_text}", callback_data=yes_data),
+                InlineKeyboardButton(f"❌ {no_text}", callback_data=no_data)
+            ]
+        ])
+
+    @staticmethod
+    def back_close(
+        back_data: str = "back",
+        close_data: str = "close"
+    ) -> InlineKeyboardMarkup:
+        """Back and Close buttons"""
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("◀️ Back", callback_data=back_data),
+                InlineKeyboardButton("✘ Close", callback_data=close_data)
+            ]
+        ])
+
+    @staticmethod
+    def pagination(
+        current_page: int,
+        total_pages: int,
+        callback_prefix: str = "page"
+    ) -> InlineKeyboardMarkup:
+        """Pagination buttons"""
+        buttons = []
+
+        if current_page > 1:
+            buttons.append(InlineKeyboardButton(
+                "« Prev",
+                callback_data=f"{callback_prefix}:{current_page - 1}"
+            ))
+
+        buttons.append(InlineKeyboardButton(
+            f"· {current_page}/{total_pages} ·",
+            callback_data="page_info"
+        ))
+
+        if current_page < total_pages:
+            buttons.append(InlineKeyboardButton(
+                "Next »",
+                callback_data=f"{callback_prefix}:{current_page + 1}"
+            ))
+
+        return InlineKeyboardMarkup([buttons])
+
+    @staticmethod
+    def numbered_options(
+        options: List[tuple],
+        callback_prefix: str = "option",
+        columns: int = 1
+    ) -> InlineKeyboardMarkup:
+        """
+        Create numbered option buttons
+
+        Args:
+            options: List of (text, data) tuples
+            callback_prefix: Prefix for callback data
+            columns: Number of columns (1-3)
+        """
+        buttons = []
+        row = []
+
+        for i, (text, data) in enumerate(options, 1):
+            btn = InlineKeyboardButton(
+                f"{i}. {text}",
+                callback_data=f"{callback_prefix}:{data}"
+            )
+            row.append(btn)
+
+            if len(row) == columns:
+                buttons.append(row)
+                row = []
+
+        if row:
+            buttons.append(row)
+
+        return InlineKeyboardMarkup(buttons)
+
+    @staticmethod
+    def grid(
+        items: List[tuple],
+        columns: int = 2,
+        callback_prefix: str = None
+    ) -> InlineKeyboardMarkup:
+        """
+        Create a grid of buttons
+
+        Args:
+            items: List of (text, callback_data/url) tuples or (text, callback/url, is_url) tuples
+            columns: Number of columns
+            callback_prefix: Optional prefix for callback data
+        """
+        buttons = []
+        row = []
+
+        for item in items:
+            if len(item) == 2:
+                text, data = item
+                is_url = data.startswith("http")
+            else:
+                text, data, is_url = item
+
+            if callback_prefix and not is_url:
+                data = f"{callback_prefix}:{data}"
+
+            btn = InlineKeyboardButton(text, url=data if is_url else None,
+                                       callback_data=None if is_url else data)
+            row.append(btn)
+
+            if len(row) == columns:
+                buttons.append(row)
+                row = []
+
+        if row:
+            buttons.append(row)
+
+        return InlineKeyboardMarkup(buttons)
+
+    @staticmethod
+    def social_links(
+        github: str = None,
+        channel: str = None,
+        group: str = None,
+        website: str = None,
+        custom: List[tuple] = None
+    ) -> InlineKeyboardMarkup:
+        """
+        Create social/community links keyboard
+
+        Args:
+            github: GitHub repository URL
+            channel: Telegram channel username (with or without @)
+            group: Telegram group username
+            website: Website URL
+            custom: List of (text, url) tuples for custom links
+        """
+        rows = []
+
+        if github:
+            rows.append([InlineKeyboardButton("⭐ GitHub", url=github)])
+
+        if channel or group:
+            row = []
+            if channel:
+                channel_url = channel if channel.startswith("http") else f"https://t.me/{channel.lstrip('@')}"
+                row.append(InlineKeyboardButton("📣 Channel", url=channel_url))
+            if group:
+                group_url = group if group.startswith("http") else f"https://t.me/{group.lstrip('@')}"
+                row.append(InlineKeyboardButton("💬 Group", url=group_url))
+            rows.append(row)
+
+        if website:
+            rows.append([InlineKeyboardButton("🌐 Website", url=website)])
+
+        if custom:
+            for text, url in custom:
+                rows.append([InlineKeyboardButton(text, url=url)])
+
+        return InlineKeyboardMarkup(rows)
+
+
+class MenuKeyboards:
+    """Specialized keyboards for menus"""
+
+    @staticmethod
+    def main_menu(options: Dict[str, str], close: bool = True) -> InlineKeyboardMarkup:
+        """
+        Create a main menu keyboard
+
+        Args:
+            options: Dict of {display_text: callback_data}
+            close: Add close button at bottom
+        """
+        kb = KeyboardBuilder()
+
+        for text, data in options.items():
+            kb.button(text, callback_data=data).row()
+
+        if close:
+            kb.button("✘ Close", callback_data="close")
+
+        return kb.build()
+
+    @staticmethod
+    def settings_menu(settings: Dict[str, tuple], navigation: bool = True) -> InlineKeyboardMarkup:
+        """
+        Create a settings menu
+
+        Args:
+            settings: Dict of {label: (current_value, callback_data)}
+            navigation: Add back/close buttons
+        """
+        kb = KeyboardBuilder()
+
+        for label, (value, callback) in settings.items():
+            kb.button(f"{label}: {value}", callback_data=callback).row()
+
+        if navigation:
+            kb.button("◀️ Back", callback_data="settings_back")
+            kb.button("✘ Close", callback_data="close")
+
+        return kb.build()
+
+    @staticmethod
+    def selection_menu(
+        title_options: List[tuple],
+        selected: str = None,
+        callback_prefix: str = "select",
+        columns: int = 1,
+        show_checkmark: bool = True
+    ) -> InlineKeyboardMarkup:
+        """
+        Create a selection menu with checkmarks
+
+        Args:
+            title_options: List of (title, callback_data) tuples
+            selected: Currently selected item's callback_data
+            callback_prefix: Prefix for callback data
+            columns: Number of columns
+            show_checkmark: Show ✓ for selected item
+        """
+        kb = KeyboardBuilder()
+        row_count = 0
+
+        for title, data in title_options:
+            full_data = f"{callback_prefix}:{data}"
+            is_selected = (data == selected)
+
+            if show_checkmark and is_selected:
+                text = f"✓ {title}"
+            else:
+                text = title
+
+            kb.button(text, callback_data=full_data)
+            row_count += 1
+
+            if row_count >= columns:
+                kb.row()
+                row_count = 0
+
+        return kb.build()
+
+    @staticmethod
+    def toggle_options(
+        options: Dict[str, tuple],
+        callback_prefix: str = "toggle"
+    ) -> InlineKeyboardMarkup:
+        """
+        Create toggle switches
+
+        Args:
+            options: Dict of {label: (is_enabled, callback_data)}
+            callback_prefix: Prefix for callback data
+        """
+        kb = KeyboardBuilder()
+
+        for label, (is_enabled, callback) in options.items():
+            status = "🟢 ON" if is_enabled else "🔴 OFF"
+            full_callback = f"{callback_prefix}:{callback}"
+            kb.button(f"{label} [{status}]", callback_data=full_callback).row()
+
+        return kb.build()
+
+
+class ProgressKeyboards:
+    """Keyboards for progress/status messages"""
+
+    @staticmethod
+    def downloading(task_id: str = None, show_pause: bool = False) -> InlineKeyboardMarkup:
+        """Download progress keyboard"""
+        buttons = []
+
+        if show_pause:
+            buttons.append([
+                InlineKeyboardButton("⏸️ Pause", callback_data=f"pause:{task_id}"),
+                InlineKeyboardButton("❌ Cancel", callback_data=f"cancel:{task_id}")
+            ])
+        else:
+            callback_data = f"cancel:{task_id}" if task_id else "cancel"
+            buttons.append([
+                InlineKeyboardButton("❌ Cancel", callback_data=callback_data)
+            ])
+
+        return InlineKeyboardMarkup(buttons)
+
+    @staticmethod
+    def uploading(task_id: str = None) -> InlineKeyboardMarkup:
+        """Upload progress keyboard"""
+        callback_data = f"cancel:{task_id}" if task_id else "cancel"
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Stop Upload", callback_data=callback_data)]
+        ])
+
+    @staticmethod
+    def processing(task_id: str = None, operation: str = "Processing") -> InlineKeyboardMarkup:
+        """Processing/extracting keyboard"""
+        callback_data = f"cancel:{task_id}" if task_id else "cancel"
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"❌ Stop {operation}", callback_data=callback_data)]
+        ])
+
+
+class UtilityKeyboards:
+    """Utility keyboard functions"""
+
+    @staticmethod
+    def combine(*keyboards: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
+        """Combine multiple keyboards"""
+        all_rows = []
+        for kb in keyboards:
+            all_rows.extend(kb.inline_keyboard)
+        return InlineKeyboardMarkup(all_rows)
+
+    @staticmethod
+    def add_footer(
+        keyboard: InlineKeyboardMarkup,
+        footer_buttons: List[InlineKeyboardButton]
+    ) -> InlineKeyboardMarkup:
+        """Add footer row(s) to existing keyboard"""
+        rows = list(keyboard.inline_keyboard)
+        rows.append(footer_buttons)
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def from_dict(
+        layout: Dict[str, Union[str, List[str]]],
+        callback_prefix: str = ""
+    ) -> InlineKeyboardMarkup:
+        """
+        Create keyboard from dict structure
+
+        Args:
+            layout: Dict where each key is row, value is button text or list of texts
+            callback_prefix: Prefix for callback data
+
+        Example:
+            {
+                "row1": "Single Button",
+                "row2": ["Button 1", "Button 2"],
+                "row3": "Another Single"
+            }
+        """
+        kb = KeyboardBuilder()
+
+        for row_key, buttons in layout.items():
+            if isinstance(buttons, str):
+                buttons = [buttons]
+
+            for btn_text in buttons:
+                callback = f"{callback_prefix}:{btn_text.lower().replace(' ', '_')}"
+                kb.button(btn_text, callback_data=callback)
+
+            kb.row()
+
+        return kb.build()
+
+
+# Convenience functions for quick keyboard creation
+def quick_cancel(task_id: str = None) -> InlineKeyboardMarkup:
+    """Quick cancel button"""
+    return CommonKeyboards.cancel(task_id)
+
+
+def quick_confirm(confirm_data: str, cancel_data: str = "cancel") -> InlineKeyboardMarkup:
+    """Quick confirm/cancel buttons"""
+    return CommonKeyboards.confirm_cancel(
+        confirm_data=confirm_data,
+        cancel_data=cancel_data
+    )
+
+
+def quick_menu(options: List[tuple], close: bool = True) -> InlineKeyboardMarkup:
+    """
+    Quick menu creation
+
+    Args:
+        options: List of (text, callback_data) tuples
+        close: Add close button
+    """
+    kb = KeyboardBuilder()
+
+    for text, callback in options:
+        kb.button(text, callback_data=callback).row()
+
+    if close:
+        kb.button("✘ Close", callback_data="close")
+
+    return kb.build()

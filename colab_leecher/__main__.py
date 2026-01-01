@@ -49,7 +49,11 @@ log.info(f"--> MERGED V1: colab_bot instance used in __main__.py: ID = {id(colab
 
 src_request_msg = None
 reply_prompt_message_id = None
-extract_request_msg = None  # Track when waiting for extract path input
+extract_request_msg = None
+
+# NEW: Per-user task registry for parallel task support
+# Maps user_id -> TaskContext for pending tasks (waiting for URLs)
+user_tasks = {}  # Track when waiting for extract path input
 
 # --- Helper function to ask for leech type (normal/zip/unzip) ---
 async def ask_leech_type(client, chat_id, mode_name, reply_to_message_id=None):
@@ -128,6 +132,70 @@ async def ask_upload_destination(client, chat_id):
     except Exception as e:
         log.error(f"Failed to send upload destination prompt: {e}", exc_info=True)
 
+# --- Parallel Task Runner ---
+async def run_parallel_task(client, message, task_ctx):
+    """
+    Run a download/upload task in parallel mode.
+
+    This function wraps taskScheduler() to enable parallel execution:
+    - Registers task in TASK_QUEUE
+    - Updates task dashboard
+    - Handles errors and cleanup
+    - Removes from queue when done
+
+    Args:
+        client: Pyrogram client
+        message: User message
+        task_ctx: TaskContext for this task
+    """
+    task_id_str = f"[{task_ctx.get_short_id()}]"
+    log.info(f"Starting parallel task {task_id_str} for user {message.from_user.id}")
+
+    try:
+        # Mark task as started
+        task_ctx.mark_started()
+
+        # Register in global task queue
+        TASK_QUEUE.add_task(task_ctx)
+        log.info(f"Task {task_id_str} registered in TASK_QUEUE. Total active: {TASK_QUEUE.get_task_count()}")
+
+        # Update dashboard
+        await force_update_summary()
+
+        # Run the task via taskScheduler (already supports task_ctx)
+        log.info(f"Task {task_id_str} calling taskScheduler...")
+        await taskScheduler(task_ctx)
+        log.info(f"Task {task_id_str} taskScheduler completed")
+
+    except Exception as e:
+        log.exception(f"Task {task_id_str} failed with exception")
+        task_ctx.error.set_error(str(e))
+
+        # Notify user of error
+        try:
+            if task_ctx.status_msg:
+                await task_ctx.status_msg.edit_text(
+                    f"❌ **Task Failed**\n\n"
+                    f"**Task ID:** `{task_ctx.get_short_id()}`\n"
+                    f"**Error:** {str(e)[:200]}"
+                )
+        except Exception:
+            pass
+
+    finally:
+        # Mark as completed
+        task_ctx.mark_completed()
+
+        # Remove from queue
+        TASK_QUEUE.remove_task(task_ctx.task_id)
+        log.info(f"Task {task_id_str} removed from TASK_QUEUE. Remaining: {TASK_QUEUE.get_task_count()}")
+
+        # Update dashboard
+        await force_update_summary()
+
+        log.info(f"Task {task_id_str} cleanup complete")
+
+
 # --- Existing Command Handlers ---
 @colab_bot.on_message(filters.command("start") & filters.private)
 async def start(client, message):
@@ -136,52 +204,207 @@ async def start(client, message):
 
 @colab_bot.on_message(filters.command("tupload") & filters.private)
 async def telegram_upload(client, message):
-    global BOT, src_request_msg
-    log.info(f"Received /tupload from {message.from_user.id}")
-    BOT.Mode.mode = "leech"; BOT.Mode.ytdl = False; BOT.Options.service_type = None # Reset service type
-    text = "<b>⚡ Leech Task » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, Bitso)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
-    src_request_msg = await task_starter(message, text)
-    log.debug(f"/tupload: task_starter called, src_request_msg set")
+    global BOT, src_request_msg, user_tasks
+    user_id = message.from_user.id
+    log.info(f"Received /tupload from {user_id}")
+
+    # NEW: Parallel task mode - create TaskContext immediately
+    task_ctx = create_task_context(
+        user_id=user_id,
+        chat_id=message.chat.id,
+        mode="leech"
+    )
+    task_ctx.service_type = None  # Will be determined from URLs
+    task_ctx.mode_type = "normal"  # Default to normal (user can change later)
+
+    # Store in user_tasks registry (waiting for URLs)
+    user_tasks[user_id] = task_ctx
+    log.info(f"Created TaskContext {task_ctx.get_short_id()} for /tupload, stored in user_tasks for user {user_id}")
+
+    # Delete user's command message
+    try:
+        await message.delete()
+    except Exception as e:
+        log.warning(f"Could not delete command message: {e}")
+
+    # Send prompt for URLs
+    text = (
+        "<b>⚡ Leech Task » Send Me THEM LINK(s) 🔗</b>\n\n"
+        "(Direct, Magnet, TG, Mega, GDrive, Debrid, Bitso)\n\n"
+        "<code>https//link1.xyz\n"
+        "[name.ext]\n"
+        "{zip_pw}\n"
+        "(unzip_pw)</code>\n\n"
+        f"<i>📌 Task ID: {task_ctx.get_short_id()}</i>"
+    )
+
+    try:
+        prompt_msg = await message.reply_text(text)
+        task_ctx.status_msg = prompt_msg  # Store prompt message in task context
+        log.info(f"Sent URL prompt for task {task_ctx.get_short_id()}")
+    except Exception as e:
+        log.error(f"Failed to send URL prompt: {e}")
+        # Clean up on failure
+        del user_tasks[user_id]
+        await message.reply_text(f"❌ Failed to start task: {e}")
 
 
 @colab_bot.on_message(filters.command("gdupload") & filters.private)
 async def drive_upload(client, message):
-    global BOT
-    log.info(f"Received /gdupload from {message.from_user.id}")
-    # Reset mode and service type - mode will be set after user selects destination
-    BOT.Mode.ytdl = False
-    BOT.Options.service_type = None
+    global BOT, user_tasks
+    user_id = message.from_user.id
+    log.info(f"Received /gdupload from {user_id}")
+
+    # NEW: Parallel task mode - create TaskContext immediately
+    task_ctx = create_task_context(
+        user_id=user_id,
+        chat_id=message.chat.id,
+        mode="leech"  # Will be changed to mirror if user selects GDrive
+    )
+    task_ctx.service_type = None  # Will be set after destination selection
+    task_ctx.mode_type = "normal"  # Default to normal
+
+    # Store in user_tasks registry (waiting for destination choice, then URLs)
+    user_tasks[user_id] = task_ctx
+    log.info(f"Created TaskContext {task_ctx.get_short_id()} for /gdupload, stored in user_tasks for user {user_id}")
+
     # Ask user to choose upload destination (Google Drive or Local Mirror)
     await message.delete()
     await ask_upload_destination(client, message.chat.id)
-    log.debug(f"/gdupload: Asked user for upload destination choice")
+    log.debug(f"/gdupload: Asked user for upload destination choice (Task ID: {task_ctx.get_short_id()})")
+
+    # NOTE: Callback handler will retrieve task_ctx from user_tasks
+    # This requires Phase 4 callback refactoring for full parallel support
 
 @colab_bot.on_message(filters.command("drupload") & filters.private)
 async def directory_upload(client, message):
-    global BOT, src_request_msg
-    log.info(f"Received /drupload from {message.from_user.id}")
-    BOT.Mode.mode = "dir-leech"; BOT.Mode.ytdl = False; BOT.Options.service_type = "local" # Set service type
-    text = "<b>⚡ Dir Leech » Send Me FOLDER PATH 🔗</b> ...<code>/path/to/folder</code>"
-    src_request_msg = await task_starter(message, text)
-    log.debug(f"/drupload: task_starter called, src_request_msg set")
+    global BOT, src_request_msg, user_tasks
+    user_id = message.from_user.id
+    log.info(f"Received /drupload from {user_id}")
+
+    # NEW: Parallel task mode - create TaskContext immediately
+    task_ctx = create_task_context(
+        user_id=user_id,
+        chat_id=message.chat.id,
+        mode="dir-leech"
+    )
+    task_ctx.service_type = "local"  # Local directory service
+    task_ctx.mode_type = "normal"  # Default to normal
+
+    # Store in user_tasks registry (waiting for paths)
+    user_tasks[user_id] = task_ctx
+    log.info(f"Created TaskContext {task_ctx.get_short_id()} for /drupload, stored in user_tasks for user {user_id}")
+
+    # Delete user's command message
+    try:
+        await message.delete()
+    except Exception as e:
+        log.warning(f"Could not delete command message: {e}")
+
+    # Send prompt for directory path
+    text = (
+        "<b>⚡ Dir Leech » Send Me FOLDER PATH 🔗</b>\n\n"
+        "Send the full path to your directory:\n\n"
+        "<code>/path/to/folder</code>\n\n"
+        f"<i>📌 Task ID: {task_ctx.get_short_id()}</i>"
+    )
+
+    try:
+        prompt_msg = await message.reply_text(text)
+        task_ctx.status_msg = prompt_msg  # Store prompt message in task context
+        log.info(f"Sent path prompt for task {task_ctx.get_short_id()}")
+    except Exception as e:
+        log.error(f"Failed to send path prompt: {e}")
+        # Clean up on failure
+        del user_tasks[user_id]
+        await message.reply_text(f"❌ Failed to start task: {e}")
 
 @colab_bot.on_message(filters.command("ytupload") & filters.private)
 async def yt_upload(client, message):
-    global BOT, src_request_msg
-    log.info(f"Received /ytupload from {message.from_user.id}")
-    BOT.Mode.mode = "leech"; BOT.Mode.ytdl = True; BOT.Options.service_type = "ytdl" # Set service type
-    text = "<b>🏮 YTDL Leech » Send Me LINK(s) 🔗</b> ...<code>https//link1.mp4</code>"
-    src_request_msg = await task_starter(message, text)
-    log.debug(f"/ytupload: task_starter called, src_request_msg set")
+    global BOT, src_request_msg, user_tasks
+    user_id = message.from_user.id
+    log.info(f"Received /ytupload from {user_id}")
+
+    # NEW: Parallel task mode - create TaskContext immediately
+    task_ctx = create_task_context(
+        user_id=user_id,
+        chat_id=message.chat.id,
+        mode="leech"
+    )
+    task_ctx.service_type = "ytdl"  # YouTube/yt-dlp service
+    task_ctx.mode_type = "normal"  # Default to normal
+
+    # Store in user_tasks registry (waiting for URLs)
+    user_tasks[user_id] = task_ctx
+    log.info(f"Created TaskContext {task_ctx.get_short_id()} for /ytupload, stored in user_tasks for user {user_id}")
+
+    # Delete user's command message
+    try:
+        await message.delete()
+    except Exception as e:
+        log.warning(f"Could not delete command message: {e}")
+
+    # Send prompt for URLs
+    text = (
+        "<b>🏮 YTDL Leech » Send Me LINK(s) 🔗</b>\n\n"
+        "(YouTube, Twitter, Instagram, TikTok, etc.)\n\n"
+        "<code>https//youtube.com/watch?v=xyz</code>\n\n"
+        f"<i>📌 Task ID: {task_ctx.get_short_id()}</i>"
+    )
+
+    try:
+        prompt_msg = await message.reply_text(text)
+        task_ctx.status_msg = prompt_msg  # Store prompt message in task context
+        log.info(f"Sent URL prompt for task {task_ctx.get_short_id()}")
+    except Exception as e:
+        log.error(f"Failed to send URL prompt: {e}")
+        # Clean up on failure
+        del user_tasks[user_id]
+        await message.reply_text(f"❌ Failed to start task: {e}")
 
 @colab_bot.on_message(filters.command("igupload") & filters.private)
 async def instagram_upload(client, message):
-    global BOT, src_request_msg
-    log.info(f"Received /igupload from {message.from_user.id}")
-    BOT.Mode.mode = "leech"; BOT.Mode.ytdl = False; BOT.Options.service_type = "instagram" # Set service type
-    text = "<b>📸 Instagram Leech » Send Me LINK(s) 🔗</b>\n\n(Posts, Reels, Stories, IGTV, Carousels)\n\n<code>https://instagram.com/p/xyz\nhttps://instagram.com/reel/abc</code>"
-    src_request_msg = await task_starter(message, text)
-    log.debug(f"/igupload: task_starter called, src_request_msg set")
+    global BOT, src_request_msg, user_tasks
+    user_id = message.from_user.id
+    log.info(f"Received /igupload from {user_id}")
+
+    # NEW: Parallel task mode - create TaskContext immediately
+    task_ctx = create_task_context(
+        user_id=user_id,
+        chat_id=message.chat.id,
+        mode="leech"
+    )
+    task_ctx.service_type = "instagram"  # Instagram service
+    task_ctx.mode_type = "normal"  # Default to normal
+
+    # Store in user_tasks registry (waiting for URLs)
+    user_tasks[user_id] = task_ctx
+    log.info(f"Created TaskContext {task_ctx.get_short_id()} for /igupload, stored in user_tasks for user {user_id}")
+
+    # Delete user's command message
+    try:
+        await message.delete()
+    except Exception as e:
+        log.warning(f"Could not delete command message: {e}")
+
+    # Send prompt for URLs
+    text = (
+        "<b>📸 Instagram Leech » Send Me LINK(s) 🔗</b>\n\n"
+        "(Posts, Reels, Stories, IGTV, Carousels)\n\n"
+        "<code>https://instagram.com/p/xyz\n"
+        "https://instagram.com/reel/abc</code>\n\n"
+        f"<i>📌 Task ID: {task_ctx.get_short_id()}</i>"
+    )
+
+    try:
+        prompt_msg = await message.reply_text(text)
+        task_ctx.status_msg = prompt_msg  # Store prompt message in task context
+        log.info(f"Sent URL prompt for task {task_ctx.get_short_id()}")
+    except Exception as e:
+        log.error(f"Failed to send URL prompt: {e}")
+        # Clean up on failure
+        del user_tasks[user_id]
+        await message.reply_text(f"❌ Failed to start task: {e}")
 
 # --- REMOVED /nzbclouddownload, /Debriddownload, /bitsodownload handlers ---
 
@@ -616,8 +839,95 @@ async def ask_service_type(client, message):
 # --- Replace the entire handle_url function ---
 @colab_bot.on_message(filters.create(isLink) & ~filters.photo & filters.private)
 async def handle_url(client: Client, message: Message):
-    global BOT, src_request_msg, reply_prompt_message_id
+    global BOT, src_request_msg, reply_prompt_message_id, user_tasks
     user_id = message.from_user.id
+
+    # === NEW: Check for Parallel Task Mode First ===
+    # If user has a pending task in user_tasks, process it in parallel mode
+    if user_id in user_tasks:
+        task_ctx = user_tasks.pop(user_id)  # Remove from registry
+        log.info(f"Found pending parallel task {task_ctx.get_short_id()} for user {user_id}")
+
+        # Delete the prompt message
+        if task_ctx.status_msg:
+            try:
+                await task_ctx.status_msg.delete()
+            except Exception:
+                pass
+
+        try:
+            # Parse URLs from message
+            input_text = message.text.strip() if message.text else ""
+            if not input_text:
+                await message.reply_text("❌ Input cannot be empty.")
+                return
+
+            # Store raw input for processing
+            task_ctx.source_urls = [input_text]  # Store raw text (will be parsed by taskScheduler)
+
+            # Send processing message
+            processing_msg = await message.reply_text(
+                f"⚙️ **Processing your request...**\n\n"
+                f"**Task ID:** `{task_ctx.get_short_id()}`\n"
+                f"**Mode:** Leech (Telegram Upload)\n\n"
+                f"<i>Please wait while we prepare your download...</i>"
+            )
+            task_ctx.status_msg = processing_msg
+
+            # Copy necessary state from global BOT to task context
+            # (taskScheduler expects these in BOT structure)
+            # Determine ytdl flag based on service type
+            is_ytdl = task_ctx.service_type == "ytdl"
+
+            task_ctx.bot = type('obj', (object,), {
+                'Mode': type('obj', (object,), {
+                    'mode': task_ctx.mode,
+                    'ytdl': is_ytdl,
+                    'type': task_ctx.mode_type
+                })(),
+                'Options': type('obj', (object,), {
+                    'service_type': task_ctx.service_type,
+                    'filenames': [],
+                    'custom_name': BOT.Options.custom_name if hasattr(BOT.Options, 'custom_name') else '',
+                    'zip_pswd': BOT.Options.zip_pswd if hasattr(BOT.Options, 'zip_pswd') else '',
+                    'unzip_pswd': BOT.Options.unzip_pswd if hasattr(BOT.Options, 'unzip_pswd') else ''
+                })(),
+                'SOURCE': [input_text],  # Raw source input
+                'Setting': BOT.Setting  # Share global settings
+            })()
+
+            # Create isolated paths and message objects
+            task_ctx.paths = type('obj', (object,), {
+                'down_path': task_ctx.down_path,
+                'work_path': task_ctx.work_path,
+                'temp_zpath': f"{task_ctx.work_path}/temp_zip",
+                'temp_unzip': f"{task_ctx.work_path}/temp_unzip"
+            })()
+
+            task_ctx.msg = type('obj', (object,), {
+                'status_msg': task_ctx.status_msg
+            })()
+
+            task_ctx.messages = task_ctx.messages  # Already exists in TaskContext
+            task_ctx.task_error = task_ctx.error  # Map error to task_error name
+
+            # Launch task in parallel (NON-BLOCKING!)
+            async_task = asyncio.create_task(
+                run_parallel_task(client, message, task_ctx)
+            )
+            task_ctx.async_task = async_task
+
+            log.info(f"Launched parallel task {task_ctx.get_short_id()} - returning immediately!")
+
+            # Return immediately - task runs in background!
+            return
+
+        except Exception as e:
+            log.exception(f"Error launching parallel task for user {user_id}")
+            await message.reply_text(f"❌ Failed to start task: {str(e)[:200]}")
+            return
+
+    # === END Parallel Task Mode ===
 
     # --- Initial State Checks ---
     # Handle extract waiting state FIRST (before command check)
