@@ -21,11 +21,6 @@ from pyrogram.errors import MessageNotModified
 from .variables import BOT, MSG, BotTimes, Messages, Paths, TRANSFER
 from .task_context import TaskContext  # NEW: Import for multi-task support
 
-# Enhanced UI Components
-from .ui_components import Emoji, ProgressBar, TimeFormatter, SizeFormatter
-from .keyboard_layouts import quick_cancel
-from .enhanced_status import create_download_status, create_upload_status
-
 # Setup logger
 log = logging.getLogger(__name__)
 
@@ -1401,129 +1396,98 @@ async def send_settings(client, message, msg_id, is_command: bool):
 
 async def status_bar(down_msg, speed, percentage, eta, done, total_size, engine, use_custom_text: bool = False, task_ctx: TaskContext = None):
     """
-    Update progress bar for download/upload tasks - NOW WITH ENHANCED UI!
+    Update progress bar for download/upload tasks.
 
     Args:
-        down_msg: Header text or custom formatted message
-        speed: Speed in MB/s (will be converted to bytes/s for formatter)
-        percentage: Progress percentage (0-100)
-        eta: ETA string or seconds
-        done: Downloaded bytes or formatted string
-        total_size: Total bytes or formatted string
-        engine: Download engine name
-        use_custom_text: If True, use down_msg as complete text
-        task_ctx: Optional TaskContext for per-task state
+        task_ctx: Optional TaskContext for per-task state (NEW in Phase 3)
+                  If provided, uses task_ctx.status_msg and task_ctx.started_at
+                  If None, falls back to global MSG and BotTimes (backward compat)
     """
-    global MSG, Messages, BotTimes, log
+    global MSG, Messages, BotTimes, log # Ensure necessary globals are accessible
 
+    # Debug logging added as requested
     task_id_str = f"[{task_ctx.get_short_id()}]" if task_ctx else "[legacy]"
-    log.debug(f"status_bar {task_id_str} called. Enhanced UI mode!")
+    log.debug(f"status_bar {task_id_str} called. use_custom_text={use_custom_text}, Speed='{speed}', Pct='{percentage}', ETA='{eta}', Done='{done}', Total='{total_size}'")
 
-    # Throttle updates
+    # Throttle updates using isTimeOver helper function
     if not isTimeOver(2.5):
         log.debug(f"status_bar {task_id_str}: Interval not passed, skipping update.")
-        return
+        return  # Check interval
 
-    # Get status message
+    # NEW: Use task_ctx.status_msg if available, otherwise fall back to global MSG
     status_msg = task_ctx.status_msg if task_ctx else MSG.status_msg
 
     if status_msg and hasattr(status_msg, 'edit_text'):
+        final_text = ""
         try:
             if use_custom_text:
-                # Custom text mode (for 7z etc.)
+                # Using custom text (likely from 7z archive progress)
                 log.debug("status_bar using custom text mode.")
-                final_text = down_msg + sysINFO()
-                kb_markup = keyboard(task_ctx.task_id if task_ctx else None)
+                # Assumes down_msg is the full pre-formatted text from the caller
+                final_text = down_msg + sysINFO() # Append system info
             else:
-                # ✨ ENHANCED UI MODE ✨
-                log.debug("status_bar using ENHANCED UI mode!")
+                # Standard formatting mode
+                log.debug("status_bar using standard formatting mode.")
+                bar_length = 12 # Length of the progress bar
 
-                # Get task info
-                task_id = task_ctx.task_id if task_ctx else None
-
-                # Get filename from Transfer or down_msg
-                from .variables import Transfer
-                filename = Transfer.name if hasattr(Transfer, 'name') else "Downloading..."
-
-                # Convert speed from MB/s string to bytes/s if needed
+                # Ensure percentage is treated as a number for calculation
                 try:
-                    if isinstance(speed, str):
-                        # Remove "MB/s" and convert
-                        speed_value = float(speed.replace("MB/s", "").strip())
-                        speed_bytes = int(speed_value * 1024 * 1024)
-                    else:
-                        speed_bytes = int(float(speed) * 1024 * 1024)
-                except:
-                    speed_bytes = 0
+                    percentage_float = float(percentage)
+                except (ValueError, TypeError):
+                    log.warning(f"status_bar received invalid percentage type: {percentage}. Defaulting to 0.")
+                    percentage_float = 0.0
 
-                # Convert done/total to bytes if they're strings
-                try:
-                    if isinstance(done, str):
-                        # Already formatted, parse it back
-                        done_bytes = int(done.split()[0].replace(",", ""))  # Rough approximation
-                    else:
-                        done_bytes = int(done)
-                except:
-                    done_bytes = 0
+                # Calculate filled part of the bar
+                filled_length = min(bar_length, max(0, int(percentage_float / 100 * bar_length)))
+                # Create the bar string (Corrected variable name from previous analysis)
+                bar = "█" * filled_length + "░" * (bar_length - filled_length)
 
-                try:
-                    if isinstance(total_size, str):
-                        total_bytes = int(total_size.split()[0].replace(",", ""))
-                    else:
-                        total_bytes = int(total_size)
-                except:
-                    total_bytes = 1
+                eta_str = eta # Use eta string passed directly
 
-                # Convert ETA to seconds if it's a string
-                try:
-                    if isinstance(eta, str):
-                        # Parse strings like "2m 30s" - rough approximation
-                        eta_seconds = 0
-                        if 'h' in eta:
-                            eta_seconds += int(eta.split('h')[0]) * 3600
-                        if 'm' in eta:
-                            eta_seconds += int(eta.split('m')[0].split()[-1]) * 60
-                        if 's' in eta:
-                            eta_seconds += int(eta.split('s')[0].split()[-1])
-                    else:
-                        eta_seconds = float(eta)
-                except:
-                    eta_seconds = None
+                # NEW: Calculate elapsed time from task_ctx if available, otherwise use global
+                if task_ctx and task_ctx.started_at:
+                    elapsed_seconds = (datetime.now() - task_ctx.started_at).seconds
+                else:
+                    elapsed_seconds = (datetime.now() - BotTimes.task_start).seconds
+                elapsed_str = getTime(elapsed_seconds)
 
-                # 🎨 Create beautiful status message!
-                final_text, kb_markup = create_download_status(
-                    filename=filename,
-                    progress=float(percentage),
-                    speed=speed_bytes,
-                    downloaded=done_bytes,
-                    total_size=total_bytes,
-                    eta=eta_seconds,
-                    engine=engine,
-                    task_id=task_id,
-                    style="modern"  # Change to "compact" or "classic" if you prefer
-                )
+                # Format the main body of the status message
+                text_body = (f"\n╭「{bar}」 **»** __{percentage_float:.1f}%__" # Display percentage with one decimal
+                             f"\n├⚡️ **Speed »** **{str(speed)}**"
+                             f"\n├⚙️ **Engine »** **{str(engine)}**"
+                             f"\n├⏳ **ETA »** __{eta_str}__"
+                             f"\n├⏱️ **Elapsed »** __{elapsed_str}__"
+                             f"\n├✅ **Done »** **{str(done)}**"
+                             f"\n╰📦 **Total »** __{str(total_size)}__")
 
-                # Add system info
-                final_text += sysINFO()
+                # Combine the header (down_msg), body, and system info
+                final_text = down_msg + text_body + sysINFO()
 
+            # --- Edit the Telegram message ---
+            kb_markup = keyboard() # Get the cancel keyboard
             log.debug(f"Attempting to edit status message {status_msg.id}")
 
-            # Edit message (handles both photo and text)
+            # Check if message is a photo (has thumbnail) or plain text
             if hasattr(status_msg, 'photo') and status_msg.photo:
+                # Message has a photo/thumbnail - edit caption to preserve thumbnail
                 await status_msg.edit_caption(caption=final_text, reply_markup=kb_markup)
-                log.debug(f"Status message caption edited (enhanced UI).")
+                log.debug(f"Status message caption edited (thumbnail preserved).")
             else:
+                # Plain text message - edit text normally
                 await status_msg.edit_text(text=final_text, disable_web_page_preview=True, reply_markup=kb_markup)
-                log.debug(f"Status message text edited (enhanced UI).")
+                log.debug(f"Status message text edited.")
 
         except MessageNotModified:
+            # This is expected if the message content hasn't changed, ignore it silently
             log.debug("Status message content hasn't changed, skipping edit.")
             pass
         except Exception as e:
-            if "Message to edit not found" not in str(e):
+            # Log other errors during message editing
+            if "Message to edit not found" not in str(e): # Avoid logging if message was deleted
                 log.warning(f"Status bar update failed: {str(e)}")
 
     else:
+         # Log if the status message object is missing or invalid
          if not status_msg:
              log.debug(f"status_bar {task_id_str}: status_msg is not set.")
          elif not hasattr(status_msg, 'edit_text'):
