@@ -205,7 +205,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
                                                f"╰📦 **Source Size »** __{total_in_unit}__")
 
                                 log.debug(f"archive/log_stream: Calling status_bar with custom text. Pct={percentage}")
-                                await status_bar(status_text, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True)
+                                await status_bar(status_text, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
                         except ValueError:
                             log.warning(f"Could not convert 7z percentage '{match.group(1)}' to int.")
                         except Exception as status_err:

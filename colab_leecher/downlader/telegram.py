@@ -190,7 +190,7 @@ async def TelegramDownload(link, num, task_ctx=None) -> bool: # Added return typ
                     eta=formatted_eta_str,
                     done=sizeUnit(current_overall),
                     total_size=sizeUnit(display_total),
-                    engine="Pyrogram ????",
+                    engine="Pyrogram 💥",
                     task_ctx=task_ctx
                 )
             except Exception as e:

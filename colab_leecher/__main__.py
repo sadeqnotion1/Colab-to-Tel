@@ -28,6 +28,9 @@ from .utility.helper import (
     keyboard, fetch_links_from_url, fetch_filenames_from_url,
     is_instagram, is_nzbcloud, is_m3u8_url, is_mindvalley_url
 )
+# Enhanced UI Components
+from .utility.ui_components import MessageTemplate, Emoji
+from .utility.keyboard_layouts import quick_menu
 from .downlader.mindvalley import MindvalleyDownloader
 from .uploader.telegram import upload_file
 from .utility.handler import SendLogs
@@ -51,19 +54,44 @@ extract_request_msg = None  # Track when waiting for extract path input
 # --- Helper function to ask for leech type (normal/zip/unzip) ---
 async def ask_leech_type(client, chat_id, mode_name, reply_to_message_id=None):
     log.info(f"Asking leech type (Mode: {mode_name}) for chat {chat_id}")
-    keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Regular", callback_data="leechtype_normal")],
-         [InlineKeyboardButton("Compress", callback_data="leechtype_zip"), InlineKeyboardButton("Extract", callback_data="leechtype_unzip")],
-         [InlineKeyboardButton("UnDoubleZip", callback_data="leechtype_undzip")],
-         [InlineKeyboardButton("Cancel Task", callback_data="cancel")]] # Add cancel here
+
+    # 🎨 Beautiful header with description
+    header = MessageTemplate.menu_header(
+        "Select Processing Type",
+        "Choose how you want to process your download",
+        emoji=Emoji.PROCESS
     )
-    text = f"<b> Select Processing Type You Want » </b>\n\nRegular:<i> Normal file upload</i>\nCompress:<i> Zip file upload</i>\nExtract:<i> extract before upload</i>\nUnDoubleZip:<i> Unzip then compress</i>"
+
+    # 📝 Option descriptions
+    options = [
+        ("Regular", "Normal file upload without processing"),
+        ("Compress", "Compress files into a ZIP archive before upload"),
+        ("Extract", "Extract archive contents before upload"),
+        ("UnDoubleZip", "Extract nested archives, then compress")
+    ]
+
+    options_text = MessageTemplate.option_list(options, numbered=True)
+
+    # ⌨️ Beautiful keyboard
+    keyboard = quick_menu([
+        (f"{Emoji.DOCUMENT} Regular", "leechtype_normal"),
+        (f"{Emoji.COMPRESS} Compress", "leechtype_zip"),
+        (f"{Emoji.EXTRACT} Extract", "leechtype_unzip"),
+        (f"{Emoji.ARCHIVE} UnDoubleZip", "leechtype_undzip")
+    ], close=False)
+
+    # Add cancel button manually
+    from pyrogram.types import InlineKeyboardButton
+    keyboard.inline_keyboard.append([
+        InlineKeyboardButton(f"{Emoji.ERROR} Cancel Task", callback_data="cancel")
+    ])
+
+    text = header + options_text
+
     try:
-        # Send as new message instead of editing/replying maybe?
         await client.send_message(chat_id, text, reply_markup=keyboard)
-        # if reply_to_message_id: await client.send_message(chat_id, text, reply_markup=keyboard, reply_to_message_id=reply_to_message_id)
-        # else: await client.send_message(chat_id, text, reply_markup=keyboard)
-    except Exception as e: log.error(f"Failed send leech type prompt: {e}", exc_info=True)
+    except Exception as e:
+        log.error(f"Failed send leech type prompt: {e}", exc_info=True)
 
 # --- Helper function to ask for filename option (Debrid/bitso) ---
 async def ask_filename_option(client, chat_id, service_name):
@@ -637,8 +665,12 @@ async def handle_url(client: Client, message: Message):
 
 
     log.info(f"Handling URL/Path message from user {user_id}. Current Mode: {BOT.Mode.mode}")
-    # Reset options initially
-    BOT.Options.custom_name = ""; BOT.Options.zip_pswd = ""; BOT.Options.unzip_pswd = ""; BOT.Options.filenames = []; BOT.Options.service_type = None # Reset service type here
+    # Save currently set options (from /setname, /zippswd, etc.) before processing new input
+    saved_custom_name = BOT.Options.custom_name
+    saved_zip_pswd = BOT.Options.zip_pswd
+    saved_unzip_pswd = BOT.Options.unzip_pswd
+    # Reset only filenames and service_type (these are per-request, not persistent)
+    BOT.Options.filenames = []; BOT.Options.service_type = None
 
     # Delete the initial prompt message ("Send Me THEM LINK(s)...")
     if src_request_msg:
@@ -754,10 +786,10 @@ async def handle_url(client: Client, message: Message):
                      else: break
                 urls = temp_source[:-args_to_remove] if args_to_remove > 0 else temp_source
 
-            # Set options from extracted args (only applies to direct message input)
-            BOT.Options.custom_name = extracted_args["custom_name"]
-            BOT.Options.zip_pswd = extracted_args["zip_pswd"]
-            BOT.Options.unzip_pswd = extracted_args["unzip_pswd"]
+            # Set options from extracted args - only override if new args were provided, otherwise preserve saved values
+            BOT.Options.custom_name = extracted_args["custom_name"] if extracted_args["custom_name"] else saved_custom_name
+            BOT.Options.zip_pswd = extracted_args["zip_pswd"] if extracted_args["zip_pswd"] else saved_zip_pswd
+            BOT.Options.unzip_pswd = extracted_args["unzip_pswd"] if extracted_args["unzip_pswd"] else saved_unzip_pswd
             # Only reset filenames if not already set by NZBcloud TITLE= parsing
             if BOT.Options.service_type != "nzbcloud":
                 BOT.Options.filenames = []
