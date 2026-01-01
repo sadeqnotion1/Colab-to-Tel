@@ -56,9 +56,17 @@ def get_Aria2c_Name(link):
 # --- on_output ---
 # ----- MODIFIED version of the user-provided on_output function -----
 # ----- Replace the existing on_output in aria2.py with this: -----
-async def on_output(output: str, current_filename: str):
+async def on_output(output: str, current_filename: str, task_ctx=None):
     # Ensure necessary globals are accessible if needed
     global Messages, BotTimes, Aria2c, log, status_bar, sizeUnit, TaskError
+
+    # Multi-task support: Use task_ctx if provided, otherwise fallback to globals
+    if task_ctx:
+        _messages = task_ctx.messages
+        _bot_times = task_ctx.bot_times
+    else:
+        _messages = Messages
+        _bot_times = BotTimes
 
     total_size = None
     downloaded_bytes = None
@@ -139,7 +147,7 @@ async def on_output(output: str, current_filename: str):
 
     # --- Status Update Section ---
     if percentage is not None and downloaded_bytes and total_size and eta:
-        Messages.status_head = f"<b>📥 DOWNLOADING » </b>\n\n<b>🏷️ Name » </b><code>{current_filename}</code>\n"
+        _messages.status_head = f"<b>📥 DOWNLOADING » </b>\n\n<b>🏷️ Name » </b><code>{current_filename}</code>\n"
 
         # Manual speed calculation only if regex somehow failed to capture speed
         if speed_string is None or speed_string == "N/A":
@@ -155,7 +163,7 @@ async def on_output(output: str, current_filename: str):
                      elif "M" in down_unit: multiplier = 1024**2
                      elif "K" in down_unit: multiplier = 1024
                      downloaded_numeric = down_value * multiplier
-                     elapsed_time_seconds = (datetime.now() - BotTimes.task_start).total_seconds()
+                     elapsed_time_seconds = (datetime.now() - _bot_times.task_start).total_seconds()
                      elapsed_time_seconds = max(1, elapsed_time_seconds)
                      current_speed = downloaded_numeric / elapsed_time_seconds
                      speed_string = f"{sizeUnit(current_speed)}/s"
@@ -169,14 +177,15 @@ async def on_output(output: str, current_filename: str):
         try:
             clean_eta = eta.removesuffix(']') # Ensure trailing ']' is removed
             await status_bar(
-                Messages.status_head, speed_string, int(percentage), clean_eta,
+                _messages.status_head, speed_string, int(percentage), clean_eta,
                 downloaded_bytes, total_size, "Aria2c 🧨",
+                task_ctx=task_ctx  # Pass task_ctx for per-task progress tracking
             )
         except Exception as status_err:
              log.error(f"Error calling status_bar: {status_err}")
 
     elif not Aria2c.link_info: # Timeout check
-         elapsed_time_seconds = (datetime.now() - BotTimes.task_start).total_seconds()
+         elapsed_time_seconds = (datetime.now() - _bot_times.task_start).total_seconds()
          if elapsed_time_seconds >= 270:
              log.error(f"No valid progress info received for ~270s. Assuming dead link for: {current_filename}")
 
@@ -287,7 +296,7 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
                  if line:
                      log.debug(f"Aria2c {stream_name}: {line}")
                      if stream_name == 'stdout':
-                          await on_output(line, display_name_for_status)
+                          await on_output(line, display_name_for_status, task_ctx)
                  await asyncio.sleep(0.05)
 
         stdout_task = asyncio.create_task(log_stream(proc.stdout, 'stdout'))
