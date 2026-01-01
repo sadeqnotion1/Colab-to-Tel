@@ -59,6 +59,7 @@ class BOT:
         custom_name = ""
         zip_pswd = ""
         unzip_pswd = ""
+        archive_format = "zip"  # Options: "zip" or "rar"
         delta_extract_filenames = True
         bitso_extract_filenames = True
         filenames = []

@@ -146,20 +146,31 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
 
     makedirs(_paths.temp_zpath, exist_ok=True)
 
-   
-    archive_out_final_name = f"{clean_name}.zip" 
-    pswd_param = ""
-    archive_format_param = "-tzip" 
+    # Determine archive format (ZIP or RAR)
+    archive_format = _bot.Options.archive_format if hasattr(_bot.Options, 'archive_format') else "zip"
+    archive_format = archive_format.lower()  # Ensure lowercase
 
+    if archive_format == "rar":
+        archive_out_final_name = f"{clean_name}.rar"
+        archive_format_param = "-trar"
+        compression_level = "-mx=5"  # Normal compression for RAR
+        format_display = "RAR"
+    else:  # Default to ZIP
+        archive_out_final_name = f"{clean_name}.zip"
+        archive_format_param = "-tzip"
+        compression_level = "-mx=0"  # Store only for ZIP (faster)
+        format_display = "ZIP"
+
+    pswd_param = ""
     if _bot.Options.zip_pswd:
         pswd_param = f'-p"{_bot.Options.zip_pswd}"'
-        log.info(f"Using 7z to create password-protected archive: {archive_out_final_name}")
+        log.info(f"Using 7z to create password-protected {format_display} archive: {archive_out_final_name}")
     else:
-        log.info(f"Using 7z to create non-password archive: {archive_out_final_name}")
+        log.info(f"Using 7z to create non-password {format_display} archive: {archive_out_final_name}")
 
     archive_out_path = ospath.join(_paths.temp_zpath, archive_out_final_name)
     _messages.download_name = archive_out_final_name
-    _messages.status_head = f"<b>🔐 ZIPPING (using 7z) » </b>\n\n<code>{archive_out_final_name}</code>\n"
+    _messages.status_head = f"<b>🔐 ARCHIVING ({format_display} via 7z) » </b>\n\n<code>{archive_out_final_name}</code>\n"
 
     # Get task_start from task context
     if task_ctx:
@@ -169,8 +180,8 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
         BotTimes.task_start = datetime.now()
         _task_start = BotTimes.task_start
 
-    
-    cmd = f'7z a -mx=0 {archive_format_param} {pswd_param} -bsp1 "{archive_out_path}" "{path}"'
+
+    cmd = f'7z a {compression_level} {archive_format_param} {pswd_param} -bsp1 "{archive_out_path}" "{path}"'
     
 
     

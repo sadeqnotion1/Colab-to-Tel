@@ -155,6 +155,24 @@ async def run_parallel_task(client, message, task_ctx):
         # Mark task as started
         task_ctx.mark_started()
 
+        # Setup task_error and paths aliases for compatibility
+        task_ctx.task_error = task_ctx.error  # Alias for legacy code
+        task_ctx.paths = type('obj', (object,), {
+            'down_path': task_ctx.down_path,
+            'work_path': task_ctx.work_path,
+            'WORK_PATH': task_ctx.work_path,
+            'temp_zpath': f"{task_ctx.work_path}/temp_zip",
+            'temp_unzip': f"{task_ctx.work_path}/temp_unzip",
+            'temp_unzip_path': f"{task_ctx.work_path}/temp_unzip",
+            'temp_dirleech_path': f"{task_ctx.work_path}/dir_leech_temp",
+            'temp_files_dir': f"{task_ctx.work_path}/leech_temp",
+            'thumbnail_ytdl': f"{task_ctx.work_path}/ytdl_thumbnails",
+            'HERO_IMAGE': task_ctx.hero_image,
+            'THMB_PATH': task_ctx.hero_image,
+            'DEFAULT_HERO': task_ctx.hero_image,
+            'VIDEO_FRAME': f"{task_ctx.work_path}/video_frame.jpg"
+        })()
+
         # Register in global task queue
         TASK_QUEUE.add_task(task_ctx)
         log.info(f"Task {task_id_str} registered in TASK_QUEUE. Total active: {TASK_QUEUE.get_task_count()}")
@@ -862,7 +880,43 @@ async def handle_url(client: Client, message: Message):
                 await message.reply_text("❌ Input cannot be empty.")
                 return
 
-            # Store raw input for processing
+            # === NEW: Check if input is a gist/pastebin with multiple links ===
+            parsed_links = None
+            try:
+                parsed_links = await fetch_links_from_url(input_text)
+            except Exception as fetch_err:
+                log.error(f"Error fetching links from URL: {fetch_err}")
+
+            if parsed_links and len(parsed_links) > 1:
+                # Multiple links detected - ask user if they want parallel downloads
+                from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+                keyboard_parallel = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🚀 All Parallel", callback_data=f"parallel_all:{task_ctx.get_short_id()}"),
+                        InlineKeyboardButton("⏸️ One by One", callback_data=f"parallel_seq:{task_ctx.get_short_id()}")
+                    ]
+                ])
+
+                choice_msg = await message.reply_text(
+                    f"📦 **Found {len(parsed_links)} links in your gist/paste!**\n\n"
+                    f"**How do you want to download them?**\n\n"
+                    f"🚀 **All Parallel** - Download all {len(parsed_links)} files at the same time (fastest!)\n"
+                    f"⏸️ **One by One** - Download sequentially in batches\n\n"
+                    f"<i>Task ID: {task_ctx.get_short_id()}</i>",
+                    reply_markup=keyboard_parallel
+                )
+
+                # Store parsed links and choice message in task context for callback handler
+                task_ctx.source_urls = parsed_links  # Store parsed links
+                task_ctx.status_msg = choice_msg  # Update status message
+
+                # Re-add task to user_tasks (waiting for user choice)
+                user_tasks[user_id] = task_ctx
+                log.info(f"Waiting for parallel/sequential choice for task {task_ctx.get_short_id()} with {len(parsed_links)} links")
+                return  # Exit - callback will handle the choice
+
+            # Store raw input for processing (single link or gist with 1 link)
             task_ctx.source_urls = [input_text]  # Store raw text (will be parsed by taskScheduler)
 
             # Send processing message
@@ -890,7 +944,8 @@ async def handle_url(client: Client, message: Message):
                     'filenames': [],
                     'custom_name': BOT.Options.custom_name if hasattr(BOT.Options, 'custom_name') else '',
                     'zip_pswd': BOT.Options.zip_pswd if hasattr(BOT.Options, 'zip_pswd') else '',
-                    'unzip_pswd': BOT.Options.unzip_pswd if hasattr(BOT.Options, 'unzip_pswd') else ''
+                    'unzip_pswd': BOT.Options.unzip_pswd if hasattr(BOT.Options, 'unzip_pswd') else '',
+                    'archive_format': BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else 'zip'
                 })(),
                 'SOURCE': [input_text],  # Raw source input
                 'Setting': BOT.Setting  # Share global settings
@@ -900,8 +955,17 @@ async def handle_url(client: Client, message: Message):
             task_ctx.paths = type('obj', (object,), {
                 'down_path': task_ctx.down_path,
                 'work_path': task_ctx.work_path,
+                'WORK_PATH': task_ctx.work_path,  # Required by task_manager.py:659
                 'temp_zpath': f"{task_ctx.work_path}/temp_zip",
-                'temp_unzip': f"{task_ctx.work_path}/temp_unzip"
+                'temp_unzip': f"{task_ctx.work_path}/temp_unzip",
+                'temp_unzip_path': f"{task_ctx.work_path}/temp_unzip",  # Required by task_manager.py:1130
+                'temp_dirleech_path': f"{task_ctx.work_path}/dir_leech_temp",  # Required by task_manager.py:619,960,1462
+                'temp_files_dir': f"{task_ctx.work_path}/leech_temp",  # May be needed
+                'thumbnail_ytdl': f"{task_ctx.work_path}/ytdl_thumbnails",  # May be needed
+                'HERO_IMAGE': task_ctx.hero_image,  # Required by task_manager.py:666
+                'THMB_PATH': Paths.THMB_PATH,  # Required by task_manager.py:768 - use global thumbnail
+                'DEFAULT_HERO': Paths.DEFAULT_HERO,  # Required by task_manager.py:739 - fallback thumbnail
+                'VIDEO_FRAME': f"{task_ctx.work_path}/video_frame.jpg"  # May be needed
             })()
 
             task_ctx.msg = type('obj', (object,), {
@@ -975,10 +1039,11 @@ async def handle_url(client: Client, message: Message):
 
 
     log.info(f"Handling URL/Path message from user {user_id}. Current Mode: {BOT.Mode.mode}")
-    # Save currently set options (from /setname, /zippswd, etc.) before processing new input
+    # Save currently set options (from /setname, /zippswd, /archivetype, etc.) before processing new input
     saved_custom_name = BOT.Options.custom_name
     saved_zip_pswd = BOT.Options.zip_pswd
     saved_unzip_pswd = BOT.Options.unzip_pswd
+    saved_archive_format = BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else 'zip'
     # Reset only filenames and service_type (these are per-request, not persistent)
     BOT.Options.filenames = []; BOT.Options.service_type = None
 
@@ -1100,6 +1165,7 @@ async def handle_url(client: Client, message: Message):
             BOT.Options.custom_name = extracted_args["custom_name"] if extracted_args["custom_name"] else saved_custom_name
             BOT.Options.zip_pswd = extracted_args["zip_pswd"] if extracted_args["zip_pswd"] else saved_zip_pswd
             BOT.Options.unzip_pswd = extracted_args["unzip_pswd"] if extracted_args["unzip_pswd"] else saved_unzip_pswd
+            BOT.Options.archive_format = saved_archive_format  # Restore archive format setting
             # Only reset filenames if not already set by NZBcloud TITLE= parsing
             if BOT.Options.service_type != "nzbcloud":
                 BOT.Options.filenames = []
@@ -1192,6 +1258,139 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
     log.info(f"Handling callback query: {query_data} from user {user_id}")
 
     try: # Main try block starts here
+        # === NEW: Handle Parallel Download Choice ===
+        if query_data.startswith("parallel_"):
+            await callback_query.answer()  # Acknowledge
+            choice, task_short_id = query_data.split(":", 1)
+
+            # Retrieve task from user_tasks
+            if user_id not in user_tasks:
+                await callback_query.answer("❌ Task expired. Please start over with /tupload", show_alert=True)
+                return
+
+            task_ctx = user_tasks.pop(user_id)
+            links = task_ctx.source_urls  # List of parsed links
+
+            # Delete choice message
+            try:
+                await message.delete()
+            except Exception:
+                pass
+
+            if choice == "parallel_all":
+                # User wants parallel downloads!
+                log.info(f"User chose PARALLEL downloads for {len(links)} links")
+
+                # Send confirmation
+                await message.reply_text(
+                    f"🚀 **Launching {len(links)} parallel downloads!**\n\n"
+                    f"Each file will download independently.\n"
+                    f"You can monitor each task separately.\n\n"
+                    f"<i>Starting now...</i>"
+                )
+
+                # Create a separate TaskContext for EACH link and launch them
+                launched_tasks = []
+                for idx, link in enumerate(links, 1):
+                    # Create new task context for this link
+                    sub_task = create_task_context(
+                        user_id=user_id,
+                        chat_id=task_ctx.chat_id,
+                        mode=task_ctx.mode
+                    )
+                    sub_task.source_urls = [link]  # Single link per task
+                    sub_task.service_type = task_ctx.service_type
+                    sub_task.mode_type = task_ctx.mode_type
+
+                    # Copy bot structure from original task
+                    sub_task.bot = type('obj', (object,), {
+                        'Mode': type('obj', (object,), {
+                            'mode': sub_task.mode,
+                            'ytdl': False,
+                            'type': sub_task.mode_type
+                        })(),
+                        'Options': type('obj', (object,), {
+                            'service_type': sub_task.service_type,
+                            'filenames': [],
+                            'custom_name': '',
+                            'zip_pswd': '',
+                            'unzip_pswd': '',
+                            'archive_format': 'zip'
+                        })(),
+                        'SOURCE': [link],
+                        'Setting': BOT.Setting
+                    })()
+
+                    # Create paths
+                    sub_task.paths = type('obj', (object,), {
+                        'down_path': sub_task.down_path,
+                        'work_path': sub_task.work_path,
+                        'WORK_PATH': sub_task.work_path,
+                        'temp_zpath': f"{sub_task.work_path}/temp_zip",
+                        'temp_unzip': f"{sub_task.work_path}/temp_unzip",
+                        'temp_unzip_path': f"{sub_task.work_path}/temp_unzip",
+                        'temp_dirleech_path': f"{sub_task.work_path}/dir_leech_temp",
+                        'temp_files_dir': f"{sub_task.work_path}/leech_temp",
+                        'thumbnail_ytdl': f"{sub_task.work_path}/ytdl_thumbnails",
+                        'HERO_IMAGE': sub_task.hero_image,
+                        'THMB_PATH': Paths.THMB_PATH,
+                        'DEFAULT_HERO': Paths.DEFAULT_HERO,
+                        'VIDEO_FRAME': f"{sub_task.work_path}/video_frame.jpg"
+                    })()
+
+                    sub_task.messages = sub_task.messages
+                    sub_task.task_error = sub_task.error
+
+                    # Launch task asynchronously
+                    log.info(f"Launching parallel task {idx}/{len(links)}: {sub_task.get_short_id()}")
+                    launched_tasks.append(sub_task.get_short_id())
+
+                    # Launch parallel task
+                    asyncio.create_task(run_parallel_task(client, message, sub_task))
+
+                log.info(f"✅ Launched {len(launched_tasks)} parallel tasks: {launched_tasks}")
+
+            elif choice == "parallel_seq":
+                # User wants sequential (one by one) - continue with normal flow
+                log.info(f"User chose SEQUENTIAL downloads for {len(links)} links")
+
+                # Process as a single task with all links
+                task_ctx.source_urls = links  # All links in one task
+
+                # Send processing message
+                processing_msg = await message.reply_text(
+                    f"⚙️ **Processing {len(links)} links sequentially...**\n\n"
+                    f"**Task ID:** `{task_ctx.get_short_id()}`\n"
+                    f"**Mode:** Leech (Telegram Upload)\n\n"
+                    f"<i>Please wait...</i>"
+                )
+                task_ctx.status_msg = processing_msg
+
+                # Set up task context (same as normal flow)
+                task_ctx.bot = type('obj', (object,), {
+                    'Mode': type('obj', (object,), {'mode': task_ctx.mode, 'ytdl': False, 'type': task_ctx.mode_type})(),
+                    'Options': type('obj', (object,), {'service_type': task_ctx.service_type, 'filenames': [], 'custom_name': '', 'zip_pswd': '', 'unzip_pswd': '', 'archive_format': 'zip'})(),
+                    'SOURCE': links,
+                    'Setting': BOT.Setting
+                })()
+
+                task_ctx.paths = type('obj', (object,), {
+                    'down_path': task_ctx.down_path, 'work_path': task_ctx.work_path, 'WORK_PATH': task_ctx.work_path,
+                    'temp_zpath': f"{task_ctx.work_path}/temp_zip", 'temp_unzip': f"{task_ctx.work_path}/temp_unzip",
+                    'temp_unzip_path': f"{task_ctx.work_path}/temp_unzip", 'temp_dirleech_path': f"{task_ctx.work_path}/dir_leech_temp",
+                    'temp_files_dir': f"{task_ctx.work_path}/leech_temp", 'thumbnail_ytdl': f"{task_ctx.work_path}/ytdl_thumbnails",
+                    'HERO_IMAGE': task_ctx.hero_image, 'THMB_PATH': Paths.THMB_PATH, 'DEFAULT_HERO': Paths.DEFAULT_HERO,
+                    'VIDEO_FRAME': f"{task_ctx.work_path}/video_frame.jpg"
+                })()
+
+                task_ctx.messages = task_ctx.messages
+                task_ctx.task_error = task_ctx.error
+
+                # Launch parallel task
+                asyncio.create_task(run_parallel_task(client, message, task_ctx))
+
+            return  # Exit callback handler
+
         # --- Service Selection ---
         if query_data.startswith("service_"):
             await callback_query.answer() # Acknowledge first
@@ -1394,13 +1593,18 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             # Parse callback data
             task_ctx = None
             if query_data.startswith("cancel:"):
-                # Multi-task cancellation: extract task_id
-                task_id = query_data.split(":", 1)[1]
-                task_ctx = TASK_QUEUE.get_task(task_id)
+                # Multi-task cancellation: extract short_id
+                short_id = query_data.split(":", 1)[1]
+
+                # Find task by short ID (first 8 chars of UUID)
+                for task_id, task in TASK_QUEUE.get_all_tasks().items():
+                    if task.get_short_id() == short_id:
+                        task_ctx = task
+                        break
 
                 if not task_ctx:
                     await callback_query.answer("Task not found or already completed.", show_alert=True)
-                    log.warning(f"Cancel requested for task {task_id[:8]} but not found in queue")
+                    log.warning(f"Cancel requested for task {short_id} but not found in queue")
                     return
 
                 log.info(f"Multi-task cancellation requested for task {task_ctx.get_short_id()}")
@@ -1496,6 +1700,20 @@ async def unzip_pswd(client, message):
     global BOT; log.info("Received /unzipaswd command.")
     if len(message.command) != 2: msg = await message.reply_text("Send\n/unzipaswd <code>password</code>", quote=True)
     else: BOT.Options.unzip_pswd = message.command[1]; msg = await message.reply_text("Unzip Password Set!"); log.info("Unzip password set.")
+    await sleep(15); await message_deleter(message, msg)
+@colab_bot.on_message(filters.command("archivetype") & filters.private)
+async def archive_type(client, message):
+    global BOT; log.info("Received /archivetype command.")
+    if len(message.command) != 2:
+        msg = await message.reply_text("Send\n/archivetype <code>zip</code> or <code>rar</code>", quote=True)
+    else:
+        format_choice = message.command[1].lower()
+        if format_choice in ["zip", "rar"]:
+            BOT.Options.archive_format = format_choice
+            msg = await message.reply_text(f"Archive Format Set to: **{format_choice.upper()}**")
+            log.info(f"Archive format set to: {format_choice}")
+        else:
+            msg = await message.reply_text("Invalid format! Use <code>zip</code> or <code>rar</code>", quote=True)
     await sleep(15); await message_deleter(message, msg)
 
 # Helper function to perform extraction
@@ -2848,7 +3066,7 @@ async def help_command(client, message):
                  "  `/mindvalley` - Download Mindvalley courses (M3U8)\n"
                  "  `/nzb` - Download from Usenet (NZB files)\n"
                  "Follow prompts after command (you'll be asked to select service type for /tupload & /gdupload).\n\n"
-                 "**Other Commands:** `/settings`, `/setname`, `/zipaswd`, `/unzipaswd`\n\n"
+                 "**Other Commands:** `/settings`, `/setname`, `/zipaswd`, `/unzipaswd`, `/archivetype`\n\n"
                  "⚠️ **Send image for Thumbnail!**")
     await message.reply_text(help_text, quote=True, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Instructions 📖", url="https://github.com/XronTrix10/Telegram-Leecher/wiki/INSTRUCTIONS")],[InlineKeyboardButton("Channel 📣", url="https://t.me/Colab_Leecher"), InlineKeyboardButton("Group 💬", url="https://t.me/Colab_Leecher_Discuss")]]))
 
@@ -2897,6 +3115,7 @@ async def send_sabnzbd_url_to_telegram():
 @colab_bot.on_message()
 async def debug_all_messages(client, message):
     log.info(f"DEBUG: Received message from user {message.from_user.id if message.from_user else 'N/A'}, chat {message.chat.id if message.chat else 'N/A'}, text: {message.text[:50] if message.text else 'No text'}")
+    raise ContinuePropagation  # Allow other handlers to process this message
 
 # Main Execution Guard
 if __name__ == "__main__":
