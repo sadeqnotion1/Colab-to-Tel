@@ -21,7 +21,6 @@ from pyrogram import enums
 from pyrogram.errors import MessageNotModified
 from .variables import BOT, MSG, BotTimes, Messages, Paths, TRANSFER
 from .task_context import TaskContext  # NEW: Import for multi-task support
-from .task_dashboard import try_update_summary  # NEW: Import for dashboard updates during archiving
 
 # Setup logger
 log = logging.getLogger(__name__)
@@ -1480,7 +1479,8 @@ async def status_bar(down_msg, speed, percentage, eta, done, total_size, engine,
                 log.warning(f"Failed to parse download size '{done}': {e}")
             log.debug(f"⏩ status_bar {task_id_str}: Parallel mode - Updated stats: {done} ({task_ctx.transfer.down_bytes} bytes), speed: {speed}")
 
-            # Trigger dashboard update to show archiving progress
+            # Trigger dashboard update to show archiving progress (lazy import to avoid circular dependency)
+            from .task_dashboard import try_update_summary
             await try_update_summary()
             return
     # ===== END PARALLEL MODE CHECK =====
