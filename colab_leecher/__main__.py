@@ -52,6 +52,9 @@ src_request_msg = None
 reply_prompt_message_id = None
 extract_request_msg = None
 
+# Flag to ensure background tasks start only once
+_background_tasks_started = False
+
 # NEW: Per-user task registry for parallel task support
 # Maps user_id -> TaskContext for pending tasks (waiting for URLs)
 user_tasks = {}  # Track when waiting for extract path input
@@ -3347,8 +3350,21 @@ async def send_sabnzbd_url_to_telegram():
     except Exception as e:
         log.warning(f"Failed to send SABnzbd URL via Telegram: {e}")
 
+# Startup handler: Start background tasks on first message
+@colab_bot.on_message(group=0)
+async def startup_handler(client, message):
+    """Start background tasks once when bot receives first message"""
+    global _background_tasks_started
+    if not _background_tasks_started:
+        _background_tasks_started = True
+        log.info("Starting background tasks...")
+        TASK_QUEUE.create_background_task(send_sabnzbd_url_to_telegram(), name="sabnzbd-notifier")
+        TASK_QUEUE.create_background_task(periodic_cleanup_task(), name="periodic-cleanup")
+        log.info("✅ Background tasks started (sabnzbd-notifier, periodic-cleanup)")
+    raise ContinuePropagation  # Allow other handlers to process this message
+
 # DEBUG: Log all messages
-@colab_bot.on_message()
+@colab_bot.on_message(group=1)
 async def debug_all_messages(client, message):
     log.info(f"DEBUG: Received message from user {message.from_user.id if message.from_user else 'N/A'}, chat {message.chat.id if message.chat else 'N/A'}, text: {message.text[:50] if message.text else 'No text'}")
     raise ContinuePropagation  # Allow other handlers to process this message
@@ -3376,13 +3392,8 @@ if __name__ == "__main__":
           except Exception as e:
               log.warning(f"SABnzbd auto-detection failed: {e}")
 
-          # Schedule SABnzbd URL message as background task (Tracked)
-          loop = asyncio.get_event_loop()
-          TASK_QUEUE.create_background_task(send_sabnzbd_url_to_telegram(), name="sabnzbd-notifier")
-
-          # Start periodic cleanup task for parallel task system (Tracked)
-          TASK_QUEUE.create_background_task(periodic_cleanup_task(), name="periodic-cleanup")
-          log.info("Started monitored periodic cleanup background task")
+          # Note: Background tasks will be started via on_startup handler
+          # to avoid RuntimeError (no running event loop)
 
           # master-level addition: Register Signal Handlers for Graceful Shutdown
           import signal
