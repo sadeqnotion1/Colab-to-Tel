@@ -1536,8 +1536,19 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 # Create a separate TaskContext for EACH link and launch them
                 launched_tasks = []
                 for idx, link in enumerate(links, 1):
-                    # ... setup sub_task ...
-                    
+                    # Create new TaskContext for this link
+                    sub_task = create_task_context(
+                        user_id=user_id,
+                        chat_id=message.chat.id,
+                        mode=task_ctx.mode
+                    )
+                    sub_task.source_urls = [link]  # Single link per task
+                    sub_task.mode_type = task_ctx.mode_type
+                    sub_task.service_type = task_ctx.service_type
+
+                    # Add to TASK_QUEUE
+                    await TASK_QUEUE.add_task(sub_task)
+
                     # Share the single status message across all tasks
                     sub_task.status_msg = shared_status_msg
 
