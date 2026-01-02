@@ -192,20 +192,13 @@ async def downloadly_download(url: str, link_num: int, filename_hint: str = None
     return success
 
 # --- NZBCloud Downloader (Remains the same) ---
-async def nzbcloud_download(urls: list, filenames: list):
-    """Downloads files from NZBCloud using http_download_logic."""
-    # Retrieve cf_clearance cookie from settings
-    cf_clearance = BOT.Setting.nzb_cf_clearance
-    cookies = {"cf_clearance": cf_clearance} if cf_clearance else {}
-    headers = {
-        "User-Agent": "Mozilla/5.0", 
-        "Referer": "https://app.nzbcloud.com/" # Standard referer
-    }
+async def nzbcloud_download(urls: list, filenames: list, task_ctx: TaskContext = None):
+    """Downloads files from NZBCloud using aria2c (faster and more reliable than aiohttp)."""
 
     # Check if the number of URLs matches the number of filenames
-    if len(urls) != len(filenames): 
+    if len(urls) != len(filenames):
         log.error(f"NZBCloud Error: Mismatch between URL count ({len(urls)}) and filename count ({len(filenames)}).")
-        await cancelTask(f"NZBCloud Error: Mismatch URLs/FNs.") 
+        await cancelTask(f"NZBCloud Error: Mismatch URLs/FNs.", task_ctx)
         return False # Indicate failure
 
     total_links = len(urls)
@@ -217,45 +210,27 @@ async def nzbcloud_download(urls: list, filenames: list):
         file_name = file_name.strip()
 
         # Skip if URL or filename is empty after stripping
-        if not url or not file_name: 
+        if not url or not file_name:
             log.warning(f"Skipping NZBCloud item {i+1}/{total_links}: Missing URL or Filename.")
             failed_info = {"link": url or "N/A", "filename": file_name or "N/A", "index": i + 1, "reason": "Missing URL/Filename"}
             if TaskError: TaskError.failed_links.append(failed_info)
             all_success = False # Mark as failed
             continue # Move to the next file
 
-        # Construct the full path for the download
-        full_file_path = os.path.join(Paths.down_path, file_name)
-        log.info(f"Starting NZBCloud download {i+1}/{total_links}: '{file_name}' to '{full_file_path}'")
+        log.info(f"Starting NZBCloud download {i+1}/{total_links}: '{file_name}' via aria2c")
 
-        # --- CORRECTED PART ---
-        # Ensure the directory for the file exists before calling http_download_logic
-        try:
-            os.makedirs(os.path.dirname(full_file_path), exist_ok=True) 
-        except OSError as e:
-            log.error(f"Could not create directory {os.path.dirname(full_file_path)}: {e}")
-            failed_info = {"link": url, "filename": file_name, "index": i + 1, "reason": f"Directory creation failed: {e}"}
-            if TaskError: TaskError.failed_links.append(failed_info)
-            all_success = False
-            continue # Skip to next file if directory creation fails
-        # --- END CORRECTION ---
-
-        # Call the generic HTTP download logic
-        # Assumes http_download_logic returns True on success, False on failure
-        # and updates TaskError.failed_links internally on failure.
-        success = await http_download_logic(
-            url=url, 
-            file_path=full_file_path, 
-            display_name=file_name, 
-            headers=headers, 
-            cookies=cookies, 
-            link_num=i + 1, 
-            total_links=total_links
+        # Use aria2_Download instead of http_download_logic
+        # aria2c has proper NZBCloud cookie handling, parallel connections, and retry logic
+        success = await aria2_Download(
+            link=url,
+            num=i + 1,
+            pre_determined_name=file_name,  # Pass the TITLE= filename
+            task_ctx=task_ctx
         )
 
         # Log if the download function reported failure
-        if not success: 
-            log.error(f"NZBCloud download failed for '{file_name}'. Check logs for details from http_download_logic.")
+        if not success:
+            log.error(f"NZBCloud download failed for '{file_name}'. Check logs for details from aria2_Download.")
             all_success = False # Mark overall batch as having failures
 
     # Return the overall success status of the batch
@@ -438,13 +413,12 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
     if selected_service in ["nzbcloud", "Debrid", "bitso"]:
         batch_success = False
         if selected_service == "nzbcloud":
-             log.info("Routing task to nzbcloud_download function...") 
-             batch_success = await nzbcloud_download(source, batch_filenames) 
-             batch_success = True 
+             log.info("Routing task to nzbcloud_download function...")
+             batch_success = await nzbcloud_download(source, batch_filenames, task_ctx)
         elif selected_service == "Debrid":
-             batch_success = await Debrid_download(source, batch_filenames) 
+             batch_success = await Debrid_download(source, batch_filenames)
         elif selected_service == "bitso":
-             batch_success = await bitso_download(source, batch_filenames) 
+             batch_success = await bitso_download(source, batch_filenames)
 
         if not batch_success: batch_had_failures = True
 
