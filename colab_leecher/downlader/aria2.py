@@ -287,8 +287,27 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
     command = [ "aria2c", "-x16", "--seed-time=0", "--summary-interval=1", "--max-tries=3",
                 "--console-log-level=warn", "--file-allocation=none",
                 "--content-disposition=false",
-                "-d", _paths.down_path,
-                link ]
+                "-d", _paths.down_path ]
+
+    # Add Cloudflare cookie and headers for NZBCloud downloads (Aria2c)
+    if 'nzbcloud.com' in link.lower():
+        from .. import BOT
+        cf_clearance = BOT.Setting.nzb_cf_clearance
+        if cf_clearance:
+            log.info(f"🍪 Adding Cloudflare cookie to Aria2c for NZBCloud download")
+            command.extend([
+                "--header", f"Cookie: cf_clearance={cf_clearance}",
+                "--header", "Referer: https://app.nzbcloud.com/",
+                "--header", "Sec-Fetch-Dest: video",
+                "--header", "Sec-Fetch-Mode: no-cors",
+                "--header", "Sec-Fetch-Site: same-site",
+                "--header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+            ])
+        else:
+            log.warning(f"⚠️ NZBCloud download detected but cf_clearance cookie not configured. Download may fail with 403 error.")
+
+    # Add the link as the final argument
+    command.append(link)
     # --- End Command ---
     proc = None
 
