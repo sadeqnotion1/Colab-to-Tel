@@ -1160,7 +1160,7 @@ async def handle_url(client: Client, message: Message):
                     'custom_name': BOT.Options.custom_name if hasattr(BOT.Options, 'custom_name') else '',
                     'zip_pswd': BOT.Options.zip_pswd if hasattr(BOT.Options, 'zip_pswd') else '',
                     'unzip_pswd': BOT.Options.unzip_pswd if hasattr(BOT.Options, 'unzip_pswd') else '',
-                    'archive_format': BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else 'zip'
+                    'archive_format': BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else 'rar'
                 })(),
                 'SOURCE': [input_text],  # Raw source input
                 'Setting': BOT.Setting  # Share global settings
@@ -1270,7 +1270,7 @@ async def handle_url(client: Client, message: Message):
     saved_custom_name = BOT.Options.custom_name
     saved_zip_pswd = BOT.Options.zip_pswd
     saved_unzip_pswd = BOT.Options.unzip_pswd
-    saved_archive_format = BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else 'zip'
+    saved_archive_format = BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else 'rar'
     # Reset only filenames and service_type (these are per-request, not persistent)
     BOT.Options.filenames = []; BOT.Options.service_type = None
 
@@ -1572,7 +1572,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                             'custom_name': '',
                             'zip_pswd': '',
                             'unzip_pswd': '',
-                            'archive_format': 'zip'
+                            'archive_format': 'rar'
                         })(),
                         'SOURCE': [link],
                         'Setting': BOT.Setting
