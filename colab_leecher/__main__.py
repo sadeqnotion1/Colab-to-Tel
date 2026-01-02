@@ -1525,11 +1525,13 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 async def update_shared_message_loop():
                     """Periodically update the shared message with all task progress"""
                     while TASK_QUEUE.get_task_count() > 0:
-                        await asyncio.sleep(3)  # Update every 3 seconds
+                        await asyncio.sleep(5)  # Update every 5 seconds
                         try:
                             await update_summary_dashboard()
                         except Exception as e:
-                            log.error(f"Error updating shared message: {e}")
+                            # Silently skip if message not modified (no changes)
+                            if "MESSAGE_NOT_MODIFIED" not in str(e):
+                                log.error(f"Error updating shared message: {e}")
 
                 TASK_QUEUE.create_background_task(update_shared_message_loop(), name="shared-dashboard-updater")
 
@@ -1545,6 +1547,43 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                     sub_task.source_urls = [link]  # Single link per task
                     sub_task.mode_type = task_ctx.mode_type
                     sub_task.service_type = task_ctx.service_type
+
+                    # Create mock bot object (required by task scheduler)
+                    is_ytdl = sub_task.service_type == "ytdl"
+                    sub_task.bot = type('obj', (object,), {
+                        'Mode': type('obj', (object,), {
+                            'mode': sub_task.mode,
+                            'ytdl': is_ytdl,
+                            'type': sub_task.mode_type
+                        })(),
+                        'Options': type('obj', (object,), {
+                            'service_type': sub_task.service_type,
+                            'filenames': [],
+                            'custom_name': '',
+                            'zip_pswd': '',
+                            'unzip_pswd': '',
+                            'archive_format': 'zip'
+                        })(),
+                        'SOURCE': [link],
+                        'Setting': BOT.Setting
+                    })()
+
+                    # Create paths object (required by task scheduler)
+                    sub_task.paths = type('obj', (object,), {
+                        'down_path': sub_task.down_path,
+                        'work_path': sub_task.work_path,
+                        'WORK_PATH': sub_task.work_path,
+                        'temp_zpath': f"{sub_task.work_path}/temp_zip",
+                        'temp_unzip': f"{sub_task.work_path}/temp_unzip",
+                        'temp_unzip_path': f"{sub_task.work_path}/temp_unzip",
+                        'temp_dirleech_path': f"{sub_task.work_path}/dir_leech_temp",
+                        'temp_files_dir': f"{sub_task.work_path}/leech_temp",
+                        'thumbnail_ytdl': f"{sub_task.work_path}/ytdl_thumbnails",
+                        'HERO_IMAGE': sub_task.hero_image,
+                        'THMB_PATH': Paths.THMB_PATH,
+                        'DEFAULT_HERO': Paths.DEFAULT_HERO,
+                        'VIDEO_FRAME': f"{sub_task.work_path}/video_frame.jpg"
+                    })()
 
                     # Add to TASK_QUEUE
                     await TASK_QUEUE.add_task(sub_task)
