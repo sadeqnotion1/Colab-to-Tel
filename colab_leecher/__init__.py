@@ -133,13 +133,12 @@ except RuntimeError:
 # Initialize Pyrogram Client
 try:
     log.info("Initializing Pyrogram client...")
-    # Initialize Pyrogram Client - REMOVED retry_delay and sleep_threshold
-    # Use timestamp in session name to avoid lock issues on Windows
-    import time
-    session_name = f"colab_bot_{int(time.time())}" if os.name == 'nt' else "colab_bot"
+    # Use consistent session name to prevent duplicate bot instances
+    # This ensures only ONE bot session exists at a time
+    session_name = "colab_bot"
 
     colab_bot = Client(
-        session_name,  # Session name with timestamp on Windows
+        session_name,  # Consistent session name
         api_id=API_ID,
         api_hash=API_HASH,
         bot_token=BOT_TOKEN,
