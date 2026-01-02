@@ -107,12 +107,26 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                 status_emoji = "⬆️"
                 status = f"Uploading ({uploaded_count} files) • {speed}"
             elif task_ctx.transfer.down_bytes > 0:
-                # Downloading phase
-                speed = task_ctx.transfer.get_speed()
-                elapsed = task_ctx.get_elapsed_time()
-                elapsed_str = getTime(elapsed) if elapsed > 0 else "0s"
-                status_emoji = "⬇️"
-                status = f"Downloading • {speed} • {elapsed_str}"
+                # Check if we're in archiving/zipping phase (download done but upload not started)
+                # Detect by checking if status_head contains archiving keywords
+                is_archiving = False
+                if task_ctx.messages and task_ctx.messages.status_head:
+                    status_head_lower = task_ctx.messages.status_head.lower()
+                    is_archiving = any(keyword in status_head_lower for keyword in ['archiving', 'zipping', 'creating archive'])
+
+                if is_archiving:
+                    # Archiving/Zipping phase
+                    status_emoji = "🔐"
+                    elapsed = task_ctx.get_elapsed_time()
+                    elapsed_str = getTime(elapsed) if elapsed > 0 else "0s"
+                    status = f"Archiving • {elapsed_str}"
+                else:
+                    # Downloading phase
+                    speed = task_ctx.transfer.get_speed()
+                    elapsed = task_ctx.get_elapsed_time()
+                    elapsed_str = getTime(elapsed) if elapsed > 0 else "0s"
+                    status_emoji = "⬇️"
+                    status = f"Downloading • {speed} • {elapsed_str}"
             else:
                 # Initializing
                 status_emoji = "⏳"

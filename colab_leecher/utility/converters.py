@@ -115,11 +115,17 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
          return None, 0
 
 
-    # Determine archive name with priority: custom_name > download_name > file basename > filenames > dir basename > "archive"
-    # NOTE: download_name is checked BEFORE filenames because smart naming (from batch downloads) sets it most accurately
+    # Determine archive name with priority: custom_name > TITLE= filenames > download_name > file basename > dir basename > "archive"
+    # NOTE: TITLE= filenames (from NZBCloud/Debrid) are checked BEFORE download_name to use real content names instead of temporary disk names like "play"
     if _bot.Options.custom_name:
         name = _bot.Options.custom_name
         log.info(f"Using custom_name for archive: {name}")
+    elif _bot.Options.filenames and len(_bot.Options.filenames) > 0:
+        # PRIORITY #2: Use TITLE= filename from NZBcloud/Debrid/bitso (checked BEFORE download_name!)
+        # This ensures files show real content names instead of temporary names like "play.zip"
+        first_filename = _bot.Options.filenames[0]
+        name, _ = ospath.splitext(first_filename)  # Remove extension like .mkv, .mp4 etc.
+        log.info(f"Using filename from TITLE= for archive: {name} (from {first_filename})")
     elif _messages.download_name:
         # Use download_name - set by smart naming or initial guess (aria2/ytdl/gdrive etc.)
         name, _ = ospath.splitext(_messages.download_name)  # Strip extension in case it has one
@@ -128,11 +134,6 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
         # Single file: use its filename without extension
         name, _ = ospath.splitext(ospath.basename(path))
         log.info(f"Using file basename for archive: {name}")
-    elif _bot.Options.filenames and len(_bot.Options.filenames) > 0:
-        # Use first filename from NZBcloud/Debrid/bitso TITLE= (strip extension for archive name)
-        first_filename = _bot.Options.filenames[0]
-        name, _ = ospath.splitext(first_filename)  # Remove extension like .mkv, .mp4 etc.
-        log.info(f"Using filename from TITLE= for archive: {name} (from {first_filename})")
     elif ospath.isdir(path):
         # Fallback to directory basename (might be "Download")
         name = ospath.basename(path)
