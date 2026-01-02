@@ -154,7 +154,8 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
     makedirs(_paths.temp_zpath, exist_ok=True)
 
     # Determine archive format (ZIP or RAR)
-    archive_format = _bot.Options.archive_format if hasattr(_bot.Options, 'archive_format') else "rar"
+    # Note: RAR creation requires WinRAR (proprietary), 7z on Linux can only extract RAR
+    archive_format = _bot.Options.archive_format if hasattr(_bot.Options, 'archive_format') else "zip"
     archive_format = archive_format.lower()  # Ensure lowercase
 
     if archive_format == "rar":
