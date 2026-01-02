@@ -194,6 +194,15 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
     # Ensure necessary globals are accessible
     global BotTimes, Messages, TaskError, TRANSFER, Aria2c, Paths, log, clean_filename, apply_dot_style, on_output, is_google_drive, is_mega # Removed unnecessary urlparse, urllib, os here as they are imported
 
+    # ===== URL SANITIZATION: Remove newlines/carriage returns =====
+    # This prevents "Newline or carriage return detected in headers" errors from aiohttp
+    # Strips whitespace and removes \n, \r, \t characters that can appear from copy-paste
+    original_link = link
+    link = link.strip().replace('\n', '').replace('\r', '').replace('\t', '')
+    if link != original_link:
+        log.warning(f"URL contained whitespace/newlines for link {num}. Sanitized: {link[:100]}...")
+    # ===== END SANITIZATION =====
+
     # Multi-task support: Use task_ctx if provided, otherwise fallback to globals
     if task_ctx:
         _paths = task_ctx.paths
@@ -285,7 +294,11 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        log.debug(f"Aria2c process started (PID: {proc.pid}) with command: {' '.join(command)}")
+        # Mask URL in logs for security
+        log_command = command.copy()
+        if len(log_command) > 0:
+            log_command[-1] = "REDACTED_URL"
+        log.debug(f"Aria2c process started (PID: {proc.pid}) with command: {' '.join(log_command)}")
 
         # --- Async stream reader ---
         async def log_stream(stream, stream_name):
@@ -369,6 +382,30 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
             if os.path.exists(final_filepath_on_disk):
                  try: os.remove(final_filepath_on_disk)
                  except OSError as cl_err: log.warning(f"Failed cleanup aria2 file: {cl_err}")
+
+    except asyncio.CancelledError:
+        log.warning(f"Aria2 download cancelled for link index {num}. Terminating subprocess...")
+        if proc and proc.returncode is None:
+            try:
+                proc.terminate() # Try terminate first
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    log.warning("Aria2 process ignored terminate, killing...")
+                    proc.kill()
+                    await proc.wait()
+            except Exception as kill_err:
+                 log.warning(f"Error terminating aria2c process: {kill_err}")
+        
+        # Cleanup partial file
+        if expected_filename:
+             cleanup_path = os.path.join(_paths.down_path, expected_filename)
+             if os.path.exists(cleanup_path):
+                 try: os.remove(cleanup_path)
+                 except OSError as cl_err: log.warning(f"Failed cleanup aria2 file after cancellation: {cl_err}")
+        
+        # Re-raise to ensure cancellation propagates
+        raise
 
     except FileNotFoundError as fnf:
         # aria2c executable not found - fall back to aiohttp

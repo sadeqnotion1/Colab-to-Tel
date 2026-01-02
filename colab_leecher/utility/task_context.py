@@ -13,11 +13,56 @@ import logging
 import time
 import asyncio
 from dataclasses import dataclass, field
-from typing import Dict, Optional, List
+from collections import deque
 from datetime import datetime
+from typing import Dict, Optional, List, Set, Deque
 from pyrogram.types import Message
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class SystemMetrics:
+    """Real-time system health metrics for observability"""
+    active_tasks: int = 0
+    completed_tasks_total: int = 0
+    failed_tasks_total: int = 0
+    cancelled_tasks_total: int = 0
+    total_bytes_downloaded: int = 0
+    total_bytes_uploaded: int = 0
+    aria2_restarts: int = 0
+    telegram_api_errors: int = 0
+    start_time: float = field(default_factory=time.time)
+
+    # Rolling windows for averages (thread-safe deque)
+    # Using maxlen ensures we don't leak memory over time
+    recent_completion_times: Deque[float] = field(default_factory=lambda: deque(maxlen=50))
+
+    def record_completion(self, duration_seconds: float):
+        """Record a successful task completion"""
+        self.completed_tasks_total += 1
+        self.recent_completion_times.append(duration_seconds)
+
+    def record_failure(self):
+        """Record a task failure"""
+        self.failed_tasks_total += 1
+
+    def record_cancellation(self):
+        """Record a task cancellation"""
+        self.cancelled_tasks_total += 1
+
+    def get_success_rate(self) -> float:
+        """Calculate success rate percentage"""
+        total = self.completed_tasks_total + self.failed_tasks_total
+        if total == 0:
+            return 100.0
+        return (self.completed_tasks_total / total) * 100
+
+    def get_avg_completion_time(self) -> float:
+        """Get average completion time in seconds"""
+        if not self.recent_completion_times:
+            return 0.0
+        return sum(self.recent_completion_times) / len(self.recent_completion_times)
 
 
 # Replicate Transfer class structure for per-task statistics
@@ -29,7 +74,7 @@ class TaskTransfer:
     sent_file: List = field(default_factory=list)  # List of successfully sent message objects (from Pyrogram)
     sent_file_names: List[str] = field(default_factory=list)
     successful_downloads: List[dict] = field(default_factory=list)  # List of {'url': url, 'filename': filename}
-    start_time: float = field(default_factory=time.time)
+    start_time: float = field(default_factory=lambda: time.time())
 
     def reset(self):
         """Reset transfer statistics"""
@@ -49,7 +94,8 @@ class TaskTransfer:
     def get_speed(self) -> str:
         """Calculate current download/upload speed"""
         elapsed = time.time() - self.start_time
-        if elapsed == 0:
+        # Use threshold instead of == 0 for float comparison
+        if elapsed < 0.01:  # Less than 10ms
             return "0 B/s"
 
         total_bytes = max(self.down_bytes, self.up_bytes)
@@ -205,69 +251,199 @@ class TaskQueue:
     and maintains the summary dashboard message.
     """
 
+    # Task limit constants
+    MAX_TASKS_PER_USER = 5
+    MAX_TOTAL_TASKS = 20
+
     def __init__(self):
         self.active_tasks: Dict[str, TaskContext] = {}  # task_id → TaskContext
         self.summary_msg: Optional[Message] = None  # Summary dashboard message
         self.last_summary_update: float = 0  # Last time summary was updated
         self.summary_update_interval: float = 5.0  # Update summary every 5 seconds
-        self._lock = asyncio.Lock()  # Thread-safe operations
+        self.min_forced_update_interval: float = 1.0  # Minimum 1 second between forced updates (debounce)
+        self._lock = asyncio.Lock()  # Thread-safe operations for task dict
+        self._summary_lock = asyncio.Lock()  # Thread-safe operations for summary updates
+        
+        # master-level additions
+        self.metrics = SystemMetrics()
+        self.background_tasks: Set[asyncio.Task] = set()
+        self.is_shutting_down: bool = False
 
-    def add_task(self, task_ctx: TaskContext):
-        """Register a new task"""
-        self.active_tasks[task_ctx.task_id] = task_ctx
-        log.info(f"Task {task_ctx.get_short_id()} added to queue. Total active: {len(self.active_tasks)}")
+    def create_background_task(self, coro, name: str) -> asyncio.Task:
+        """Create and track a background task to prevent leaks"""
+        task = asyncio.create_task(coro, name=name)
+        self.background_tasks.add(task)
+        # Remove from set when done
+        task.add_done_callback(self.background_tasks.discard)
+        return task
 
-    def remove_task(self, task_id: str) -> Optional[TaskContext]:
-        """Remove a completed/cancelled task"""
-        task_ctx = self.active_tasks.pop(task_id, None)
-        if task_ctx:
-            log.info(f"Task {task_ctx.get_short_id()} removed from queue. Remaining: {len(self.active_tasks)}")
-        return task_ctx
+    async def add_task(self, task_ctx: TaskContext):
+        """Register a new task (thread-safe)"""
+        async with self._lock:
+            if self.is_shutting_down:
+                log.warning(f"Rejecting task {task_ctx.get_short_id()} - system shutting down")
+                return
+            self.active_tasks[task_ctx.task_id] = task_ctx
+            self.metrics.active_tasks = len(self.active_tasks)
+            log.info(f"Task {task_ctx.get_short_id()} added to queue. Total active: {len(self.active_tasks)}")
 
-    def get_task(self, task_id: str) -> Optional[TaskContext]:
-        """Get task by ID"""
-        return self.active_tasks.get(task_id)
+    async def remove_task(self, task_id: str) -> Optional[TaskContext]:
+        """Remove a completed/cancelled task (thread-safe)"""
+        async with self._lock:
+            task_ctx = self.active_tasks.pop(task_id, None)
+            if task_ctx:
+                self.metrics.active_tasks = len(self.active_tasks)
+                
+                # Record metrics based on task outcome
+                duration = task_ctx.get_elapsed_time()
+                if task_ctx.is_cancelled:
+                    self.metrics.record_cancellation()
+                elif task_ctx.error.state:
+                    self.metrics.record_failure()
+                else:
+                    self.metrics.record_completion(duration)
+                    
+                # Track data volume
+                self.metrics.total_bytes_downloaded += sum(task_ctx.transfer.down_bytes) if isinstance(task_ctx.transfer.down_bytes, list) else task_ctx.transfer.down_bytes
+                self.metrics.total_bytes_uploaded += sum(task_ctx.transfer.up_bytes) if isinstance(task_ctx.transfer.up_bytes, list) else task_ctx.transfer.up_bytes
+                
+                log.info(f"Task {task_ctx.get_short_id()} removed from queue. Remaining: {len(self.active_tasks)}")
+            return task_ctx
 
-    def get_user_tasks(self, user_id: int) -> List[TaskContext]:
-        """Get all tasks for a specific user"""
-        return [
-            task_ctx for task_ctx in self.active_tasks.values()
-            if task_ctx.user_id == user_id
-        ]
+    def get_health_summary(self) -> str:
+        """Generate human-readable health check report"""
+        uptime = time.time() - self.metrics.start_time
+        import math
+        
+        def format_time(seconds):
+            if seconds < 60: return f"{seconds:.0f}s"
+            if seconds < 3600: return f"{seconds/60:.1f}m"
+            return f"{seconds/3600:.1f}h"
 
-    def get_all_tasks(self) -> Dict[str, TaskContext]:
-        """Get all active tasks"""
-        return self.active_tasks.copy()
+        return (
+            f"🏥 **System Health Report**\n"
+            f"├ **Status:** {'🔴 Shutting Down' if self.is_shutting_down else '🟢 Healthy'}\n"
+            f"├ **Uptime:** `{format_time(uptime)}`\n"
+            f"├ **Active Tasks:** `{len(self.active_tasks)}` / `{self.MAX_TOTAL_TASKS}`\n"
+            f"├ **Background Tasks:** `{len(self.background_tasks)}` (monitored)\n"
+            f"├ **Success Rate:** `{self.metrics.get_success_rate():.1f}%`\n"
+            f"├ **Avg Task Time:** `{format_time(self.metrics.get_avg_completion_time())}`\n"
+            f"├ **Total Down:** `{self.metrics.total_bytes_downloaded / 1e9:.2f} GB`\n"
+            f"╰ **Total Up:** `{self.metrics.total_bytes_uploaded / 1e9:.2f} GB`"
+        )
+
+    async def shutdown(self):
+        """Perform graceful shutdown of all tasks and background operations"""
+        log.info("Starting system-wide graceful shutdown...")
+        self.is_shutting_down = True
+        
+        # 1. Cancel all active tasks
+        async with self._lock:
+            tasks_to_cancel = list(self.active_tasks.values())
+            
+        for ctx in tasks_to_cancel:
+            if ctx.async_task and not ctx.async_task.done():
+                log.info(f"Cancelling task {ctx.get_short_id()} during shutdown")
+                ctx.async_task.cancel()
+                
+        # 2. Cancel monitored background tasks
+        log.info(f"Cancelling {len(self.background_tasks)} background tasks")
+        for task in list(self.background_tasks):
+            if not task.done():
+                task.cancel()
+                
+        # 3. Wait for everything to settle (with timeout)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*self.background_tasks, return_exceptions=True),
+                timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            log.warning("Shutdown timeout - some tasks may have been force-killed")
+            
+        log.info("Graceful shutdown complete")
+
+    async def get_task(self, task_id: str) -> Optional[TaskContext]:
+        """Get task by ID (thread-safe)"""
+        async with self._lock:
+            return self.active_tasks.get(task_id)
+
+    async def has_task(self, task_id: str) -> bool:
+        """Check if a task exists in the queue (thread-safe)"""
+        async with self._lock:
+            return task_id in self.active_tasks
+
+    async def get_user_tasks(self, user_id: int) -> List[TaskContext]:
+        """Get all tasks for a specific user (thread-safe)"""
+        async with self._lock:
+            return [
+                task_ctx for task_ctx in self.active_tasks.values()
+                if task_ctx.user_id == user_id
+            ]
+
+    async def get_all_tasks(self) -> Dict[str, TaskContext]:
+        """Get all active tasks (thread-safe copy)"""
+        async with self._lock:
+            return self.active_tasks.copy()
 
     def get_task_count(self) -> int:
-        """Get number of active tasks"""
+        """Get number of active tasks (non-blocking, may be slightly stale)"""
         return len(self.active_tasks)
 
     def has_active_tasks(self) -> bool:
-        """Check if any tasks are active"""
+        """Check if any tasks are active (non-blocking, may be slightly stale)"""
         return len(self.active_tasks) > 0
 
-    def can_start_task(self, user_id: int = None) -> bool:
+    async def can_start_task(self, user_id: int = None) -> tuple[bool, str]:
         """
         Check if a new task can be started.
-        Since we support unlimited parallel tasks, this always returns True.
-        Override this method to implement limits if needed.
+
+        Returns:
+            (can_start, reason) - True/False and reason message
         """
-        # No limits for now - unlimited parallel tasks
-        return True
+        async with self._lock:
+            # Global limit check
+            total_tasks = len(self.active_tasks)
+            if total_tasks >= self.MAX_TOTAL_TASKS:
+                return False, f"System limit reached ({total_tasks}/{self.MAX_TOTAL_TASKS} tasks active). Please wait for some to complete."
+
+            # Per-user limit check
+            if user_id:
+                user_tasks = [
+                    task for task in self.active_tasks.values()
+                    if task.user_id == user_id
+                ]
+                user_task_count = len(user_tasks)
+
+                if user_task_count >= self.MAX_TASKS_PER_USER:
+                    return False, f"You have {user_task_count}/{self.MAX_TASKS_PER_USER} tasks active. Please wait for some to complete."
+
+            return True, "OK"
 
     def should_update_summary(self) -> bool:
-        """Check if summary dashboard should be updated (throttled)"""
+        """
+        Check if summary dashboard should be updated (throttled).
+
+        WARNING: This is NOT thread-safe. Only use for quick non-critical checks.
+        For critical updates, use update_summary_dashboard with force=True.
+        """
         return time.time() - self.last_summary_update >= self.summary_update_interval
 
     def mark_summary_updated(self):
-        """Mark summary as updated"""
+        """
+        Mark summary as updated.
+
+        WARNING: This is NOT thread-safe. Should only be called from within
+        _summary_lock to avoid race conditions.
+        """
         self.last_summary_update = time.time()
 
     async def clear_completed_tasks(self, max_age_hours: int = 1):
         """
         Clean up old completed tasks from memory.
         This prevents memory leaks from tasks that completed but weren't removed.
+
+        Note: This acquires self._lock, so do not call this while holding the lock.
         """
         async with self._lock:
             now = datetime.now()
@@ -280,9 +456,11 @@ class TaskQueue:
                         if age_hours > max_age_hours:
                             to_remove.append(task_id)
 
+            # Remove directly from dict to avoid nested lock acquisition (deadlock)
             for task_id in to_remove:
-                self.remove_task(task_id)
-                log.info(f"Auto-removed old completed task: {task_id[:8]}")
+                removed_task = self.active_tasks.pop(task_id, None)
+                if removed_task:
+                    log.info(f"Auto-removed old completed task: {task_id[:8]}")
 
 
 # Global singleton instance

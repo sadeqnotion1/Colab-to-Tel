@@ -271,7 +271,9 @@ def clean_filename(filename):
         decoded_name = str(filename) # Use original if decoding fails
 
     # Remove forbidden characters and leading/trailing junk
-    # Allow '.' for extensions, but remove problematic sequences like '..'
+    # Explicitly remove ".." path traversal attempts
+    decoded_name = decoded_name.replace('..', '__')
+
     # Remove control characters \x00-\x1f
     cleaned = re.sub(r'[\\/:*?"<>|]+|[\x00-\x1f]', '_', decoded_name).strip('._ -')
 

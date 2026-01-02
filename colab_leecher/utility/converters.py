@@ -887,6 +887,16 @@ async def extract_zip_streaming(
             else:
                 members_to_extract = [m for m in all_members if not m.is_dir()]
 
+            # Zip Bomb Protection: Check total uncompressed size
+            total_uncompressed_size = sum(m.file_size for m in members_to_extract)
+            MAX_UNZIP_SIZE = 50 * 1024 * 1024 * 1024  # 50 GB limit
+
+            if total_uncompressed_size > MAX_UNZIP_SIZE:
+                log.error(f"Zip Bomb detected? Total uncompressed size {sizeUnit(total_uncompressed_size)} exceeds limit {sizeUnit(MAX_UNZIP_SIZE)}")
+                _task_error.state = True
+                _task_error.text = f"Archive too large: {sizeUnit(total_uncompressed_size)}"
+                return False
+
             total_to_extract = len(members_to_extract)
 
             if total_to_extract == 0:
@@ -927,6 +937,12 @@ async def extract_zip_streaming(
 
                     # Create target path
                     target_path = Path(extract_to) / member.filename
+                    
+                    # Zip Slip Protection
+                    if not os.path.abspath(target_path).startswith(os.path.abspath(extract_to)):
+                        log.warning(f"Zip Slip attempt detected! Skipping: {member.filename}")
+                        continue
+
                     target_path.parent.mkdir(parents=True, exist_ok=True)
 
                     # Stream extract file in chunks
@@ -1188,6 +1204,17 @@ async def extract_rar_streaming(
                 log.warning(f"Could not load resume state: {resume_err}. Starting fresh.")
                 resume_state = None
 
+        # Zip Bomb Protection: Check total uncompressed size
+        total_uncompressed_size = sum(m.file_size for m in members_to_extract)
+        MAX_UNZIP_SIZE = 50 * 1024 * 1024 * 1024  # 50 GB limit
+
+        if total_uncompressed_size > MAX_UNZIP_SIZE:
+            log.error(f"Zip Bomb detected? Total uncompressed size {sizeUnit(total_uncompressed_size)} exceeds limit {sizeUnit(MAX_UNZIP_SIZE)}")
+            _task_error.state = True
+            _task_error.text = f"Archive too large: {sizeUnit(total_uncompressed_size)}"
+            rar_ref.close()
+            return False
+
         total_to_extract = len(members_to_extract)
 
         # Validate we have files to extract
@@ -1291,6 +1318,12 @@ async def extract_rar_streaming(
 
                 # Create target path (preserve directory structure)
                 target_path = Path(extract_to) / member.filename
+                
+                # Zip Slip Protection
+                if not os.path.abspath(target_path).startswith(os.path.abspath(extract_to)):
+                    log.warning(f"Zip Slip attempt detected! Skipping: {member.filename}")
+                    continue
+
                 target_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Stream extract file in chunks

@@ -760,8 +760,14 @@ async def taskScheduler(task_ctx=None):
             task_title = f"{type_display_name} {mode_display_name}{service_str}"
             _messages.task_msg += f"__[{task_title}]({_messages.src_link})__\n\n" # Prepend task context to status message base
 
-            # Only create/delete status message if it doesn't exist (parallel tasks share one message)
-            if not _msg.status_msg:
+            # ===== PARALLEL MODE: Skip individual messages, use shared dashboard instead =====
+            # Check if we're in parallel mode by seeing if we're part of TASK_QUEUE
+            is_parallel_mode = False
+            if task_ctx:
+                is_parallel_mode = await TASK_QUEUE.has_task(task_ctx.task_id)
+
+            # Only create individual status message if NOT in parallel mode
+            if not _msg.status_msg and not is_parallel_mode:
                 # Determine which image to send (Custom > Downloaded/Fallback)
                 img_to_send = _paths.THMB_PATH if _bot.Setting.thumbnail and ospath.exists(_paths.THMB_PATH) else final_thumb_path
 

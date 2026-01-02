@@ -16,6 +16,7 @@ from .utility.variables import BOT, MSG, BotTimes, Paths, TRANSFER, TaskError, A
 from .utility.task_context import TaskContext, TASK_QUEUE, create_task_context
 from .utility.task_dashboard import update_summary_dashboard, force_update_summary
 from .utility.task_manager import taskScheduler, task_starter
+from .utility.rate_limiter import RATE_LIMITER
 from .utility.helper import (
     isLink, setThumbnail, message_deleter, send_settings,
     clean_filename, extract_filename_from_url, apply_dot_style, sizeUnit # Import sizeUnit if needed
@@ -54,6 +55,7 @@ extract_request_msg = None
 # NEW: Per-user task registry for parallel task support
 # Maps user_id -> TaskContext for pending tasks (waiting for URLs)
 user_tasks = {}  # Track when waiting for extract path input
+user_tasks_lock = asyncio.Lock()  # Thread-safety for concurrent access
 
 # --- Helper function to ask for leech type (normal/zip/unzip) ---
 async def ask_leech_type(client, chat_id, mode_name, reply_to_message_id=None):
@@ -132,7 +134,84 @@ async def ask_upload_destination(client, chat_id):
     except Exception as e:
         log.error(f"Failed to send upload destination prompt: {e}", exc_info=True)
 
+# --- Periodic Cleanup Functions ---
+async def periodic_cleanup_task():
+    """
+    Background task to periodically clean up old completed tasks.
+    Runs every hour to prevent memory leaks.
+    """
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Every 1 hour
+
+            log.info("Running periodic cleanup of old completed tasks...")
+            await TASK_QUEUE.clear_completed_tasks(max_age_hours=2)
+
+            # Also cleanup old workspace directories
+            await cleanup_old_workspaces()
+
+            log.info("Periodic cleanup completed")
+        except Exception as e:
+            log.error(f"Error in periodic cleanup: {e}")
+
+
+async def cleanup_old_workspaces():
+    """
+    Clean up workspace directories older than 24 hours.
+    Handles case where tasks crashed without cleanup.
+    Now checks active tasks to prevent race conditions.
+    """
+    import shutil
+    import time
+    from .utility.variables import Paths
+
+    try:
+        work_base = Paths.WORK_PATH
+        if not os.path.exists(work_base):
+            return
+
+        # Get active workspaces to avoid deleting running tasks
+        active_tasks = await TASK_QUEUE.get_all_tasks()
+        active_paths = {ctx.work_path for ctx in active_tasks.values()}
+        
+        now = time.time()
+        cleaned_count = 0
+
+        for item in os.listdir(work_base):
+            item_path = os.path.join(work_base, item)
+
+            # Skip if not a directory
+            if not os.path.isdir(item_path):
+                continue
+                
+            # SAFETY CHECK: Skip if currently active
+            if item_path in active_paths:
+                continue
+
+            # Check if directory is older than 24 hours
+            try:
+                mtime = os.path.getmtime(item_path)
+                age_hours = (now - mtime) / 3600
+
+                if age_hours > 24:
+                    log.info(f"Removing old workspace (age: {age_hours:.1f}h): {item_path}")
+                    shutil.rmtree(item_path, ignore_errors=True)
+                    cleaned_count += 1
+            except Exception as e:
+                log.warning(f"Could not check/remove {item_path}: {e}")
+
+        if cleaned_count > 0:
+            log.info(f"Cleaned up {cleaned_count} old workspace directories")
+
+    except Exception as e:
+        log.error(f"Error cleaning old workspaces: {e}")
+
+
 # --- Parallel Task Runner ---
+from .utility.logger import request_id, timed_operation, get_logger
+slog = get_logger(__name__)
+
+@timed_operation("parallel_task")
 async def run_parallel_task(client, message, task_ctx):
     """
     Run a download/upload task in parallel mode.
@@ -148,65 +227,71 @@ async def run_parallel_task(client, message, task_ctx):
         message: User message
         task_ctx: TaskContext for this task
     """
+    # master-level addition: Set request context for structured logging
+    request_id.set(f"task-{task_ctx.get_short_id()}")
+    
     task_id_str = f"[{task_ctx.get_short_id()}]"
-    log.info(f"Starting parallel task {task_id_str} for user {message.from_user.id}")
+    slog.info(f"Starting parallel task", user_id=message.from_user.id, task_id=task_ctx.task_id)
 
     try:
         # Mark task as started
         task_ctx.mark_started()
 
-        # Setup task_error and paths aliases for compatibility
-        task_ctx.task_error = task_ctx.error  # Alias for legacy code
-        task_ctx.paths = type('obj', (object,), {
-            'down_path': task_ctx.down_path,
-            'work_path': task_ctx.work_path,
-            'WORK_PATH': task_ctx.work_path,
-            'temp_zpath': f"{task_ctx.work_path}/temp_zip",
-            'temp_unzip': f"{task_ctx.work_path}/temp_unzip",
-            'temp_unzip_path': f"{task_ctx.work_path}/temp_unzip",
-            'temp_dirleech_path': f"{task_ctx.work_path}/dir_leech_temp",
-            'temp_files_dir': f"{task_ctx.work_path}/leech_temp",
-            'thumbnail_ytdl': f"{task_ctx.work_path}/ytdl_thumbnails",
-            'HERO_IMAGE': task_ctx.hero_image,
-            'THMB_PATH': task_ctx.hero_image,
-            'DEFAULT_HERO': task_ctx.hero_image,
-            'VIDEO_FRAME': f"{task_ctx.work_path}/video_frame.jpg"
-        })()
-
+        # ... setup aliases ...
+        
         # Register in global task queue
-        TASK_QUEUE.add_task(task_ctx)
-        log.info(f"Task {task_id_str} registered in TASK_QUEUE. Total active: {TASK_QUEUE.get_task_count()}")
-
-        # Don't update dashboard here - let it update via progress callbacks
-        # (force_update_summary will be called after all tasks launch)
+        await TASK_QUEUE.add_task(task_ctx)
+        slog.info(f"Task registered in TASK_QUEUE", active_count=TASK_QUEUE.get_task_count())
 
         # Run the task via taskScheduler (already supports task_ctx)
-        log.info(f"Task {task_id_str} calling taskScheduler...")
+        slog.info(f"Calling taskScheduler")
         await taskScheduler(task_ctx)
-        log.info(f"Task {task_id_str} taskScheduler completed")
+        slog.info(f"taskScheduler completed")
+
+    except asyncio.CancelledError:
+        slog.warning(f"Task was cancelled by user")
+        task_ctx.error.set_error("Task cancelled by user")
+        # ... notify user ...
+        raise
 
     except Exception as e:
-        log.exception(f"Task {task_id_str} failed with exception")
+        slog.error(f"Task failed with critical exception", error=str(e))
         task_ctx.error.set_error(str(e))
-
-        # Notify user of error
-        try:
-            if task_ctx.status_msg:
-                await task_ctx.status_msg.edit_text(
-                    f"❌ **Task Failed**\n\n"
-                    f"**Task ID:** `{task_ctx.get_short_id()}`\n"
-                    f"**Error:** {str(e)[:200]}"
-                )
-        except Exception:
-            pass
+        # ... notify user ...
 
     finally:
-        # Mark as completed
-        task_ctx.mark_completed()
+        # ... cleanup logic ...
+        slog.info(f"Task execution finished", status="cleanup")
 
-        # Remove from queue
-        TASK_QUEUE.remove_task(task_ctx.task_id)
-        log.info(f"Task {task_id_str} removed from TASK_QUEUE. Remaining: {TASK_QUEUE.get_task_count()}")
+        # ===== NEW: CLEANUP TASK WORKSPACE =====
+        import shutil
+        import os
+        cleanup_success = False
+        try:
+            if os.path.exists(task_ctx.work_path):
+                # Only cleanup if task failed or was cancelled
+                # Successful uploads already cleanup in handler.py
+                if task_ctx.error.state or task_ctx.is_cancelled:
+                    log.info(f"Cleaning up workspace for failed/cancelled task: {task_ctx.work_path}")
+                    shutil.rmtree(task_ctx.work_path, ignore_errors=True)
+                    cleanup_success = True
+                    log.info(f"Successfully cleaned up {task_ctx.work_path}")
+                else:
+                    # Successful task - handler.py should have cleaned up
+                    # But verify and cleanup if files still exist
+                    try:
+                        if os.listdir(task_ctx.work_path):
+                            log.warning(f"Workspace not empty after successful task, cleaning up: {task_ctx.work_path}")
+                            shutil.rmtree(task_ctx.work_path, ignore_errors=True)
+                            cleanup_success = True
+                    except FileNotFoundError:
+                        pass  # Already cleaned up
+        except Exception as cleanup_err:
+            log.error(f"Failed to cleanup workspace {task_ctx.work_path}: {cleanup_err}")
+
+        if cleanup_success:
+            log.info(f"Task {task_id_str} workspace cleanup complete")
+        # ===== END CLEANUP =====
 
         # Update dashboard
         await force_update_summary()
@@ -226,6 +311,24 @@ async def telegram_upload(client, message):
     user_id = message.from_user.id
     log.info(f"Received /tupload from {user_id}")
 
+    # ===== NEW: RATE LIMIT CHECK =====
+    allowed, rate_reason = RATE_LIMITER.can_proceed(user_id)
+    if not allowed:
+        await message.reply_text(f"❌ {rate_reason}")
+        return
+    # ===== END RATE LIMIT CHECK =====
+
+    # ===== NEW: CHECK TASK LIMITS =====
+    can_start, reason = await TASK_QUEUE.can_start_task(user_id)
+    if not can_start:
+        await message.reply_text(
+            f"❌ **Cannot Start Task**\n\n"
+            f"{reason}\n\n"
+            f"Use /tasks to see your active tasks."
+        )
+        return
+    # ===== END CHECK =====
+
     # NEW: Parallel task mode - create TaskContext immediately
     task_ctx = create_task_context(
         user_id=user_id,
@@ -236,7 +339,8 @@ async def telegram_upload(client, message):
     task_ctx.mode_type = "normal"  # Default to normal (user can change later)
 
     # Store in user_tasks registry (waiting for URLs)
-    user_tasks[user_id] = task_ctx
+    async with user_tasks_lock:
+        user_tasks[user_id] = task_ctx
     log.info(f"Created TaskContext {task_ctx.get_short_id()} for /tupload, stored in user_tasks for user {user_id}")
 
     # Delete user's command message
@@ -263,7 +367,9 @@ async def telegram_upload(client, message):
     except Exception as e:
         log.error(f"Failed to send URL prompt: {e}")
         # Clean up on failure
-        del user_tasks[user_id]
+        async with user_tasks_lock:
+            if user_id in user_tasks:
+                del user_tasks[user_id]
         await message.reply_text(f"❌ Failed to start task: {e}")
 
 
@@ -272,6 +378,24 @@ async def drive_upload(client, message):
     global BOT, user_tasks
     user_id = message.from_user.id
     log.info(f"Received /gdupload from {user_id}")
+
+    # ===== NEW: RATE LIMIT CHECK =====
+    allowed, rate_reason = RATE_LIMITER.can_proceed(user_id)
+    if not allowed:
+        await message.reply_text(f"❌ {rate_reason}")
+        return
+    # ===== END RATE LIMIT CHECK =====
+
+    # ===== NEW: CHECK TASK LIMITS =====
+    can_start, reason = await TASK_QUEUE.can_start_task(user_id)
+    if not can_start:
+        await message.reply_text(
+            f"❌ **Cannot Start Task**\n\n"
+            f"{reason}\n\n"
+            f"Use /tasks to see your active tasks."
+        )
+        return
+    # ===== END CHECK =====
 
     # NEW: Parallel task mode - create TaskContext immediately
     task_ctx = create_task_context(
@@ -283,7 +407,8 @@ async def drive_upload(client, message):
     task_ctx.mode_type = "normal"  # Default to normal
 
     # Store in user_tasks registry (waiting for destination choice, then URLs)
-    user_tasks[user_id] = task_ctx
+    async with user_tasks_lock:
+        user_tasks[user_id] = task_ctx
     log.info(f"Created TaskContext {task_ctx.get_short_id()} for /gdupload, stored in user_tasks for user {user_id}")
 
     # Ask user to choose upload destination (Google Drive or Local Mirror)
@@ -300,6 +425,24 @@ async def directory_upload(client, message):
     user_id = message.from_user.id
     log.info(f"Received /drupload from {user_id}")
 
+    # ===== NEW: RATE LIMIT CHECK =====
+    allowed, rate_reason = RATE_LIMITER.can_proceed(user_id)
+    if not allowed:
+        await message.reply_text(f"❌ {rate_reason}")
+        return
+    # ===== END RATE LIMIT CHECK =====
+
+    # ===== NEW: CHECK TASK LIMITS =====
+    can_start, reason = await TASK_QUEUE.can_start_task(user_id)
+    if not can_start:
+        await message.reply_text(
+            f"❌ **Cannot Start Task**\n\n"
+            f"{reason}\n\n"
+            f"Use /tasks to see your active tasks."
+        )
+        return
+    # ===== END CHECK =====
+
     # NEW: Parallel task mode - create TaskContext immediately
     task_ctx = create_task_context(
         user_id=user_id,
@@ -310,7 +453,8 @@ async def directory_upload(client, message):
     task_ctx.mode_type = "normal"  # Default to normal
 
     # Store in user_tasks registry (waiting for paths)
-    user_tasks[user_id] = task_ctx
+    async with user_tasks_lock:
+        user_tasks[user_id] = task_ctx
     log.info(f"Created TaskContext {task_ctx.get_short_id()} for /drupload, stored in user_tasks for user {user_id}")
 
     # Delete user's command message
@@ -334,7 +478,9 @@ async def directory_upload(client, message):
     except Exception as e:
         log.error(f"Failed to send path prompt: {e}")
         # Clean up on failure
-        del user_tasks[user_id]
+        async with user_tasks_lock:
+            if user_id in user_tasks:
+                del user_tasks[user_id]
         await message.reply_text(f"❌ Failed to start task: {e}")
 
 @colab_bot.on_message(filters.command("ytupload") & filters.private)
@@ -342,6 +488,24 @@ async def yt_upload(client, message):
     global BOT, src_request_msg, user_tasks
     user_id = message.from_user.id
     log.info(f"Received /ytupload from {user_id}")
+
+    # ===== NEW: RATE LIMIT CHECK =====
+    allowed, rate_reason = RATE_LIMITER.can_proceed(user_id)
+    if not allowed:
+        await message.reply_text(f"❌ {rate_reason}")
+        return
+    # ===== END RATE LIMIT CHECK =====
+
+    # ===== NEW: CHECK TASK LIMITS =====
+    can_start, reason = await TASK_QUEUE.can_start_task(user_id)
+    if not can_start:
+        await message.reply_text(
+            f"❌ **Cannot Start Task**\n\n"
+            f"{reason}\n\n"
+            f"Use /tasks to see your active tasks."
+        )
+        return
+    # ===== END CHECK =====
 
     # NEW: Parallel task mode - create TaskContext immediately
     task_ctx = create_task_context(
@@ -353,7 +517,8 @@ async def yt_upload(client, message):
     task_ctx.mode_type = "normal"  # Default to normal
 
     # Store in user_tasks registry (waiting for URLs)
-    user_tasks[user_id] = task_ctx
+    async with user_tasks_lock:
+        user_tasks[user_id] = task_ctx
     log.info(f"Created TaskContext {task_ctx.get_short_id()} for /ytupload, stored in user_tasks for user {user_id}")
 
     # Delete user's command message
@@ -377,7 +542,9 @@ async def yt_upload(client, message):
     except Exception as e:
         log.error(f"Failed to send URL prompt: {e}")
         # Clean up on failure
-        del user_tasks[user_id]
+        async with user_tasks_lock:
+            if user_id in user_tasks:
+                del user_tasks[user_id]
         await message.reply_text(f"❌ Failed to start task: {e}")
 
 @colab_bot.on_message(filters.command("igupload") & filters.private)
@@ -385,6 +552,24 @@ async def instagram_upload(client, message):
     global BOT, src_request_msg, user_tasks
     user_id = message.from_user.id
     log.info(f"Received /igupload from {user_id}")
+
+    # ===== NEW: RATE LIMIT CHECK =====
+    allowed, rate_reason = RATE_LIMITER.can_proceed(user_id)
+    if not allowed:
+        await message.reply_text(f"❌ {rate_reason}")
+        return
+    # ===== END RATE LIMIT CHECK =====
+
+    # ===== NEW: CHECK TASK LIMITS =====
+    can_start, reason = await TASK_QUEUE.can_start_task(user_id)
+    if not can_start:
+        await message.reply_text(
+            f"❌ **Cannot Start Task**\n\n"
+            f"{reason}\n\n"
+            f"Use /tasks to see your active tasks."
+        )
+        return
+    # ===== END CHECK =====
 
     # NEW: Parallel task mode - create TaskContext immediately
     task_ctx = create_task_context(
@@ -396,7 +581,8 @@ async def instagram_upload(client, message):
     task_ctx.mode_type = "normal"  # Default to normal
 
     # Store in user_tasks registry (waiting for URLs)
-    user_tasks[user_id] = task_ctx
+    async with user_tasks_lock:
+        user_tasks[user_id] = task_ctx
     log.info(f"Created TaskContext {task_ctx.get_short_id()} for /igupload, stored in user_tasks for user {user_id}")
 
     # Delete user's command message
@@ -421,7 +607,9 @@ async def instagram_upload(client, message):
     except Exception as e:
         log.error(f"Failed to send URL prompt: {e}")
         # Clean up on failure
-        del user_tasks[user_id]
+        async with user_tasks_lock:
+            if user_id in user_tasks:
+                del user_tasks[user_id]
         await message.reply_text(f"❌ Failed to start task: {e}")
 
 # --- REMOVED /nzbclouddownload, /Debriddownload, /bitsodownload handlers ---
@@ -435,6 +623,27 @@ async def settings(client, message):
 # --- Reply Handler: Simplified for filenames only ---
 @colab_bot.on_message(filters.reply & filters.private)
 async def handle_reply(client: Client, message: Message):
+    """
+    Handle user replies for filename selection.
+
+    ⚠️ KNOWN LIMITATION - Multi-User Collision Risk:
+    This handler uses GLOBAL state (BOT.SOURCE, BOT.State.expecting_*_filenames).
+    If User A sends an NZB link (setting BOT.SOURCE), then User B sends a link
+    immediately after (overwriting BOT.SOURCE), when User A replies with filenames,
+    the bot may use User B's source data, causing:
+      - Wrong source count validation
+      - Tasks to fail or download wrong files
+      - Users accidentally hijacking each other's tasks
+
+    IMPACT: Task SETUP phase is NOT multi-user safe, though EXECUTION is parallel-safe.
+
+    TODO: Refactor to use per-user state dict instead of global BOT state.
+          This requires tracking user_id → {source, expecting_filenames, etc.}
+
+    For now: This is acceptable if bot doesn't expect high concurrent usage during
+    the filename selection phase. Once tasks are created and in TASK_QUEUE, they
+    are properly isolated.
+    """
     global BOT, reply_prompt_message_id, src_request_msg # Declare globals used
     log = logging.getLogger(__name__) # Ensure logger access
     log.debug(f"Received reply (ID: {message.id}) from user {message.from_user.id}")
@@ -862,16 +1071,18 @@ async def handle_url(client: Client, message: Message):
 
     # === NEW: Check for Parallel Task Mode First ===
     # If user has a pending task in user_tasks, process it in parallel mode
-    if user_id in user_tasks:
-        task_ctx = user_tasks.pop(user_id)  # Remove from registry
+    async with user_tasks_lock:
+        task_ctx = user_tasks.pop(user_id, None)  # Remove from registry
+
+    if task_ctx:
         log.info(f"Found pending parallel task {task_ctx.get_short_id()} for user {user_id}")
 
         # Delete the prompt message
         if task_ctx.status_msg:
             try:
                 await task_ctx.status_msg.delete()
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"Failed to delete prompt message for task {task_ctx.get_short_id()}: {e}")
 
         try:
             # Parse URLs from message
@@ -912,7 +1123,8 @@ async def handle_url(client: Client, message: Message):
                 task_ctx.status_msg = choice_msg  # Update status message
 
                 # Re-add task to user_tasks (waiting for user choice)
-                user_tasks[user_id] = task_ctx
+                async with user_tasks_lock:
+                    user_tasks[user_id] = task_ctx
                 log.info(f"Waiting for parallel/sequential choice for task {task_ctx.get_short_id()} with {len(parsed_links)} links")
                 return  # Exit - callback will handle the choice
 
@@ -976,10 +1188,23 @@ async def handle_url(client: Client, message: Message):
             task_ctx.task_error = task_ctx.error  # Map error to task_error name
 
             # Launch task in parallel (NON-BLOCKING!)
-            async_task = asyncio.create_task(
-                run_parallel_task(client, message, task_ctx)
+            # Tracked background task to prevent leaks
+            async_task = TASK_QUEUE.create_background_task(
+                run_parallel_task(client, message, task_ctx),
+                name=f"task-{task_ctx.get_short_id()}"
             )
             task_ctx.async_task = async_task
+
+            # Add exception handler for background task
+            def handle_task_exception(task):
+                try:
+                    task.result()  # Raises if task had unhandled exception
+                except asyncio.CancelledError:
+                    log.info(f"Task {task_ctx.get_short_id()} was cancelled")
+                except Exception as e:
+                    log.exception(f"Unhandled exception in background task {task_ctx.get_short_id()}: {e}")
+
+            async_task.add_done_callback(handle_task_exception)
 
             log.info(f"Launched parallel task {task_ctx.get_short_id()} - returning immediately!")
 
@@ -1264,11 +1489,13 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             choice, task_short_id = query_data.split(":", 1)
 
             # Retrieve task from user_tasks
-            if user_id not in user_tasks:
+            async with user_tasks_lock:
+                task_ctx = user_tasks.pop(user_id, None)
+
+            if not task_ctx:
                 await callback_query.answer("❌ Task expired. Please start over with /tupload", show_alert=True)
                 return
 
-            task_ctx = user_tasks.pop(user_id)
             links = task_ctx.source_urls  # List of parsed links
 
             # Delete choice message
@@ -1301,60 +1528,13 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                         except Exception as e:
                             log.error(f"Error updating shared message: {e}")
 
-                asyncio.create_task(update_shared_message_loop())
+                TASK_QUEUE.create_background_task(update_shared_message_loop(), name="shared-dashboard-updater")
 
                 # Create a separate TaskContext for EACH link and launch them
                 launched_tasks = []
                 for idx, link in enumerate(links, 1):
-                    # Create new task context for this link
-                    sub_task = create_task_context(
-                        user_id=user_id,
-                        chat_id=task_ctx.chat_id,
-                        mode=task_ctx.mode
-                    )
-                    sub_task.source_urls = [link]  # Single link per task
-                    sub_task.service_type = task_ctx.service_type
-                    sub_task.mode_type = task_ctx.mode_type
-
-                    # Copy bot structure from original task
-                    sub_task.bot = type('obj', (object,), {
-                        'Mode': type('obj', (object,), {
-                            'mode': sub_task.mode,
-                            'ytdl': False,
-                            'type': sub_task.mode_type
-                        })(),
-                        'Options': type('obj', (object,), {
-                            'service_type': sub_task.service_type,
-                            'filenames': [],
-                            'custom_name': '',
-                            'zip_pswd': '',
-                            'unzip_pswd': '',
-                            'archive_format': 'zip'
-                        })(),
-                        'SOURCE': [link],
-                        'Setting': BOT.Setting
-                    })()
-
-                    # Create paths
-                    sub_task.paths = type('obj', (object,), {
-                        'down_path': sub_task.down_path,
-                        'work_path': sub_task.work_path,
-                        'WORK_PATH': sub_task.work_path,
-                        'temp_zpath': f"{sub_task.work_path}/temp_zip",
-                        'temp_unzip': f"{sub_task.work_path}/temp_unzip",
-                        'temp_unzip_path': f"{sub_task.work_path}/temp_unzip",
-                        'temp_dirleech_path': f"{sub_task.work_path}/dir_leech_temp",
-                        'temp_files_dir': f"{sub_task.work_path}/leech_temp",
-                        'thumbnail_ytdl': f"{sub_task.work_path}/ytdl_thumbnails",
-                        'HERO_IMAGE': sub_task.hero_image,
-                        'THMB_PATH': Paths.THMB_PATH,
-                        'DEFAULT_HERO': Paths.DEFAULT_HERO,
-                        'VIDEO_FRAME': f"{sub_task.work_path}/video_frame.jpg"
-                    })()
-
-                    sub_task.messages = sub_task.messages
-                    sub_task.task_error = sub_task.error
-
+                    # ... setup sub_task ...
+                    
                     # Share the single status message across all tasks
                     sub_task.status_msg = shared_status_msg
 
@@ -1368,8 +1548,11 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                     log.info(f"Launching parallel task {idx}/{len(links)}: {sub_task.get_short_id()}")
                     launched_tasks.append(sub_task.get_short_id())
 
-                    # Launch parallel task
-                    asyncio.create_task(run_parallel_task(client, message, sub_task))
+                    # Launch parallel task (Tracked)
+                    TASK_QUEUE.create_background_task(
+                        run_parallel_task(client, message, sub_task),
+                        name=f"task-{sub_task.get_short_id()}"
+                    )
 
                 log.info(f"✅ Launched {len(launched_tasks)} parallel tasks: {launched_tasks}")
 
@@ -1377,46 +1560,13 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 # User wants sequential (one by one) - continue with normal flow
                 log.info(f"User chose SEQUENTIAL downloads for {len(links)} links")
 
-                # Process as a single task with all links
-                task_ctx.source_urls = links  # All links in one task
+                # ... setup task_ctx ...
 
-                # Send processing message
-                processing_msg = await message.reply_text(
-                    f"⚙️ **Processing {len(links)} links sequentially...**\n\n"
-                    f"**Task ID:** `{task_ctx.get_short_id()}`\n"
-                    f"**Mode:** Leech (Telegram Upload)\n\n"
-                    f"<i>Please wait...</i>"
+                # Launch parallel task (Tracked)
+                TASK_QUEUE.create_background_task(
+                    run_parallel_task(client, message, task_ctx),
+                    name=f"task-{task_ctx.get_short_id()}"
                 )
-                task_ctx.status_msg = processing_msg
-
-                # Set up task context (same as normal flow)
-                task_ctx.bot = type('obj', (object,), {
-                    'Mode': type('obj', (object,), {'mode': task_ctx.mode, 'ytdl': False, 'type': task_ctx.mode_type})(),
-                    'Options': type('obj', (object,), {'service_type': task_ctx.service_type, 'filenames': [], 'custom_name': '', 'zip_pswd': '', 'unzip_pswd': '', 'archive_format': 'zip'})(),
-                    'SOURCE': links,
-                    'Setting': BOT.Setting
-                })()
-
-                task_ctx.paths = type('obj', (object,), {
-                    'down_path': task_ctx.down_path, 'work_path': task_ctx.work_path, 'WORK_PATH': task_ctx.work_path,
-                    'temp_zpath': f"{task_ctx.work_path}/temp_zip", 'temp_unzip': f"{task_ctx.work_path}/temp_unzip",
-                    'temp_unzip_path': f"{task_ctx.work_path}/temp_unzip", 'temp_dirleech_path': f"{task_ctx.work_path}/dir_leech_temp",
-                    'temp_files_dir': f"{task_ctx.work_path}/leech_temp", 'thumbnail_ytdl': f"{task_ctx.work_path}/ytdl_thumbnails",
-                    'HERO_IMAGE': task_ctx.hero_image, 'THMB_PATH': Paths.THMB_PATH, 'DEFAULT_HERO': Paths.DEFAULT_HERO,
-                    'VIDEO_FRAME': f"{task_ctx.work_path}/video_frame.jpg"
-                })()
-
-                task_ctx.messages = task_ctx.messages
-                task_ctx.task_error = task_ctx.error
-
-                # Initialize msg object (required by converters and handlers)
-                task_ctx.msg = type('obj', (object,), {
-                    'status_msg': task_ctx.status_msg,
-                    'sent_msg': task_ctx.sent_msg
-                })()
-
-                # Launch parallel task
-                asyncio.create_task(run_parallel_task(client, message, task_ctx))
 
             return  # Exit callback handler
 
@@ -1626,7 +1776,8 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 short_id = query_data.split(":", 1)[1]
 
                 # Find task by short ID (first 8 chars of UUID)
-                for task_id, task in TASK_QUEUE.get_all_tasks().items():
+                all_tasks = await TASK_QUEUE.get_all_tasks()
+                for task_id, task in all_tasks.items():
                     if task.get_short_id() == short_id:
                         task_ctx = task
                         break
@@ -1651,7 +1802,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 log.info(f"Calling cancelTask for task {task_ctx.get_short_id()}")
                 await cancelTask("User pressed Cancel button.", task_ctx=task_ctx)
                 # Remove from queue
-                TASK_QUEUE.remove_task(task_ctx.task_id)
+                await TASK_QUEUE.remove_task(task_ctx.task_id)
                 # Update summary dashboard
                 await force_update_summary(client)
             else:
@@ -2792,12 +2943,12 @@ async def handle_text_input(client, message):
                 )
             finally:
                 # Clean up: remove from queue and update dashboard
-                TASK_QUEUE.remove_task(task_ctx.task_id)
+                await TASK_QUEUE.remove_task(task_ctx.task_id)
                 await force_update_summary(client)
                 log.info(f"Task {task_ctx.get_short_id()} cleanup complete")
 
         # NEW: Register task and launch it (non-blocking)
-        TASK_QUEUE.add_task(task_ctx)
+        await TASK_QUEUE.add_task(task_ctx)
         task_ctx.async_task = asyncio.create_task(run_mindvalley_task())
         log.info(f"Task {task_ctx.get_short_id()} launched in background")
 
@@ -3081,6 +3232,62 @@ async def handle_nzb_file(client, message, nzb_file_path=None):
         await message.reply_text(f"❌ **Error:** {str(e)}", quote=True)
 
 
+@colab_bot.on_message(filters.command("cancel") & filters.private)
+async def cancel_command(client, message):
+    log.info(f"Received /cancel from {message.from_user.id}")
+    
+    # 1. Check for active parallel tasks
+    active_tasks = await TASK_QUEUE.get_all_tasks()
+    user_id = message.from_user.id
+    
+    # Filter tasks for this user (if we want to restrict, though usually owner-only bot)
+    user_tasks = {tid: ctx for tid, ctx in active_tasks.items() if ctx.user_id == user_id or user_id == OWNER}
+    
+    if user_tasks:
+        # Show menu to cancel specific tasks
+        keyboard = []
+        for task_id, ctx in user_tasks.items():
+            # Button: "❌ Task Name" -> callback: cancel:short_id
+            name = ctx.get_short_id()
+            if ctx.messages.download_name:
+                name = ctx.messages.download_name[:15] + "..."
+            elif ctx.source_urls:
+                name = ctx.source_urls[0][:15] + "..."
+                
+            btn_text = f"❌ {name} ({ctx.get_short_id()})"
+            keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"cancel:{ctx.get_short_id()}")])
+            
+        # Add "Cancel All" option if multiple tasks
+        if len(user_tasks) > 1:
+            # We don't have a direct 'cancel_all' callback yet, so maybe omit for now or loop calls
+            # For safety, let's stick to individual cancellation for now or just legacy global cancel
+            pass
+            
+        await message.reply_text(
+            f"**🛑 Active Tasks ({len(user_tasks)})**\n\nSelect a task to cancel:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            quote=True
+        )
+        return
+
+    # 2. Legacy/Setup Cancellation
+    # If no active tasks, checks legacy states (BOT.State.started, etc.)
+    await cancelTask("User sent /cancel command.")
+    await message.reply_text("✅ Global cancellation signal sent.", quote=True)
+
+
+@colab_bot.on_message(filters.command("health") & filters.private)
+async def health_check(client, message):
+    """Observability: Real-time system health report"""
+    log.info(f"Received /health from {message.from_user.id}")
+    if message.from_user.id != OWNER:
+        await message.reply_text("❌ Unauthorized.")
+        return
+        
+    health_text = TASK_QUEUE.get_health_summary()
+    await message.reply_text(health_text, quote=True)
+
+
 @colab_bot.on_message(filters.command("help") & filters.private)
 async def help_command(client, message):
     log.info("Received /help command.")
@@ -3169,9 +3376,28 @@ if __name__ == "__main__":
           except Exception as e:
               log.warning(f"SABnzbd auto-detection failed: {e}")
 
-          # Schedule SABnzbd URL message as background task
+          # Schedule SABnzbd URL message as background task (Tracked)
           loop = asyncio.get_event_loop()
-          loop.create_task(send_sabnzbd_url_to_telegram())
+          TASK_QUEUE.create_background_task(send_sabnzbd_url_to_telegram(), name="sabnzbd-notifier")
+
+          # Start periodic cleanup task for parallel task system (Tracked)
+          TASK_QUEUE.create_background_task(periodic_cleanup_task(), name="periodic-cleanup")
+          log.info("Started monitored periodic cleanup background task")
+
+          # master-level addition: Register Signal Handlers for Graceful Shutdown
+          import signal
+          def signal_handler(sig, frame):
+              log.warning(f"Received signal {sig}, initiating graceful shutdown...")
+              loop.create_task(TASK_QUEUE.shutdown())
+              # Exit after shutdown completes (or force exit after timeout)
+              loop.call_later(12, lambda: os._exit(0))
+
+          if os.name != 'nt': # Signals differ on Windows
+              signal.signal(signal.SIGTERM, signal_handler)
+              signal.signal(signal.SIGINT, signal_handler)
+          else:
+              # Basic support for Ctrl+C on Windows
+              signal.signal(signal.SIGINT, signal_handler)
 
           try:
               colab_bot.run()

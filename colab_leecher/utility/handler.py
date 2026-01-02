@@ -369,6 +369,20 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
     if task_ctx:
         log.warning(f"Task {task_ctx.get_short_id()} cancellation/completion triggered. Reason: {final_reason}")
         task_ctx.mark_cancelled()
+
+        # ===== NEW: ACTUALLY CANCEL THE ASYNCIO TASK =====
+        if task_ctx.async_task and not task_ctx.async_task.done():
+            log.info(f"Cancelling asyncio task for {task_ctx.get_short_id()}")
+            task_ctx.async_task.cancel()
+
+            # Wait for task to acknowledge cancellation
+            try:
+                await task_ctx.async_task
+            except asyncio.CancelledError:
+                log.info(f"Task {task_ctx.get_short_id()} successfully cancelled")
+            except Exception as e:
+                log.error(f"Task {task_ctx.get_short_id()} raised exception during cancellation: {e}")
+        # ===== END CANCELLATION =====
     else:
         log.warning(f"Task cancellation/completion triggered. Final Reason: {final_reason}")
 

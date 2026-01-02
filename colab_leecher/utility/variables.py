@@ -24,9 +24,40 @@ except ImportError:
         def reset(self): pass
     print("WARNING: Could not import Transfer class from transfer_state.py")
 
+"""
+⚠️ CRITICAL LIMITATION - Multi-User Collision Risk:
+
+The BOT class below uses GLOBAL STATE shared across ALL users. This creates race conditions
+when multiple users interact with the bot simultaneously during task setup:
+
+AFFECTED VARIABLES:
+  - BOT.SOURCE: Stores URLs/paths for current task setup
+  - BOT.State.expecting_*_filenames: Flags for filename selection state
+  - BOT.Options.filenames: Selected filenames
+  - BOT.State.reply_prompt_msg_id: Message ID for reply tracking
+
+COLLISION SCENARIO:
+  1. User A sends NZB link → sets BOT.SOURCE = [userA_urls], BOT.State.expecting_nzb_filenames = True
+  2. User B sends NZB link → overwrites BOT.SOURCE = [userB_urls], BOT.State.expecting_nzb_filenames = True
+  3. User A replies with filenames → bot validates against userB_urls (wrong source!)
+  4. Result: Task fails, wrong files downloaded, or User A gets User B's content
+
+IMPACT:
+  - Task SETUP phase is NOT multi-user safe
+  - Task EXECUTION phase IS multi-user safe (uses TaskContext, TASK_QUEUE)
+
+MITIGATION:
+  - Acceptable for single-user bots or low concurrent usage
+  - Once tasks are created, they are properly isolated in TASK_QUEUE
+
+TODO (Future Refactor):
+  Replace global BOT state with per-user state dict:
+    user_states = {user_id: {source: [], expecting_filenames: False, ...}}
+  This requires refactoring all handlers to track user_id → state instead of global BOT.
+"""
 # Define BOT class structure for settings, options, mode, and state
 class BOT:
-    SOURCE = []
+    SOURCE = []  # ⚠️ GLOBAL STATE - See warning above
     TASK = None
     class Setting:
         stream_upload = "Media"
