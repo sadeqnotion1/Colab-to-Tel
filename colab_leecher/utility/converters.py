@@ -18,7 +18,7 @@ except ImportError:
 
 from .variables import BOT, MSG, BotTimes, Paths, Messages, TaskError, TRANSFER
 from .helper import (
-    getSize,fileType,keyboard, multipartArchive, sizeUnit,speedETA,status_bar,sysINFO,getTime
+    getSize,fileType,keyboard, multipartArchive, sizeUnit,speedETA,status_bar,sysINFO,getTime,clean_filename
 )
 from .task_context import TaskContext
 from .. import colab_bot, OWNER  # Import bot client and owner ID for password prompts
@@ -142,7 +142,13 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
         # Ultimate fallback
         name = "archive"
         log.warning("Using fallback archive name: archive")
-    clean_name = name.replace('/', '_')
+
+    # Sanitize the determined name to remove invalid filesystem characters
+    clean_name = clean_filename(name)
+    if not clean_name:
+        # If cleaning resulted in empty/None, use fallback
+        log.warning(f"Archive name '{name}' became invalid after cleaning. Using fallback 'archive'")
+        clean_name = "archive"
 
 
     makedirs(_paths.temp_zpath, exist_ok=True)
