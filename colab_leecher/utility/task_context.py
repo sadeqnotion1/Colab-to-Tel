@@ -75,6 +75,7 @@ class TaskTransfer:
     sent_file_names: List[str] = field(default_factory=list)
     successful_downloads: List[dict] = field(default_factory=list)  # List of {'url': url, 'filename': filename}
     start_time: float = field(default_factory=lambda: time.time())
+    last_speed: str = "0 B/s"  # Last recorded download/upload speed (for dashboard display)
 
     def reset(self):
         """Reset transfer statistics"""
@@ -84,6 +85,7 @@ class TaskTransfer:
         self.sent_file_names = []
         self.successful_downloads = []
         self.start_time = time.time()
+        self.last_speed = "0 B/s"
 
     def get_percentage(self, total_size: int = 0) -> float:
         """Calculate download percentage"""

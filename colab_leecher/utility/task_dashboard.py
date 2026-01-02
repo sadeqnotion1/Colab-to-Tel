@@ -197,8 +197,16 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                         )
                         log.debug(f"Summary dashboard text updated ({len(tasks)} tasks)")
                 except Exception as edit_err:
-                    # Message might have been deleted or other error - recreate
-                    log.warning(f"Failed to edit summary, recreating: {edit_err}")
+                    # Check if error is "message is not modified" - if so, skip recreation
+                    error_msg = str(edit_err).lower()
+                    if "not modified" in error_msg or "message is not modified" in error_msg:
+                        log.debug(f"Summary message unchanged, skipping update (content identical)")
+                        return TASK_QUEUE.summary_msg
+
+                    # Message might have been deleted or other serious error - recreate ONCE
+                    log.warning(f"❌ Failed to edit summary: {type(edit_err).__name__}: {edit_err}")
+                    log.warning(f"🔄 Attempting message recreation (clearing reference first)")
+                    TASK_QUEUE.summary_msg = None  # Clear reference before recreating
                     try:
                         if thumbnail_path and os.path.exists(thumbnail_path):
                             # Truncate for photo caption (1024 char limit)
