@@ -153,9 +153,9 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
 
     makedirs(_paths.temp_zpath, exist_ok=True)
 
-    # Determine archive format (ZIP or RAR)
+    # Determine archive format (ZIP, RAR, or 7Z)
     # Note: RAR creation requires WinRAR (proprietary), 7z on Linux can only extract RAR
-    archive_format = _bot.Options.archive_format if hasattr(_bot.Options, 'archive_format') else "zip"
+    archive_format = _bot.Options.archive_format if hasattr(_bot.Options, 'archive_format') else "7z"
     archive_format = archive_format.lower()  # Ensure lowercase
 
     if archive_format == "rar":
@@ -163,10 +163,16 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
         archive_format_param = "-trar"
         compression_level = "-mx=5"  # Normal compression for RAR
         format_display = "RAR"
-    else:  # Default to ZIP
+    elif archive_format == "7z":
+        # 7Z format: Best compression, CRC checks, works on all platforms, less corruption
+        archive_out_final_name = f"{clean_name}.7z"
+        archive_format_param = "-t7z"
+        compression_level = "-mx=5"  # Normal compression (good balance of speed/size)
+        format_display = "7Z"
+    else:  # ZIP (fallback)
         archive_out_final_name = f"{clean_name}.zip"
         archive_format_param = "-tzip"
-        compression_level = "-mx=0"  # Store only for ZIP (faster)
+        compression_level = "-mx=5"  # Use compression for ZIP too (was -mx=0, caused corruption!)
         format_display = "ZIP"
 
     pswd_param = ""

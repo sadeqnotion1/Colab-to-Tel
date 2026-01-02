@@ -1160,7 +1160,7 @@ async def handle_url(client: Client, message: Message):
                     'custom_name': BOT.Options.custom_name if hasattr(BOT.Options, 'custom_name') else '',
                     'zip_pswd': BOT.Options.zip_pswd if hasattr(BOT.Options, 'zip_pswd') else '',
                     'unzip_pswd': BOT.Options.unzip_pswd if hasattr(BOT.Options, 'unzip_pswd') else '',
-                    'archive_format': BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else 'zip'
+                    'archive_format': BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else '7z'
                 })(),
                 'SOURCE': [input_text],  # Raw source input
                 'Setting': BOT.Setting  # Share global settings
@@ -1270,7 +1270,7 @@ async def handle_url(client: Client, message: Message):
     saved_custom_name = BOT.Options.custom_name
     saved_zip_pswd = BOT.Options.zip_pswd
     saved_unzip_pswd = BOT.Options.unzip_pswd
-    saved_archive_format = BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else 'zip'
+    saved_archive_format = BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else '7z'
     # Reset only filenames and service_type (these are per-request, not persistent)
     BOT.Options.filenames = []; BOT.Options.service_type = None
 
@@ -1572,7 +1572,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                             'custom_name': '',
                             'zip_pswd': '',
                             'unzip_pswd': '',
-                            'archive_format': 'zip'
+                            'archive_format': '7z'
                         })(),
                         'SOURCE': [link],
                         'Setting': BOT.Setting
@@ -1948,15 +1948,15 @@ async def unzip_pswd(client, message):
 async def archive_type(client, message):
     global BOT; log.info("Received /archivetype command.")
     if len(message.command) != 2:
-        msg = await message.reply_text("Send\n/archivetype <code>zip</code> or <code>rar</code>", quote=True, parse_mode=enums.ParseMode.HTML)
+        msg = await message.reply_text("Send\n/archivetype <code>zip</code>, <code>rar</code>, or <code>7z</code>", quote=True, parse_mode=enums.ParseMode.HTML)
     else:
         format_choice = message.command[1].lower()
-        if format_choice in ["zip", "rar"]:
+        if format_choice in ["zip", "rar", "7z"]:
             BOT.Options.archive_format = format_choice
             msg = await message.reply_text(f"Archive Format Set to: **{format_choice.upper()}**")
             log.info(f"Archive format set to: {format_choice}")
         else:
-            msg = await message.reply_text("Invalid format! Use <code>zip</code> or <code>rar</code>", quote=True, parse_mode=enums.ParseMode.HTML)
+            msg = await message.reply_text("Invalid format! Use <code>zip</code>, <code>rar</code>, or <code>7z</code>", quote=True, parse_mode=enums.ParseMode.HTML)
     await sleep(15); await message_deleter(message, msg)
 
 # Helper function to perform extraction

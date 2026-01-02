@@ -90,7 +90,7 @@ class BOT:
         custom_name = ""
         zip_pswd = ""
         unzip_pswd = ""
-        archive_format = "zip"  # Options: "zip" or "rar" (default: zip - works on all platforms)
+        archive_format = "7z"  # Options: "zip", "rar", "7z" (default: 7z - best compression, works on all platforms, less corruption)
         delta_extract_filenames = True
         bitso_extract_filenames = True
         filenames = []
