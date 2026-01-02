@@ -808,9 +808,17 @@ async def taskScheduler(task_ctx=None):
             log.info("Running pre-checks (size/name)...")
             # Skip pre-calc/name guess for certain services or dir mode
             if not is_dir and selected_service not in ['nzbcloud', 'delta', 'bitso', 'ytdl', 'local']:
-                 await calDownSize(_bot.SOURCE, task_ctx) # Only attempts GDrive/TG
-                 if _bot.SOURCE: await get_d_name(_bot.SOURCE[0], task_ctx) # Only attempts GDrive/TG/YTDL/Aria2
-                 else: _messages.download_name = "Task_No_Sources"; log.warning("_bot.SOURCE empty.")
+                 try:
+                     # Add timeout protection to prevent infinite hangs
+                     await asyncio.wait_for(calDownSize(_bot.SOURCE, task_ctx), timeout=30.0)
+                     if _bot.SOURCE:
+                         await asyncio.wait_for(get_d_name(_bot.SOURCE[0], task_ctx), timeout=30.0)
+                     else:
+                         _messages.download_name = "Task_No_Sources"; log.warning("_bot.SOURCE empty.")
+                 except asyncio.TimeoutError:
+                     log.warning(f"Pre-check timeout after 30s - skipping size/name calculation")
+                 except Exception as precheck_err:
+                     log.warning(f"Pre-check error: {precheck_err} - continuing anyway")
             elif not is_dir and selected_service in ['nzbcloud', 'delta', 'bitso']:
                  # Name/size handled later or manually provided
                  task_id_for_keyboard = task_ctx.get_short_id() if task_ctx else None
