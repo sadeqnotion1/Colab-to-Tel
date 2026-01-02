@@ -188,50 +188,39 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
         _task_start = BotTimes.task_start
 
 
+    # Pre-flight checks before running 7z
+    log.info(f"Archive pre-flight checks:")
+    log.info(f"  Source path: {path}")
+    log.info(f"  Source exists: {ospath.exists(path)}")
+    log.info(f"  Source is file: {ospath.isfile(path)}")
+    log.info(f"  Source is dir: {ospath.isdir(path)}")
+
+    if ospath.isdir(path):
+        try:
+            items_in_dir = os.listdir(path)
+            log.info(f"  Items in source dir: {len(items_in_dir)}")
+            if len(items_in_dir) == 0:
+                log.error("Archive Error: Source directory is empty!")
+                _task_error.state = True; _task_error.text = "Cannot archive empty directory."
+                return None, 0
+        except Exception as list_err:
+            log.error(f"  Could not list source directory: {list_err}")
+
+    log.info(f"  Output path: {archive_out_path}")
+    log.info(f"  Output dir: {_paths.temp_zpath}")
+    log.info(f"  Output dir exists: {ospath.exists(_paths.temp_zpath)}")
+
+    # Check for problematic characters in paths
+    if '"' in path or '"' in archive_out_path:
+        log.error("Archive Error: Paths contain double-quotes which will break 7z command!")
+        _task_error.state = True; _task_error.text = "Invalid characters in archive paths."
+        return None, 0
+
     cmd = f'7z a {compression_level} {archive_format_param} {pswd_param} -bsp1 "{archive_out_path}" "{path}"'
-    
-
-    
-    async def log_stream(stream, stream_name, is_stdout):
-        nonlocal last_reported_pct, last_update_time, total_size, total_in_unit # Access variables from outer scope
-        while True:
-            line_bytes = await stream.readline() # Read line bytes
-            if not line_bytes: break
-            line = line_bytes.decode('utf-8', errors='ignore').strip()
-            if line:
-                log.debug(f"7z {stream_name}: {line}")
-                if is_stdout:
-                    match = re.search(r"(\d+)\s*%", line) # Look for percentage
-                    if match:
-                        try:
-                            percentage = int(match.group(1))
-                            current_time = datetime.now()
-                            # Update status if percentage increased OR enough time passed
-                            if (percentage > last_reported_pct or (current_time - last_update_time).total_seconds() >= 2.0): # Update every 2s or on pct change
-                                last_reported_pct = percentage
-                                last_update_time = current_time # Update time of last status update
-
-                                # Calculate bar and elapsed time
-                                bar_length = 12
-                                filled_length = min(bar_length, max(0, int(percentage / 100 * bar_length)))
-                                bar = "█" * filled_length + "░" * (bar_length - filled_length)
-                                elapsed_time_str = getTime((current_time - _task_start).total_seconds())
-
-                                status_text = (f"{_messages.status_head}\n"
-                                               f"╭「{bar}」 **»** __{percentage:.0f}%__\n"
-                                               f"├⏱️ **Elapsed »** __{elapsed_time_str}__\n"
-                                               f"╰📦 **Source Size »** __{total_in_unit}__")
-
-                                log.debug(f"archive/log_stream: Calling status_bar with custom text. Pct={percentage}")
-                                await status_bar(status_text, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
-                        except ValueError:
-                            log.warning(f"Could not convert 7z percentage '{match.group(1)}' to int.")
-                        except Exception as status_err:
-                            log.warning(f"Status update error in log_stream: {status_err}")
-            await asyncio.sleep(0.1) # Small sleep to yield control
-
-    log.info(f"Running Archiver: {cmd}")
+    log.info(f"Running 7z command: {cmd}")
     proc = None
+    stderr_output = []  # Store stderr for error reporting
+
     try:
         # --- Calculate total size before starting process ---
         total_size = getSize(path)
@@ -246,13 +235,52 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
         )
         log.debug(f"Archiver (7z) process started (PID: {proc.pid})")
 
+        # Modified log_stream to return stderr lines
+        async def log_stream_wrapper(stream, stream_name, is_stdout):
+            lines = []
+            while True:
+                line_bytes = await stream.readline()
+                if not line_bytes: break
+                line = line_bytes.decode('utf-8', errors='ignore').strip()
+                if line:
+                    if not is_stdout:
+                        log.warning(f"7z {stream_name}: {line}")
+                        lines.append(line)
+                    else:
+                        log.debug(f"7z {stream_name}: {line}")
+                    # Progress tracking (same as before)
+                    if is_stdout:
+                        match = re.search(r"(\d+)\s*%", line)
+                        if match:
+                            try:
+                                percentage = int(match.group(1))
+                                current_time = datetime.now()
+                                if (percentage > last_reported_pct or (current_time - last_update_time).total_seconds() >= 2.0):
+                                    last_reported_pct = percentage
+                                    last_update_time = current_time
+                                    bar_length = 12
+                                    filled_length = min(bar_length, max(0, int(percentage / 100 * bar_length)))
+                                    bar = "█" * filled_length + "░" * (bar_length - filled_length)
+                                    elapsed_time_str = getTime((current_time - _task_start).total_seconds())
+                                    status_text = (f"{_messages.status_head}\n"
+                                                   f"╭「{bar}」 **»** __{percentage:.0f}%__\n"
+                                                   f"├⏱️ **Elapsed »** __{elapsed_time_str}__\n"
+                                                   f"╰📦 **Source Size »** __{total_in_unit}__")
+                                    await status_bar(status_text, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
+                            except ValueError:
+                                log.warning(f"Could not convert 7z percentage '{match.group(1)}' to int.")
+                            except Exception as status_err:
+                                log.warning(f"Status update error in log_stream: {status_err}")
+                await asyncio.sleep(0.1)
+            return lines
+
         # Run stream loggers concurrently
-        stdout_task = asyncio.create_task(log_stream(proc.stdout, 'stdout', True))
-        stderr_task = asyncio.create_task(log_stream(proc.stderr, 'stderr', False))
+        stdout_task = asyncio.create_task(log_stream_wrapper(proc.stdout, 'stdout', True))
+        stderr_task = asyncio.create_task(log_stream_wrapper(proc.stderr, 'stderr', False))
 
         # Wait for process completion and streams to finish reading
         exit_code = await proc.wait()
-        await asyncio.gather(stdout_task, stderr_task) # Ensure stream tasks complete
+        stdout_lines, stderr_output = await asyncio.gather(stdout_task, stderr_task)
         log.debug(f"Archiver (7z) process finished with exit code: {exit_code}")
 
         # Check success and GET SIZE
@@ -277,8 +305,18 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
 
         else: # Non-zero exit code or file missing
             log.error(f"Archiving failed for '{archive_out_final_name}' with code {exit_code}.")
+
+            # Build detailed error message with stderr output
             error_reason = f"Archive failed code {exit_code}."
-            if not ospath.exists(archive_out_path): error_reason += " Output file missing."
+            if not ospath.exists(archive_out_path):
+                error_reason += " Output file missing."
+
+            # Add stderr details if available
+            if stderr_output:
+                stderr_msg = " | ".join(stderr_output[-3:])  # Last 3 stderr lines
+                error_reason += f" 7z error: {stderr_msg}"
+                log.error(f"7z stderr output: {stderr_msg}")
+
             archive_success = False
             if ospath.exists(archive_out_path): # Cleanup failed attempt if file exists
                 try: os.remove(archive_out_path)
