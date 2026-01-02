@@ -74,20 +74,25 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
         for idx, (task_id, task_ctx) in enumerate(tasks.items(), 1):
             short_id = task_ctx.get_short_id()
 
-            # Get filename from source URL or messages
+            # Get filename - prioritize download_name over URL parsing
             filename = "Unknown"
-            if task_ctx.source_urls and len(task_ctx.source_urls) > 0:
-                # Extract filename from URL (safe list access)
+            # First, try getting it from messages.download_name (set by task_manager)
+            if task_ctx.messages and task_ctx.messages.download_name:
+                filename = task_ctx.messages.download_name
+            # Fallback: try to extract from URL
+            elif task_ctx.source_urls and len(task_ctx.source_urls) > 0:
                 url = task_ctx.source_urls[0]
                 try:
                     from urllib.parse import urlparse, unquote
                     path = urlparse(url).path
-                    filename = unquote(path.split('/')[-1]) if path else url[:50]
+                    # Skip parsing for NZBCloud "play" endpoints (use message.download_name instead)
+                    if '/play?' in url or '/play#' in url:
+                        filename = "NZBCloud File"  # Placeholder until download_name is set
+                    else:
+                        filename = unquote(path.split('/')[-1]) if path else url[:50]
                 except Exception:
                     # Fallback if URL parsing fails
                     filename = url[:50] if url else "Unknown"
-            elif task_ctx.messages.download_name:
-                filename = task_ctx.messages.download_name
 
             # Limit filename length for display
             if len(filename) > 35:

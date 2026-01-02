@@ -242,6 +242,11 @@ class TaskContext:
         self.completed_at = datetime.now()
         self.is_cancelled = True
 
+    @property
+    def task_error(self):
+        """Backward compatibility alias for error attribute"""
+        return self.error
+
 
 class TaskQueue:
     """

@@ -9,6 +9,7 @@ import aiohttp
 from PIL import Image
 from os import path as ospath
 from datetime import datetime
+from pyrogram import enums
 from pyrogram.errors import FloodWait, SlowmodeWait
 from ..utility.variables import BOT, BotTimes, Messages, MSG, Paths, TRANSFER, TaskError
 from ..utility.task_context import TaskContext  # NEW: Import for multi-task support
@@ -85,8 +86,12 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
         else:
             # Not a split file, try extracting duration and thumbnail separately
             log.debug(f"Attempting duration extraction for video: {actual_upload_filename}")
-            duration = await helper.get_video_duration(file_path) # Call new duration function
-            log.debug(f"Duration extraction attempt complete. Duration: {duration}")
+            # Call new metadata function
+            metadata = await helper.get_video_metadata(file_path)
+            duration = metadata["duration"]
+            width = metadata["width"]
+            height = metadata["height"]
+            log.debug(f"Metadata extraction complete. Duration: {duration}, WxH: {width}x{height}")
 
             log.debug(f"Attempting thumbnail generation for video: {actual_upload_filename}")
             # Define a temporary directory for thumbs (ensure it exists and is writable)
@@ -99,9 +104,7 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
             if not thumb_path:
                 log.warning(f"Thumbnail generation failed for {actual_upload_filename}, using default path.")
                 thumb_path = Paths.DEFAULT_HERO
-            # Note: Dimensions (width/height) are not extracted in this flow yet.
-            # You would need another ffprobe/ffmpeg call if needed, similar to duration extraction.
-
+            
     # --- Logic for Photos (Thumb is the photo itself) ---
     elif is_photo:
          thumb_path = file_path # Use the photo itself as the thumbnail for send_document fallback
@@ -219,10 +222,11 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
                     caption=caption,
                     progress=up_progress,
                     duration=duration,
-                    width=width,      # Note: width/height extraction not implemented yet
-                    height=height,    # Note: width/height extraction not implemented yet
+                    width=width,
+                    height=height,
                     thumb=thumb_path,
-                    supports_streaming=True
+                    supports_streaming=True,
+                    parse_mode=enums.ParseMode.HTML
                 )
                 log.debug(f"send_video call returned for {actual_upload_filename}. Message received: {bool(sent_message)}")
             elif not BOT.Options.stream_upload and is_photo:
@@ -232,7 +236,8 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
                     chat_id=target_chat_id,
                     photo=file_path,
                     caption=caption,
-                    progress=up_progress
+                    progress=up_progress,
+                    parse_mode=enums.ParseMode.HTML
                 )
                 log.debug(f"send_photo call returned for {actual_upload_filename}. Message received: {bool(sent_message)}")
             else:
@@ -244,7 +249,8 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
                     caption=caption,
                     progress=up_progress,
                     thumb=thumb_path, # send_document uses thumb too
-                    force_document=True # Ensure it sends as document, not potentially photo/video
+                    force_document=True, # Ensure it sends as document, not potentially photo/video
+                    parse_mode=enums.ParseMode.HTML
                 )
                 log.debug(f"send_document call returned for {actual_upload_filename}. Message received: {bool(sent_message)}")
 

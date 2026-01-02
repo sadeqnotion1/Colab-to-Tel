@@ -813,7 +813,8 @@ async def taskScheduler(task_ctx=None):
                  else: _messages.download_name = "Task_No_Sources"; log.warning("_bot.SOURCE empty.")
             elif not is_dir and selected_service in ['nzbcloud', 'delta', 'bitso']:
                  # Name/size handled later or manually provided
-                 if _msg.status_msg: await _msg.status_msg.edit_caption(caption=_messages.task_msg + _messages.status_head + f"\n📝 __Waiting for downloader...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()))
+                 task_id_for_keyboard = task_ctx.get_short_id() if task_ctx else None
+                 if _msg.status_msg: await _msg.status_msg.edit_caption(caption=_messages.task_msg + _messages.status_head + f"\n📝 __Waiting for downloader...__" + sysINFO(), reply_markup=keyboard(task_id_for_keyboard))
 
         # --- Adjust Download Path for Zip Mode ---
         # Only if no error has occurred yet

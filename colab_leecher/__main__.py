@@ -7,7 +7,7 @@ import re # Import regex module
 import aiohttp # Import aiohttp
 import random # Import random for thumbnail selection
 import aiofiles # Import aiofiles for async file writing
-from pyrogram import filters, Client, ContinuePropagation
+from pyrogram import enums, filters
 from datetime import datetime
 from asyncio import sleep, get_event_loop
 from colab_leecher import colab_bot, OWNER, DUMP_ID # Absolute import
@@ -1188,7 +1188,6 @@ async def handle_url(client: Client, message: Message):
             })()
 
             task_ctx.messages = task_ctx.messages  # Already exists in TaskContext
-            task_ctx.task_error = task_ctx.error  # Map error to task_error name
 
             # Launch task in parallel (NON-BLOCKING!)
             # Tracked background task to prevent leaks
@@ -1537,6 +1536,13 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
                 # Create a separate TaskContext for EACH link and launch them
                 launched_tasks = []
+
+                # Get filenames from BOT.Options if available (for NZBCloud TITLE= parsing)
+                filenames_from_global = BOT.Options.filenames if hasattr(BOT.Options, 'filenames') and BOT.Options.filenames else []
+                has_filenames = len(filenames_from_global) == len(links)
+                if has_filenames:
+                    log.info(f"Using {len(filenames_from_global)} TITLE= filenames for parallel tasks")
+
                 for idx, link in enumerate(links, 1):
                     # Create new TaskContext for this link
                     sub_task = create_task_context(
@@ -1548,6 +1554,10 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                     sub_task.mode_type = task_ctx.mode_type
                     sub_task.service_type = task_ctx.service_type
 
+                    # Get the corresponding filename for this task (if available)
+                    task_filenames = [filenames_from_global[idx-1]] if has_filenames else []
+                    log.info(f"Task {idx}/{len(links)} assigned filename: {task_filenames[0] if task_filenames else 'None'}")
+
                     # Create mock bot object (required by task scheduler)
                     is_ytdl = sub_task.service_type == "ytdl"
                     sub_task.bot = type('obj', (object,), {
@@ -1558,7 +1568,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                         })(),
                         'Options': type('obj', (object,), {
                             'service_type': sub_task.service_type,
-                            'filenames': [],
+                            'filenames': task_filenames,  # Pass the TITLE= filename to this task
                             'custom_name': '',
                             'zip_pswd': '',
                             'unzip_pswd': '',
@@ -1909,7 +1919,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 @colab_bot.on_message(filters.photo & filters.private)
 async def handle_image(client, message):
     log.info(f"Received photo from user {message.from_user.id}, setting thumbnail.")
-    msg = await message.reply_text("<i>Trying To Save Thumbnail...</i>")
+    msg = await message.reply_text("<i>Trying To Save Thumbnail...</i>", parse_mode=enums.ParseMode.HTML)
     success = await setThumbnail(message)
     if success: await msg.edit_text("**Thumbnail Changed ✅**"); await message.delete()
     else: await msg.edit_text("🥲 **Couldn’t set thumbnail...**", quote=True)
@@ -1919,26 +1929,26 @@ async def handle_image(client, message):
 @colab_bot.on_message(filters.command("setname") & filters.private)
 async def custom_name(client, message):
     global BOT; log.info("Received /setname command.")
-    if len(message.command) != 2: msg = await message.reply_text("Send\n/setname <code>custom_fileame.extension</code>", quote=True)
+    if len(message.command) != 2: msg = await message.reply_text("Send\n/setname <code>custom_fileame.extension</code>", quote=True, parse_mode=enums.ParseMode.HTML)
     else: BOT.Options.custom_name = message.command[1]; msg = await message.reply_text("Custom Name Set!"); log.info(f"Custom name: {BOT.Options.custom_name}")
     await sleep(15); await message_deleter(message, msg)
 @colab_bot.on_message(filters.command("zipaswd") & filters.private)
 async def zip_pswd(client, message):
     global BOT; log.info("Received /zipaswd command.")
-    if len(message.command) != 2: msg = await message.reply_text("Send\n/zipaswd <code>password</code>", quote=True)
+    if len(message.command) != 2: msg = await message.reply_text("Send\n/zipaswd <code>password</code>", quote=True, parse_mode=enums.ParseMode.HTML)
     else: BOT.Options.zip_pswd = message.command[1]; msg = await message.reply_text("Zip Password Set!"); log.info("Zip password set.")
     await sleep(15); await message_deleter(message, msg)
 @colab_bot.on_message(filters.command("unzipaswd") & filters.private)
 async def unzip_pswd(client, message):
     global BOT; log.info("Received /unzipaswd command.")
-    if len(message.command) != 2: msg = await message.reply_text("Send\n/unzipaswd <code>password</code>", quote=True)
+    if len(message.command) != 2: msg = await message.reply_text("Send\n/unzipaswd <code>password</code>", quote=True, parse_mode=enums.ParseMode.HTML)
     else: BOT.Options.unzip_pswd = message.command[1]; msg = await message.reply_text("Unzip Password Set!"); log.info("Unzip password set.")
     await sleep(15); await message_deleter(message, msg)
 @colab_bot.on_message(filters.command("archivetype") & filters.private)
 async def archive_type(client, message):
     global BOT; log.info("Received /archivetype command.")
     if len(message.command) != 2:
-        msg = await message.reply_text("Send\n/archivetype <code>zip</code> or <code>rar</code>", quote=True)
+        msg = await message.reply_text("Send\n/archivetype <code>zip</code> or <code>rar</code>", quote=True, parse_mode=enums.ParseMode.HTML)
     else:
         format_choice = message.command[1].lower()
         if format_choice in ["zip", "rar"]:
@@ -1946,7 +1956,7 @@ async def archive_type(client, message):
             msg = await message.reply_text(f"Archive Format Set to: **{format_choice.upper()}**")
             log.info(f"Archive format set to: {format_choice}")
         else:
-            msg = await message.reply_text("Invalid format! Use <code>zip</code> or <code>rar</code>", quote=True)
+            msg = await message.reply_text("Invalid format! Use <code>zip</code> or <code>rar</code>", quote=True, parse_mode=enums.ParseMode.HTML)
     await sleep(15); await message_deleter(message, msg)
 
 # Helper function to perform extraction

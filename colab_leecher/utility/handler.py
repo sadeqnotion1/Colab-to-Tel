@@ -32,12 +32,13 @@ async def Leech(path: str, remove_source: bool, task_ctx: TaskContext = None):
 
     # Multi-task support: Use task_ctx if provided, otherwise fallback to globals
     if task_ctx:
-        _bot = task_ctx.bot
-        _paths = task_ctx.paths
+        from .. import colab_bot
+        _bot = BOT  # TaskContext doesn't have bot attribute, use global
+        _paths = Paths  # TaskContext doesn't have paths attribute, use global
         _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error  # Use task_ctx.error, not task_ctx.task_error
         _transfer = task_ctx.transfer
-        _msg = task_ctx.msg
+        _msg = MSG  # TaskContext doesn't have msg attribute, use global
         log.info(f"Leech using TaskContext for task_id: {task_ctx.task_id}")
     else:
         _bot = BOT
@@ -212,12 +213,12 @@ async def Unzip_Handler(source_path: str, remove_source: bool = True, task_ctx: 
 
     # Multi-task support: Use task_ctx if provided, otherwise fallback to globals
     if task_ctx:
-        _bot = task_ctx.bot
-        _paths = task_ctx.paths
+        _bot = BOT  # TaskContext doesn't have bot attribute, use global
+        _paths = Paths  # TaskContext doesn't have paths attribute, use global
         _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error  # Use task_ctx.error, not task_ctx.task_error
         _transfer = task_ctx.transfer
-        _msg = task_ctx.msg
+        _msg = MSG  # TaskContext doesn't have msg attribute, use global
         log.info(f"Unzip_Handler using TaskContext for task_id: {task_ctx.task_id}")
     else:
         _bot = BOT
@@ -564,6 +565,22 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
         try: await status_msg.delete()
         except Exception as del_err: log.warning(f"Could not delete original status message: {del_err}")
         finally: MSG.status_msg = None
+
+    # === CRITICAL: Remove task from TASK_QUEUE ===
+    if task_ctx:
+        from .task_context import TASK_QUEUE
+        removed = await TASK_QUEUE.remove_task(task_ctx.task_id)
+        if removed:
+            log.info(f"Task {task_ctx.get_short_id()} removed from TASK_QUEUE. Active tasks: {TASK_QUEUE.get_task_count()}")
+
+        # Force update summary dashboard to reflect removal
+        try:
+            from .task_dashboard import force_update_summary
+            await force_update_summary(colab_bot)
+        except Exception as e:
+            log.warning(f"Failed to update summary after task removal: {e}")
+    # === END TASK_QUEUE REMOVAL ===
+
     # --- End Send Report and Final Message ---
 
 # --- End of cancelTask function ---
@@ -590,12 +607,12 @@ async def Zip_Handler(down_path: str, is_split: bool, remove: bool, task_ctx: Ta
 
     # Multi-task support: Use task_ctx if provided, otherwise fallback to globals
     if task_ctx:
-        _bot = task_ctx.bot
-        _paths = task_ctx.paths
+        _bot = BOT  # TaskContext doesn't have bot attribute, use global
+        _paths = Paths  # TaskContext doesn't have paths attribute, use global
         _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error  # Use task_ctx.error, not task_ctx.task_error
         _transfer = task_ctx.transfer
-        _msg = task_ctx.msg
+        _msg = MSG  # TaskContext doesn't have msg attribute, use global
         log.info(f"Zip_Handler using TaskContext for task_id: {task_ctx.task_id}")
     else:
         _bot = BOT

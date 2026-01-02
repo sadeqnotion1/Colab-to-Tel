@@ -181,6 +181,10 @@ async def on_output(output: str, current_filename: str, task_ctx=None):
                 downloaded_bytes, total_size, "Aria2c 🧨",
                 task_ctx=task_ctx  # Pass task_ctx for per-task progress tracking
             )
+            # Update parallel dashboard if task is in queue
+            if task_ctx:
+                from ..utility.task_dashboard import try_update_summary
+                await try_update_summary()
         except Exception as status_err:
              log.error(f"Error calling status_bar: {status_err}")
 
@@ -433,6 +437,21 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
                 "Referer": link.split('?')[0] if '?' in link else link
             }
 
+            # Add Cloudflare cookie and headers for NZBCloud downloads
+            if 'nzbcloud.com' in link.lower():
+                from .. import BOT
+                cf_clearance = BOT.Setting.nzb_cf_clearance
+                if cf_clearance:
+                    # Add cookie directly to request headers (most reliable method)
+                    headers['Cookie'] = f'cf_clearance={cf_clearance}'
+                    # Match browser headers exactly for Cloudflare
+                    headers['Referer'] = 'https://app.nzbcloud.com/'
+                    headers['Sec-Fetch-Dest'] = 'video'
+                    headers['Sec-Fetch-Mode'] = 'no-cors'
+                    headers['Sec-Fetch-Site'] = 'same-site'
+                    headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+                    log.info(f"🍪 Using Cloudflare cookie for NZBCloud download")
+
             async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                 async with session.get(link, headers=headers, allow_redirects=True) as response:
                     response.raise_for_status()
@@ -466,6 +485,10 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
                                         log.info(f"📥 aiohttp progress: {sizeUnit(downloaded_size)}/{sizeUnit(total_size)} ({percentage:.1f}%) | {speed_string} | ETA: {getTime(eta)}")
                                         await status_bar(_messages.status_head, speed_string, percentage, getTime(eta),
                                                        sizeUnit(downloaded_size), sizeUnit(total_size), "aiohttp 🌐", task_ctx=task_ctx)
+                                        # Update parallel dashboard if task is in queue
+                                        if task_ctx:
+                                            from ..utility.task_dashboard import try_update_summary
+                                            await try_update_summary()
                         else:
                             # Download completed successfully
                             log.info(f"aiohttp download complete: {expected_filename} ({sizeUnit(downloaded_size)})")

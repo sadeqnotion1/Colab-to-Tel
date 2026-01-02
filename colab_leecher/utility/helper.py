@@ -17,6 +17,7 @@ from datetime import datetime
 import mimetypes
 from urllib.parse import urlparse, unquote
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram import enums
 from pyrogram.errors import MessageNotModified
 from .variables import BOT, MSG, BotTimes, Messages, Paths, TRANSFER
 from .task_context import TaskContext  # NEW: Import for multi-task support
@@ -24,64 +25,99 @@ from .task_context import TaskContext  # NEW: Import for multi-task support
 # Setup logger
 log = logging.getLogger(__name__)
 
-async def get_video_duration(file_path: str, ffprobe_timeout: int = 20, ffmpeg_timeout: int = 30) -> int:
+async def get_video_metadata(file_path: str) -> dict:
     """
-    Tries to get video duration using ffprobe, with a fallback to parsing ffmpeg output.
-
-    Args:
-        file_path: Path to the video file.
-        ffprobe_timeout: Timeout in seconds for ffprobe.
-        ffmpeg_timeout: Timeout in seconds for ffmpeg.
-
-    Returns:
-        Duration in seconds as an integer, or 0 if extraction fails.
+    Extracts video metadata (duration, width, height) using ffprobe.
+    Returns a dict with keys: duration, width, height.
     """
-    duration = 0
-    log.debug(f"Attempting to get duration for: {os.path.basename(file_path)}")
+    metadata = {"duration": 0, "width": 0, "height": 0}
+    if not os.path.exists(file_path):
+        return metadata
 
-    # --- Method 1: ffprobe ---
     try:
-        log.debug(f"Trying ffprobe (timeout: {ffprobe_timeout}s)...")
-        ffprobe_cmd = [
-            "ffprobe",
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+        cmd = [
+            "ffprobe", 
+            "-v", "error", 
+            "-select_streams", "v:0", 
+            "-show_entries", "stream=width,height,duration", 
+            "-of", "default=noprint_wrappers=1:nokey=1", 
             file_path
         ]
         process = await asyncio.create_subprocess_exec(
-            *ffprobe_cmd,
+            *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=ffprobe_timeout)
-
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=20)
+        
         if process.returncode == 0 and stdout:
-            duration_str = stdout.decode().strip()
-            log.debug(f"ffprobe output: {duration_str}")
-            if duration_str and duration_str.lower() != 'n/a':
+            # Output format depends on ffprobe version/file, typically lines like:
+            # 1280
+            # 720
+            # 120.5
+            lines = stdout.decode().strip().splitlines()
+            # We don't know the order guaranteed by select_streams without specific -of json, 
+            # but usually it matches requested order or simply values.
+            # A safer way is using json output, but let's try a more robust csv/json approach or simple parsing.
+            
+            # Re-run with specific json format for reliability
+            cmd_json = [
+                "ffprobe", 
+                "-v", "error", 
+                "-select_streams", "v:0", 
+                "-show_entries", "stream=width,height,duration", 
+                "-of", "json", 
+                file_path
+            ]
+            process_json = await asyncio.create_subprocess_exec(
+                *cmd_json,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout_json, _ = await asyncio.wait_for(process_json.communicate(), timeout=20)
+            
+            if process_json.returncode == 0 and stdout_json:
+                import json
                 try:
-                    duration = int(float(duration_str))
-                    log.info(f"Duration extracted via ffprobe: {duration}s for {os.path.basename(file_path)}")
-                    return duration
-                except ValueError:
-                    log.warning(f"Could not convert ffprobe duration '{duration_str}' to number.")
-        else:
-             stderr_str = stderr.decode().strip()
-             log.warning(f"ffprobe failed for {os.path.basename(file_path)}. Code: {process.returncode}, Stderr: {stderr_str}")
+                    data = json.loads(stdout_json.decode())
+                    if "streams" in data and len(data["streams"]) > 0:
+                        stream = data["streams"][0]
+                        metadata["width"] = int(stream.get("width", 0))
+                        metadata["height"] = int(stream.get("height", 0))
+                        # Duration might be in format or stream
+                        dur = stream.get("duration")
+                        if dur:
+                            metadata["duration"] = int(float(dur))
+                        else:
+                            # Try format duration if stream duration missing
+                            cmd_fmt = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", file_path]
+                            proc_fmt = await asyncio.create_subprocess_exec(*cmd_fmt, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                            out_fmt, _ = await proc_fmt.communicate()
+                            if out_fmt:
+                                data_fmt = json.loads(out_fmt.decode())
+                                if "format" in data_fmt:
+                                    metadata["duration"] = int(float(data_fmt["format"].get("duration", 0)))
+                except Exception as json_err:
+                    log.warning(f"Failed to parse ffprobe JSON: {json_err}")
 
-    except asyncio.TimeoutError:
-        log.warning(f"ffprobe timed out after {ffprobe_timeout}s for {os.path.basename(file_path)}.")
-        try:
-            process.kill()
-            await process.wait() # Ensure process is cleaned up
-        except ProcessLookupError: pass # Process already finished
-        except Exception as kill_err: log.warning(f"Error killing timed-out ffprobe: {kill_err}")
-    except FileNotFoundError:
-        log.error("ffprobe command not found. Cannot extract duration.")
-        return 0 # Cannot proceed if ffprobe isn't installed
     except Exception as e:
-        log.error(f"Error running ffprobe for {os.path.basename(file_path)}: {e}", exc_info=False) # Keep log concise
+        log.warning(f"Error getting video metadata: {e}")
+    
+    return metadata
+
+async def get_video_duration(file_path: str, ffprobe_timeout: int = 20, ffmpeg_timeout: int = 30) -> int:
+    """
+    Tries to get video duration using ffprobe, with a fallback to parsing ffmpeg output.
+    Now wraps get_video_metadata for ffprobe part.
+    """
+    # Try the robust metadata function first
+    meta = await get_video_metadata(file_path)
+    if meta["duration"] > 0:
+        return meta["duration"]
+        
+    duration = 0
+    log.debug(f"Attempting fallback duration extraction for: {os.path.basename(file_path)}")
+
 
     # --- Method 2: ffmpeg (Fallback) ---
     log.debug(f"ffprobe failed or timed out. Trying ffmpeg fallback (timeout: {ffmpeg_timeout}s)...")
@@ -1416,6 +1452,22 @@ async def status_bar(down_msg, speed, percentage, eta, done, total_size, engine,
     task_id_str = f"[{task_ctx.get_short_id()}]" if task_ctx else "[legacy]"
     log.info(f"📊 status_bar {task_id_str} called. Pct={percentage}%, Speed={speed}")
 
+    # ===== PARALLEL MODE: Skip individual status updates, use dashboard instead =====
+    if task_ctx:
+        from .task_context import TASK_QUEUE
+        if await TASK_QUEUE.has_task(task_ctx.task_id):
+            # Task is in parallel queue - individual status updates are disabled
+            # Update transfer stats for dashboard to read, but don't edit Telegram message
+            try:
+                # Parse size string to bytes for dashboard to detect download progress
+                size_str = done.replace(' GiB', '').replace(' MiB', '').replace(' KiB', '').replace(' B', '')
+                task_ctx.transfer.down_bytes = int(float(size_str) * 1024 * 1024)
+            except (ValueError, AttributeError):
+                task_ctx.transfer.down_bytes = 1  # Set to non-zero to indicate download started
+            log.debug(f"⏩ status_bar {task_id_str}: Parallel mode - skipping individual message update, dashboard will show progress")
+            return
+    # ===== END PARALLEL MODE CHECK =====
+
     # Throttle updates using per-task timing (parallel-safe) or global timing (legacy)
     current_time = time()
     if task_ctx:
@@ -1488,11 +1540,11 @@ async def status_bar(down_msg, speed, percentage, eta, done, total_size, engine,
             # Check if message is a photo (has thumbnail) or plain text
             if hasattr(status_msg, 'photo') and status_msg.photo:
                 # Message has a photo/thumbnail - edit caption to preserve thumbnail
-                await status_msg.edit_caption(caption=final_text, reply_markup=kb_markup)
+                await status_msg.edit_caption(caption=final_text, reply_markup=kb_markup, parse_mode=enums.ParseMode.HTML)
                 log.debug(f"Status message caption edited (thumbnail preserved).")
             else:
                 # Plain text message - edit text normally
-                await status_msg.edit_text(text=final_text, disable_web_page_preview=True, reply_markup=kb_markup)
+                await status_msg.edit_text(text=final_text, disable_web_page_preview=True, reply_markup=kb_markup, parse_mode=enums.ParseMode.HTML)
                 log.debug(f"Status message text edited.")
 
         except MessageNotModified:
@@ -1690,14 +1742,42 @@ async def fetch_links_from_url(url: str) -> list[str] | None:
                 if not text_content: return []
 
                 links = []
+                filenames = []  # NEW: Store TITLE= filenames
+                pending_filename = None  # NEW: Track filename for next URL
                 valid_link_pattern = re.compile(r"^(https?://|magnet:\?|ftps?://)")
+
                 for line_raw in text_content.splitlines():
                     line = line_raw.strip().split('|')[0].strip() # Get part before | if exists
                     if line == "---": break # Stop if separator found
+
+                    # NEW: Check for TITLE= lines (NZBCloud format)
+                    if line.startswith("TITLE="):
+                        pending_filename = line[6:].strip()  # Extract filename after "TITLE="
+                        log.debug(f"Found TITLE filename: {pending_filename}")
+                        continue
+
                     if valid_link_pattern.match(line):
                         links.append(line)
-                    elif line: log.debug(f"Ignoring non-link line: {line[:100]}...")
+                        # NEW: Associate the pending filename with this link
+                        if pending_filename:
+                            filenames.append(pending_filename)
+                            log.debug(f"Associated TITLE '{pending_filename}' with link")
+                            pending_filename = None  # Reset for next pair
+                        else:
+                            filenames.append(None)  # No TITLE= for this link
+                    elif line:
+                        log.debug(f"Ignoring non-link line: {line[:100]}...")
+
                 log.info(f"Parsed {len(links)} links from {raw_url}.")
+                # NEW: Store filenames in BOT.Options for access by parallel task code
+                if any(filenames):  # Only set if at least one filename found
+                    BOT.Options.filenames = filenames
+                    log.info(f"Extracted {len([f for f in filenames if f])} TITLE= filenames")
+                    # Debug: Log each filename
+                    for i, fname in enumerate(filenames):
+                        log.info(f"  [{i}] {fname}")
+                else:
+                    BOT.Options.filenames = []
                 return links # Return only the list of links
     except Exception as e:
         log.error(f"Error fetching/parsing links from {raw_url}: {e}", exc_info=True)

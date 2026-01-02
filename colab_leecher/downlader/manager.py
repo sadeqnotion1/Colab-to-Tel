@@ -636,14 +636,19 @@ async def get_d_name(link: str, task_ctx: TaskContext = None):
     name = None
     log.info(f"Attempting initial name guess for link: {link[:100]}...")
     try:
-        # Add specific GDrive/TG name fetching if implemented
-        # if is_google_drive(link): ...
-        # elif is_telegram(link): ...
-        # else: # Fallback
+        # ===== PRIORITY 1: Check for TITLE= filename from bot.Options.filenames (NZBCloud format) =====
+        if task_ctx and hasattr(task_ctx, 'bot') and hasattr(task_ctx.bot, 'Options'):
+            if hasattr(task_ctx.bot.Options, 'filenames') and task_ctx.bot.Options.filenames:
+                # Get the first filename (for single-link tasks)
+                if len(task_ctx.bot.Options.filenames) > 0:
+                    title_filename = task_ctx.bot.Options.filenames[0]
+                    if title_filename:
+                        name = title_filename
+                        log.info(f"✅ Using TITLE= filename from bot.Options: {name}")
 
-        # <<< --- ADD await HERE --- >>>
-        name = await extract_filename_from_url(link)
-        # <<< --- END await FIX --- >>>
+        # ===== FALLBACK: Extract from URL if no TITLE= filename found =====
+        if not name:
+            name = await extract_filename_from_url(link)
 
     except Exception as e:
         log.warning(f"Could not guess initial name for {link[:100]}: {e}")
