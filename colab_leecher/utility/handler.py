@@ -34,7 +34,7 @@ async def Leech(path: str, remove_source: bool, task_ctx: TaskContext = None):
     if task_ctx:
         from .. import colab_bot
         _bot = BOT  # TaskContext doesn't have bot attribute, use global
-        _paths = Paths  # TaskContext doesn't have paths attribute, use global
+        _paths = task_ctx.paths  # ✅ Use task-specific paths (temp_zip, etc.)
         _messages = task_ctx.messages
         _task_error = task_ctx.error  # Use task_ctx.error, not task_ctx.task_error
         _transfer = task_ctx.transfer
@@ -214,7 +214,7 @@ async def Unzip_Handler(source_path: str, remove_source: bool = True, task_ctx: 
     # Multi-task support: Use task_ctx if provided, otherwise fallback to globals
     if task_ctx:
         _bot = BOT  # TaskContext doesn't have bot attribute, use global
-        _paths = Paths  # TaskContext doesn't have paths attribute, use global
+        _paths = task_ctx.paths  # ✅ Use task-specific paths
         _messages = task_ctx.messages
         _task_error = task_ctx.error  # Use task_ctx.error, not task_ctx.task_error
         _transfer = task_ctx.transfer
@@ -608,7 +608,7 @@ async def Zip_Handler(down_path: str, is_split: bool, remove: bool, task_ctx: Ta
     # Multi-task support: Use task_ctx if provided, otherwise fallback to globals
     if task_ctx:
         _bot = BOT  # TaskContext doesn't have bot attribute, use global
-        _paths = Paths  # TaskContext doesn't have paths attribute, use global
+        _paths = task_ctx.paths  # ✅ Use task-specific paths
         _messages = task_ctx.messages
         _task_error = task_ctx.error  # Use task_ctx.error, not task_ctx.task_error
         _transfer = task_ctx.transfer
