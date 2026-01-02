@@ -10,7 +10,8 @@ Updates periodically to show progress across parallel tasks.
 import logging
 import os
 from typing import Optional
-from pyrogram.types import Message
+from pyrogram import enums
+from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 from .. import OWNER, colab_bot
 from .task_context import TASK_QUEUE, TaskContext
 from .helper import getTime
@@ -131,6 +132,24 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
         # Note: Truncation is applied later based on message type
         # Photo captions: 1024 chars, Text messages: 4096 chars
 
+        # Create cancel buttons for each task
+        buttons = []
+        for idx, (task_id, task_ctx) in enumerate(tasks.items(), 1):
+            short_id = task_ctx.get_short_id()
+            buttons.append([InlineKeyboardButton(
+                f"❌ Cancel Task {idx}",
+                callback_data=f"cancel_task:{task_id}"
+            )])
+
+        # Add "Cancel All" button
+        if len(tasks) > 1:
+            buttons.append([InlineKeyboardButton(
+                "🚫 Cancel All Tasks",
+                callback_data="cancel_all_tasks"
+            )])
+
+        keyboard = InlineKeyboardMarkup(buttons) if buttons else None
+
         # Determine thumbnail to use (from first task or fallback)
         thumbnail_path = None
         first_task = next(iter(tasks.values()), None) if tasks else None
@@ -158,7 +177,11 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                         if len(caption_text) > 1024:
                             caption_text = caption_text[:974] + "\n\n⚠️ ... (truncated)"
                             log.warning(f"Caption truncated from {len(summary_text)} to 1024 chars (photo limit)")
-                        await TASK_QUEUE.summary_msg.edit_caption(caption_text)
+                        await TASK_QUEUE.summary_msg.edit_caption(
+                            caption_text,
+                            parse_mode=enums.ParseMode.MARKDOWN,
+                            reply_markup=keyboard
+                        )
                         log.debug(f"Summary dashboard caption updated ({len(tasks)} tasks)")
                     else:
                         # Text-only message - edit text (4096 char limit)
@@ -168,7 +191,9 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                             log.warning(f"Text truncated from {len(summary_text)} to 4096 chars (text limit)")
                         await TASK_QUEUE.summary_msg.edit_text(
                             text_content,
-                            disable_web_page_preview=True
+                            parse_mode=enums.ParseMode.MARKDOWN,
+                            disable_web_page_preview=True,
+                            reply_markup=keyboard
                         )
                         log.debug(f"Summary dashboard text updated ({len(tasks)} tasks)")
                 except Exception as edit_err:
@@ -183,7 +208,9 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                             TASK_QUEUE.summary_msg = await client.send_photo(
                                 OWNER,
                                 photo=thumbnail_path,
-                                caption=caption_text
+                                caption=caption_text,
+                                parse_mode=enums.ParseMode.MARKDOWN,
+                                reply_markup=keyboard
                             )
                         else:
                             # Truncate for text message (4096 char limit)
@@ -193,7 +220,9 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                             TASK_QUEUE.summary_msg = await client.send_message(
                                 OWNER,
                                 text=text_content,
-                                disable_web_page_preview=True
+                                parse_mode=enums.ParseMode.MARKDOWN,
+                                disable_web_page_preview=True,
+                                reply_markup=keyboard
                             )
                     except FileNotFoundError:
                         # Thumbnail file deleted - fallback to text
@@ -204,7 +233,9 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                         TASK_QUEUE.summary_msg = await client.send_message(
                             OWNER,
                             text=text_content,
-                            disable_web_page_preview=True
+                            parse_mode=enums.ParseMode.MARKDOWN,
+                            disable_web_page_preview=True,
+                            reply_markup=keyboard
                         )
             else:
                 # Create new message with photo
@@ -217,7 +248,9 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                         TASK_QUEUE.summary_msg = await client.send_photo(
                             OWNER,
                             photo=thumbnail_path,
-                            caption=caption_text
+                            caption=caption_text,
+                            parse_mode=enums.ParseMode.MARKDOWN,
+                            reply_markup=keyboard
                         )
                         log.info("Summary dashboard created with photo")
                     else:
@@ -228,7 +261,9 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                         TASK_QUEUE.summary_msg = await client.send_message(
                             OWNER,
                             text=text_content,
-                            disable_web_page_preview=True
+                            parse_mode=enums.ParseMode.MARKDOWN,
+                            disable_web_page_preview=True,
+                            reply_markup=keyboard
                         )
                         log.info("Summary dashboard created (text-only, no thumbnail)")
                 except FileNotFoundError:
@@ -240,7 +275,9 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                     TASK_QUEUE.summary_msg = await client.send_message(
                         OWNER,
                         text=text_content,
-                        disable_web_page_preview=True
+                        parse_mode=enums.ParseMode.MARKDOWN,
+                        disable_web_page_preview=True,
+                        reply_markup=keyboard
                     )
 
             # Mark as updated

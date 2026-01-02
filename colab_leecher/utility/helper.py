@@ -1460,11 +1460,24 @@ async def status_bar(down_msg, speed, percentage, eta, done, total_size, engine,
             # Update transfer stats for dashboard to read, but don't edit Telegram message
             try:
                 # Parse size string to bytes for dashboard to detect download progress
-                size_str = done.replace(' GiB', '').replace(' MiB', '').replace(' KiB', '').replace(' B', '')
-                task_ctx.transfer.down_bytes = int(float(size_str) * 1024 * 1024)
-            except (ValueError, AttributeError):
+                done_bytes = 0
+                if ' GiB' in done:
+                    done_bytes = int(float(done.replace(' GiB', '').strip()) * 1024 * 1024 * 1024)
+                elif ' MiB' in done:
+                    done_bytes = int(float(done.replace(' MiB', '').strip()) * 1024 * 1024)
+                elif ' KiB' in done:
+                    done_bytes = int(float(done.replace(' KiB', '').strip()) * 1024)
+                elif ' B' in done:
+                    done_bytes = int(float(done.replace(' B', '').strip()))
+
+                task_ctx.transfer.down_bytes = done_bytes
+
+                # Also update speed for dashboard display
+                task_ctx.transfer.last_speed = speed
+            except (ValueError, AttributeError) as e:
                 task_ctx.transfer.down_bytes = 1  # Set to non-zero to indicate download started
-            log.debug(f"⏩ status_bar {task_id_str}: Parallel mode - skipping individual message update, dashboard will show progress")
+                log.warning(f"Failed to parse download size '{done}': {e}")
+            log.debug(f"⏩ status_bar {task_id_str}: Parallel mode - Updated stats: {done} ({task_ctx.transfer.down_bytes} bytes), speed: {speed}")
             return
     # ===== END PARALLEL MODE CHECK =====
 
