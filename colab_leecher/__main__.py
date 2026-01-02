@@ -7,7 +7,7 @@ import re # Import regex module
 import aiohttp # Import aiohttp
 import random # Import random for thumbnail selection
 import aiofiles # Import aiofiles for async file writing
-from pyrogram import enums, filters
+from pyrogram import enums, filters, Client, ContinuePropagation
 from datetime import datetime
 from asyncio import sleep, get_event_loop
 from colab_leecher import colab_bot, OWNER, DUMP_ID # Absolute import
