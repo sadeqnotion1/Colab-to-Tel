@@ -86,6 +86,7 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                 return TASK_QUEUE.summary_msg
 
         tasks = await TASK_QUEUE.get_all_tasks()
+        log.info(f"📊 Dashboard update: Found {len(tasks)} active tasks")
 
         # If no active tasks, delete summary message if it exists
         if not tasks:
@@ -316,9 +317,11 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
             log.warning("No valid thumbnail found for summary dashboard")
 
         # Update or create message
+        log.info(f"📊 Updating dashboard: {tasks_shown} tasks shown, message exists: {TASK_QUEUE.summary_msg is not None}")
         try:
             if TASK_QUEUE.summary_msg:
                 # Update existing message
+                log.debug(f"Editing existing summary message (ID: {TASK_QUEUE.summary_msg.id})")
                 try:
                     # Check if message has a photo (use edit_caption) or is text-only (use edit_text)
                     if hasattr(TASK_QUEUE.summary_msg, 'photo') and TASK_QUEUE.summary_msg.photo:
@@ -329,16 +332,18 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                         )
                         log.debug(f"Summary dashboard caption updated ({tasks_shown}/{len(tasks)} tasks shown)")
                     else:
+                        log.debug(f"Editing text-only message with {len(summary_text)} chars")
                         await TASK_QUEUE.summary_msg.edit_text(
                             summary_text,
                             parse_mode=enums.ParseMode.HTML,
                             disable_web_page_preview=True,
                             reply_markup=keyboard
                         )
-                        log.debug(f"Summary dashboard text updated ({tasks_shown}/{len(tasks)} tasks shown)")
+                        log.info(f"✅ Summary dashboard text updated ({tasks_shown}/{len(tasks)} tasks shown)")
                 except Exception as edit_err:
                     # Check if error is "message is not modified" - if so, skip recreation
                     error_msg = str(edit_err).lower()
+                    log.warning(f"⚠️ Edit failed: {type(edit_err).__name__}: {edit_err}")
                     if "not modified" in error_msg or "message is not modified" in error_msg:
                         log.debug("Summary message unchanged, skipping update (content identical)")
                         TASK_QUEUE.last_summary_text = summary_text

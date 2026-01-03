@@ -1568,14 +1568,17 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 log.info(f"User chose PARALLEL downloads for {len(links)} links")
 
                 # Create ONE shared status message for all tasks
+                # IMPORTANT: Use HTML parse mode to match dashboard formatting
                 shared_status_msg = await message.reply_text(
-                    f"🚀 **Parallel Downloads** ({len(links)} files)\n\n"
+                    f"🚀 <b>Parallel Downloads</b> ({len(links)} files)\n\n"
                     f"📊 Initializing tasks...\n\n"
-                    f"<i>Please wait...</i>"
+                    f"<i>Please wait...</i>",
+                    parse_mode=enums.ParseMode.HTML
                 )
 
                 # Store in TASK_QUEUE for dashboard updates
                 TASK_QUEUE.summary_msg = shared_status_msg
+                log.info(f"Created initial dashboard message (ID: {shared_status_msg.id})")
 
                 # Start background task to update the shared message periodically
                 async def update_shared_message_loop():
@@ -1679,7 +1682,12 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 log.info(f"✅ Launched {len(launched_tasks)} parallel tasks: {launched_tasks}")
 
                 # Update dashboard to show all newly launched tasks with progress bars
-                await force_update_summary(client)
+                log.info(f"📊 Calling force_update_summary() to display dashboard (tasks registered: {TASK_QUEUE.get_task_count()})")
+                result = await force_update_summary(client)
+                if result:
+                    log.info(f"✅ Dashboard updated successfully (message ID: {result.id})")
+                else:
+                    log.warning(f"⚠️ Dashboard update returned None (no tasks to display?)")
 
             elif choice == "parallel_seq":
                 # User wants sequential (one by one) - continue with normal flow
