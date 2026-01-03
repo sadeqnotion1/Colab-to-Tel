@@ -88,6 +88,29 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
         tasks = await TASK_QUEUE.get_all_tasks()
         log.info(f"📊 Dashboard update: Found {len(tasks)} active tasks")
 
+        # === DEBUG MODE: Dump complete state to file ===
+        try:
+            import json
+            from datetime import datetime
+            debug_file = "dashboard_debug.txt"
+            with open(debug_file, "a", encoding="utf-8") as f:
+                f.write(f"\n{'='*80}\n")
+                f.write(f"DASHBOARD UPDATE at {datetime.now()}\n")
+                f.write(f"{'='*80}\n")
+                f.write(f"Tasks found: {len(tasks)}\n")
+                f.write(f"Force update: {force}\n")
+                f.write(f"Summary message exists: {TASK_QUEUE.summary_msg is not None}\n")
+                if TASK_QUEUE.summary_msg:
+                    f.write(f"Summary message ID: {TASK_QUEUE.summary_msg.id}\n")
+                f.write(f"\nTask details:\n")
+                for task_id, task_ctx in tasks.items():
+                    f.write(f"  - {task_ctx.get_short_id()}: ")
+                    f.write(f"down={task_ctx.transfer.down_bytes}, up={task_ctx.transfer.up_bytes}, ")
+                    f.write(f"total={task_ctx.transfer.total_size}\n")
+                f.write(f"\n")
+        except Exception as debug_err:
+            log.warning(f"Debug file write failed: {debug_err}")
+
         # If no active tasks, delete summary message if it exists
         if not tasks:
             if TASK_QUEUE.summary_msg:
@@ -316,6 +339,18 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
         if not thumbnail_path:
             log.warning("No valid thumbnail found for summary dashboard")
 
+        # === DEBUG MODE: Dump generated dashboard text to file ===
+        try:
+            from datetime import datetime
+            debug_file = "dashboard_debug.txt"
+            with open(debug_file, "a", encoding="utf-8") as f:
+                f.write(f"Generated dashboard text ({len(summary_text)} chars, {tasks_shown} tasks shown):\n")
+                f.write(f"{'-'*80}\n")
+                f.write(summary_text)
+                f.write(f"\n{'-'*80}\n\n")
+        except Exception as debug_err:
+            log.warning(f"Debug text dump failed: {debug_err}")
+
         # Update or create message
         log.info(f"📊 Updating dashboard: {tasks_shown} tasks shown, message exists: {TASK_QUEUE.summary_msg is not None}")
         try:
@@ -341,6 +376,20 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                         )
                         log.info(f"✅ Summary dashboard text updated ({tasks_shown}/{len(tasks)} tasks shown)")
                 except Exception as edit_err:
+                    # === DEBUG MODE: Dump full exception details ===
+                    try:
+                        import traceback
+                        debug_file = "dashboard_debug.txt"
+                        with open(debug_file, "a", encoding="utf-8") as f:
+                            f.write(f"❌ EDIT FAILED:\n")
+                            f.write(f"Exception type: {type(edit_err).__name__}\n")
+                            f.write(f"Exception message: {str(edit_err)}\n")
+                            f.write(f"Full traceback:\n")
+                            f.write(traceback.format_exc())
+                            f.write(f"\n")
+                    except Exception as debug_err2:
+                        log.warning(f"Debug exception dump failed: {debug_err2}")
+
                     # Check if error is "message is not modified" - if so, skip recreation
                     error_msg = str(edit_err).lower()
                     log.warning(f"⚠️ Edit failed: {type(edit_err).__name__}: {edit_err}")
@@ -418,12 +467,37 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
             TASK_QUEUE.last_summary_text = summary_text
             TASK_QUEUE.last_summary_keyboard_signature = keyboard_signature
 
+            # === DEBUG MODE: Log success ===
+            try:
+                debug_file = "dashboard_debug.txt"
+                with open(debug_file, "a", encoding="utf-8") as f:
+                    f.write(f"✅ Dashboard update SUCCESS\n")
+                    f.write(f"   Message ID: {TASK_QUEUE.summary_msg.id if TASK_QUEUE.summary_msg else 'None'}\n")
+                    f.write(f"   Tasks shown: {tasks_shown}/{len(tasks)}\n")
+                    f.write(f"\n")
+            except Exception as debug_err4:
+                pass
+
             # Mark as updated
             TASK_QUEUE.mark_summary_updated()
             return TASK_QUEUE.summary_msg
 
         except Exception as e:
-            log.error(f"Failed to update summary dashboard: {e}")
+            # === DEBUG MODE: Dump critical exception ===
+            try:
+                import traceback
+                debug_file = "dashboard_debug.txt"
+                with open(debug_file, "a", encoding="utf-8") as f:
+                    f.write(f"❌❌❌ CRITICAL DASHBOARD FAILURE ❌❌❌\n")
+                    f.write(f"Exception type: {type(e).__name__}\n")
+                    f.write(f"Exception message: {str(e)}\n")
+                    f.write(f"Full traceback:\n")
+                    f.write(traceback.format_exc())
+                    f.write(f"\n{'='*80}\n\n")
+            except Exception as debug_err3:
+                pass  # Give up on debug if this fails
+
+            log.error(f"Failed to update summary dashboard: {e}", exc_info=True)
             return None
 
 
@@ -447,7 +521,19 @@ async def force_update_summary(client=None):
     If debounced, a delayed update is scheduled to ensure final state consistency.
     """
     global _scheduled_update_task
-    
+
+    # === DEBUG MODE: Log force update call ===
+    try:
+        from datetime import datetime
+        debug_file = "dashboard_debug.txt"
+        with open(debug_file, "a", encoding="utf-8") as f:
+            f.write(f"🔥 force_update_summary() CALLED at {datetime.now()}\n")
+            f.write(f"   Client provided: {client is not None}\n")
+            f.write(f"   Active tasks: {TASK_QUEUE.get_task_count()}\n")
+            f.write(f"\n")
+    except Exception as debug_err5:
+        pass
+
     # Try immediate update
     result = await update_summary_dashboard(client, force=True)
     
