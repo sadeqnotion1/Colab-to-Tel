@@ -424,11 +424,13 @@ async def drive_upload(client, message):
         existing_task = user_tasks.get(user_id)
         if existing_task:
             log.info(f"User {user_id} already has pending task {existing_task.get_short_id()}, ignoring duplicate /gdupload")
-            await message.delete()
-            await message.reply_text(
-                f"⚠️ You already have a pending task ({existing_task.get_short_id()}).\n"
-                f"Please complete it or use /cancel to start over."
+            # Send warning BEFORE deleting the command message
+            await client.send_message(
+                chat_id=message.chat.id,
+                text=f"⚠️ You already have a pending task ({existing_task.get_short_id()}).\n"
+                     f"Please complete it or use /cancel to start over."
             )
+            await message.delete()
             return
     # ===== END DUPLICATE CHECK =====
 
@@ -483,11 +485,13 @@ async def directory_upload(client, message):
         existing_task = user_tasks.get(user_id)
         if existing_task:
             log.info(f"User {user_id} already has pending task {existing_task.get_short_id()}, ignoring duplicate /drupload")
-            await message.delete()
-            await message.reply_text(
-                f"⚠️ You already have a pending task ({existing_task.get_short_id()}).\n"
-                f"Please complete it or use /cancel to start over."
+            # Send warning BEFORE deleting the command message
+            await client.send_message(
+                chat_id=message.chat.id,
+                text=f"⚠️ You already have a pending task ({existing_task.get_short_id()}).\n"
+                     f"Please complete it or use /cancel to start over."
             )
+            await message.delete()
             return
     # ===== END DUPLICATE CHECK =====
 
