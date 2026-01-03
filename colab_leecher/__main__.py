@@ -332,6 +332,25 @@ async def telegram_upload(client, message):
         return
     # ===== END CHECK =====
 
+    # ===== CHECK FOR DUPLICATE /tupload =====
+    # If user already has a pending task waiting for URLs, don't create another one
+    async with user_tasks_lock:
+        existing_task = user_tasks.get(user_id)
+        if existing_task:
+            log.info(f"User {user_id} already has pending task {existing_task.get_short_id()}, ignoring duplicate /tupload")
+            await message.delete()
+            # Reply to existing status message to remind user
+            if existing_task.status_msg:
+                try:
+                    await existing_task.status_msg.reply_text(
+                        f"⚠️ You already have a pending task ({existing_task.get_short_id()}).\n"
+                        f"Please send your links or use /cancel to start over."
+                    )
+                except Exception as e:
+                    log.warning(f"Could not reply to existing status message: {e}")
+            return
+    # ===== END DUPLICATE CHECK =====
+
     # NEW: Parallel task mode - create TaskContext immediately
     task_ctx = create_task_context(
         user_id=user_id,
@@ -400,6 +419,19 @@ async def drive_upload(client, message):
         return
     # ===== END CHECK =====
 
+    # ===== CHECK FOR DUPLICATE /gdupload =====
+    async with user_tasks_lock:
+        existing_task = user_tasks.get(user_id)
+        if existing_task:
+            log.info(f"User {user_id} already has pending task {existing_task.get_short_id()}, ignoring duplicate /gdupload")
+            await message.delete()
+            await message.reply_text(
+                f"⚠️ You already have a pending task ({existing_task.get_short_id()}).\n"
+                f"Please complete it or use /cancel to start over."
+            )
+            return
+    # ===== END DUPLICATE CHECK =====
+
     # NEW: Parallel task mode - create TaskContext immediately
     task_ctx = create_task_context(
         user_id=user_id,
@@ -445,6 +477,19 @@ async def directory_upload(client, message):
         )
         return
     # ===== END CHECK =====
+
+    # ===== CHECK FOR DUPLICATE /drupload =====
+    async with user_tasks_lock:
+        existing_task = user_tasks.get(user_id)
+        if existing_task:
+            log.info(f"User {user_id} already has pending task {existing_task.get_short_id()}, ignoring duplicate /drupload")
+            await message.delete()
+            await message.reply_text(
+                f"⚠️ You already have a pending task ({existing_task.get_short_id()}).\n"
+                f"Please complete it or use /cancel to start over."
+            )
+            return
+    # ===== END DUPLICATE CHECK =====
 
     # NEW: Parallel task mode - create TaskContext immediately
     task_ctx = create_task_context(
