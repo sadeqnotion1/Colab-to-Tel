@@ -265,6 +265,18 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
                                 if (percentage > last_reported_pct or (current_time - last_update_time).total_seconds() >= 2.0):
                                     last_reported_pct = percentage
                                     last_update_time = current_time
+
+                                    # Update TaskMessages archiving progress fields for dashboard
+                                    _messages.total_files = 1  # Single archive being created
+                                    _messages.files_processed = 1 if percentage >= 100 else 0
+                                    _messages.current_file = archive_out_final_name
+                                    # Get current archive size if file exists
+                                    try:
+                                        if ospath.exists(archive_out_path):
+                                            _messages.archive_size = getSize(archive_out_path)
+                                    except Exception as size_err:
+                                        log.debug(f"Could not get archive size during progress: {size_err}")
+
                                     bar_length = 12
                                     filled_length = min(bar_length, max(0, int(percentage / 100 * bar_length)))
                                     bar = "█" * filled_length + "░" * (bar_length - filled_length)
@@ -973,6 +985,12 @@ async def extract_zip_streaming(
                     else:
                         eta_str = "Calculating..."
 
+                    # Update TaskMessages extraction progress fields for dashboard
+                    _messages.total_files = total_to_extract
+                    _messages.files_processed = idx - 1  # Files completed so far
+                    _messages.current_file = member.filename
+                    _messages.archive_size = bytes_extracted
+
                     # Update progress bar
                     status_text = f"Extracting file {idx}/{total_to_extract}: {member.filename}"
                     log.info(f"[{percentage:.1f}%] {status_text}")
@@ -1328,6 +1346,12 @@ async def extract_rar_streaming(
                     eta_str = getTime(eta_seconds)
                 else:
                     eta_str = "Calculating..."
+
+                # Update TaskMessages extraction progress fields for dashboard
+                _messages.total_files = total_files
+                _messages.files_processed = files_extracted + idx - 1  # Files completed so far
+                _messages.current_file = member.filename
+                _messages.archive_size = bytes_extracted
 
                 # Update progress bar
                 status_text = f"Extracting file {files_extracted + idx}/{total_files}: {member.filename}"
