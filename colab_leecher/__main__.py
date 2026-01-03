@@ -1457,7 +1457,7 @@ async def handle_url(client: Client, message: Message):
 
 @colab_bot.on_callback_query()
 async def handle_options(client: Client, callback_query: CallbackQuery):
-    global BOT, MSG, TaskError, TRANSFER, OWNER, DUMP_ID, src_request_msg, reply_prompt_message_id
+    global BOT, MSG, TaskError, TRANSFER, OWNER, DUMP_ID, src_request_msg, reply_prompt_message_id, extract_request_msg
     user_id = callback_query.from_user.id
     message = callback_query.message
     query_data = callback_query.data
@@ -1469,7 +1469,11 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
     if BOT.State.started and not BOT.State.task_going and user_id != OWNER:
         await callback_query.answer("Please wait for the owner...", show_alert=True)
         return
-    if BOT.State.task_going and query_data == "cancel" and user_id != OWNER:
+    if user_id != OWNER and (
+        query_data == "cancel"
+        or query_data.startswith("cancel:")
+        or query_data == "cancel_all_tasks"
+    ):
         await callback_query.answer("Only owner can cancel.", show_alert=True)
         return
     # Assuming settings callbacks start with "setting_" or similar prefixes handled later
@@ -1884,17 +1888,43 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                     log.info("Cancel pressed but no task/setup active.")
                     if message: await message.delete() # Delete the message if it exists
 
-                # Reset extract waiting state if active
-                if BOT.State.extract_waiting:
-                    log.info("Resetting extract waiting state")
-                    BOT.State.extract_waiting = False
-                    global extract_request_msg
-                    if extract_request_msg:
-                        try:
-                            await extract_request_msg.delete()
-                        except Exception:
-                            pass
-                        extract_request_msg = None
+            # Reset extract waiting state if active
+            if BOT.State.extract_waiting:
+                log.info("Resetting extract waiting state")
+                BOT.State.extract_waiting = False
+                if extract_request_msg:
+                    try:
+                        await extract_request_msg.delete()
+                    except Exception:
+                        pass
+                    extract_request_msg = None
+        elif query_data == "cancel_all_tasks":
+            await callback_query.answer("Cancelling all tasks...", show_alert=True)
+            all_tasks = await TASK_QUEUE.get_all_tasks()
+            if not all_tasks:
+                await callback_query.answer("No active tasks to cancel.", show_alert=True)
+                return
+
+            log.info(f"Bulk cancel requested: {len(all_tasks)} tasks")
+            for task_ctx in list(all_tasks.values()):
+                try:
+                    await cancelTask("User pressed Cancel All.", task_ctx=task_ctx)
+                except Exception as cancel_err:
+                    log.warning(f"Failed to cancel task {task_ctx.get_short_id()}: {cancel_err}")
+                await TASK_QUEUE.remove_task(task_ctx.task_id)
+
+            await force_update_summary(client)
+
+            # Reset extract waiting state if active
+            if BOT.State.extract_waiting:
+                log.info("Resetting extract waiting state")
+                BOT.State.extract_waiting = False
+                if extract_request_msg:
+                    try:
+                        await extract_request_msg.delete()
+                    except Exception:
+                        pass
+                    extract_request_msg = None
 
         # --- Fallback for Unknown Callbacks ---
         # <<< THIS BLOCK'S INDENTATION MUST MATCH THE PREVIOUS BLOCKS >>>

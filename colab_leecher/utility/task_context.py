@@ -71,6 +71,7 @@ class TaskTransfer:
     """Per-task transfer statistics"""
     down_bytes: int = 0
     up_bytes: int = 0
+    total_size: int = 0  # Total file size (for progress percentage and ETA)
     sent_file: List = field(default_factory=list)  # List of successfully sent message objects (from Pyrogram)
     sent_file_names: List[str] = field(default_factory=list)
     successful_downloads: List[dict] = field(default_factory=list)  # List of {'url': url, 'filename': filename}
@@ -81,6 +82,7 @@ class TaskTransfer:
         """Reset transfer statistics"""
         self.down_bytes = 0
         self.up_bytes = 0
+        self.total_size = 0
         self.sent_file = []
         self.sent_file_names = []
         self.successful_downloads = []
@@ -89,9 +91,26 @@ class TaskTransfer:
 
     def get_percentage(self, total_size: int = 0) -> float:
         """Calculate download percentage"""
-        if total_size == 0:
+        size_to_use = total_size if total_size > 0 else self.total_size
+        if size_to_use == 0:
             return 0.0
-        return min(100.0, (self.down_bytes / total_size) * 100)
+        return min(100.0, (self.down_bytes / size_to_use) * 100)
+
+    def get_eta(self) -> float:
+        """Calculate ETA in seconds based on current speed"""
+        if self.total_size == 0 or self.down_bytes == 0:
+            return 0.0
+
+        elapsed = time.time() - self.start_time
+        if elapsed < 0.01:
+            return 0.0
+
+        speed = self.down_bytes / elapsed  # bytes per second
+        remaining_bytes = self.total_size - self.down_bytes
+
+        if speed > 0:
+            return remaining_bytes / speed
+        return 0.0
 
     def get_speed(self) -> str:
         """Calculate current download/upload speed"""
@@ -144,6 +163,12 @@ class TaskMessages:
     status_head: str = ""
     dump_task: str = ""
     src_link: str = ""
+
+    # Archiving/processing progress
+    current_file: str = ""  # Current file being processed (archiving/extracting)
+    files_processed: int = 0  # Number of files processed
+    total_files: int = 0  # Total files to process
+    archive_size: int = 0  # Current archive size in bytes
 
 
 @dataclass
@@ -265,6 +290,8 @@ class TaskQueue:
     def __init__(self):
         self.active_tasks: Dict[str, TaskContext] = {}  # task_id → TaskContext
         self.summary_msg: Optional[Message] = None  # Summary dashboard message
+        self.last_summary_text: str = ""  # Last rendered summary text (for no-op updates)
+        self.last_summary_keyboard_signature: str = ""  # Last keyboard signature (for no-op updates)
         self.last_summary_update: float = 0  # Last time summary was updated
         self.summary_update_interval: float = 5.0  # Update summary every 5 seconds
         self.min_forced_update_interval: float = 1.0  # Minimum 1 second between forced updates (debounce)

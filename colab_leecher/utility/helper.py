@@ -508,8 +508,9 @@ async def extract_filename_from_url(url: str) -> str | None:
         parsed_url = urllib.parse.urlparse(final_url_str) # Use final URL
         if parsed_url.fragment:
             fragment = urllib.parse.unquote(parsed_url.fragment, encoding='utf-8', errors='replace')
-            # Check if fragment looks like a filename (has extension, doesn't start with .)
-            if '.' in fragment and not fragment.startswith('.'):
+            # Check if fragment looks like a filename (has extension, doesn't start with ., and is NOT a parameter)
+            # Skip fragments that contain "=" as they're likely query parameters (e.g., "t=0.00")
+            if '.' in fragment and not fragment.startswith('.') and '=' not in fragment:
                 cleaned = clean_filename(fragment)
                 if cleaned:
                     log.info(f"Using filename from URL fragment: {cleaned}")
@@ -679,8 +680,9 @@ async def extract_filename_from_url(url: str) -> str | None:
         parsed_url = urllib.parse.urlparse(url)
         if parsed_url.fragment:
             fragment = urllib.parse.unquote(parsed_url.fragment, encoding='utf-8', errors='replace')
-            # Only use if it looks like a filename (has extension)
-            if '.' in fragment and not fragment.startswith('.'):
+            # Only use if it looks like a filename (has extension and NOT a parameter like "t=0.00")
+            # Skip fragments that contain "=" as they're likely query parameters
+            if '.' in fragment and not fragment.startswith('.') and '=' not in fragment:
                 cleaned = clean_filename(fragment)
                 if cleaned:
                     log.info(f"Using filename from URL fragment: {cleaned}")
@@ -1328,9 +1330,9 @@ def sysINFO():
 
         # Construct the info string
         info = (
-            f"\n\n<b>├⚙️ CPU »</b> <i>{cpu_perc}</i>"
-            f"\n<b>├💾 RAM »</b> <i>{ram_used} / {ram_total} ({ram_perc})</i>"
-            f"\n<b>╰💿 DISK »</b> <i>{disk_used} / {disk_total} ({disk_perc})</i>"
+            f"\n\n<b>CPU:</b> <i>{cpu_perc}</i>"
+            f"\n<b>RAM:</b> <i>{ram_used} / {ram_total} ({ram_perc})</i>"
+            f"\n<b>DISK:</b> <i>{disk_used} / {disk_total} ({disk_perc})</i>"
             + Messages.caution_msg # Append caution message if it exists
         )
         return info
@@ -1360,7 +1362,7 @@ def keyboard(task_id: str = None):
         callback_data = "cancel"
         log.info(f"🔍 keyboard() called with NO task_id | callback_data='cancel'")
 
-    return InlineKeyboardMarkup([[InlineKeyboardButton("Cancel ❌", callback_data=callback_data)]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data=callback_data)]])
 
 async def message_deleter(message1, message2):
     """Deletes one or two messages, ignoring errors."""
@@ -1448,6 +1450,8 @@ async def status_bar(down_msg, speed, percentage, eta, done, total_size, engine,
     """
     global MSG, Messages, BotTimes, log # Ensure necessary globals are accessible
 
+    from html import escape
+
     # Debug logging added as requested
     task_id_str = f"[{task_ctx.get_short_id()}]" if task_ctx else "[legacy]"
     log.info(f"📊 status_bar {task_id_str} called. Pct={percentage}%, Speed={speed}")
@@ -1526,8 +1530,8 @@ async def status_bar(down_msg, speed, percentage, eta, done, total_size, engine,
 
                 # Calculate filled part of the bar
                 filled_length = min(bar_length, max(0, int(percentage_float / 100 * bar_length)))
-                # Create the bar string (Corrected variable name from previous analysis)
-                bar = "█" * filled_length + "░" * (bar_length - filled_length)
+                # Create an ASCII bar to avoid encoding issues in Telegram
+                bar = "#" * filled_length + "-" * (bar_length - filled_length)
 
                 eta_str = eta # Use eta string passed directly
 
@@ -1539,13 +1543,15 @@ async def status_bar(down_msg, speed, percentage, eta, done, total_size, engine,
                 elapsed_str = getTime(elapsed_seconds)
 
                 # Format the main body of the status message
-                text_body = (f"\n╭「{bar}」 **»** __{percentage_float:.1f}%__" # Display percentage with one decimal
-                             f"\n├⚡️ **Speed »** **{str(speed)}**"
-                             f"\n├⚙️ **Engine »** **{str(engine)}**"
-                             f"\n├⏳ **ETA »** __{eta_str}__"
-                             f"\n├⏱️ **Elapsed »** __{elapsed_str}__"
-                             f"\n├✅ **Done »** **{str(done)}**"
-                             f"\n╰📦 **Total »** __{str(total_size)}__")
+                text_body = (
+                    f"\n<code>[{bar}]</code> <b>{percentage_float:.1f}%</b>"
+                    f"\n<b>Speed:</b> <code>{escape(str(speed))}</code>"
+                    f"\n<b>Engine:</b> <code>{escape(str(engine))}</code>"
+                    f"\n<b>ETA:</b> <code>{escape(str(eta_str))}</code>"
+                    f"\n<b>Elapsed:</b> <code>{escape(elapsed_str)}</code>"
+                    f"\n<b>Done:</b> <code>{escape(str(done))}</code>"
+                    f"\n<b>Total:</b> <code>{escape(str(total_size))}</code>"
+                )
 
                 # Combine the header (down_msg), body, and system info
                 final_text = down_msg + text_body + sysINFO()
