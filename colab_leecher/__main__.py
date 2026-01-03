@@ -215,12 +215,12 @@ from .utility.logger import request_id, timed_operation, get_logger
 slog = get_logger(__name__)
 
 @timed_operation("parallel_task")
-async def run_parallel_task(client, message, task_ctx):
+async def run_parallel_task(client, message, task_ctx, skip_registration=False):
     """
     Run a download/upload task in parallel mode.
 
     This function wraps taskScheduler() to enable parallel execution:
-    - Registers task in TASK_QUEUE
+    - Registers task in TASK_QUEUE (unless skip_registration=True)
     - Updates task dashboard
     - Handles errors and cleanup
     - Removes from queue when done
@@ -229,10 +229,11 @@ async def run_parallel_task(client, message, task_ctx):
         client: Pyrogram client
         message: User message
         task_ctx: TaskContext for this task
+        skip_registration: If True, skip adding to TASK_QUEUE (already added)
     """
     # master-level addition: Set request context for structured logging
     request_id.set(f"task-{task_ctx.get_short_id()}")
-    
+
     task_id_str = f"[{task_ctx.get_short_id()}]"
     slog.info(f"Starting parallel task", user_id=message.from_user.id, task_id=task_ctx.task_id)
 
@@ -241,10 +242,13 @@ async def run_parallel_task(client, message, task_ctx):
         task_ctx.mark_started()
 
         # ... setup aliases ...
-        
-        # Register in global task queue
-        await TASK_QUEUE.add_task(task_ctx)
-        slog.info(f"Task registered in TASK_QUEUE", active_count=TASK_QUEUE.get_task_count())
+
+        # Register in global task queue (unless already registered)
+        if not skip_registration:
+            await TASK_QUEUE.add_task(task_ctx)
+            slog.info(f"Task registered in TASK_QUEUE", active_count=TASK_QUEUE.get_task_count())
+        else:
+            slog.info(f"Task already registered (skip_registration=True)", active_count=TASK_QUEUE.get_task_count())
 
         # Run the task via taskScheduler (already supports task_ctx)
         slog.info(f"Calling taskScheduler")
@@ -1579,7 +1583,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                     while TASK_QUEUE.get_task_count() > 0:
                         await asyncio.sleep(5)  # Update every 5 seconds
                         try:
-                            await update_summary_dashboard()
+                            await update_summary_dashboard(client)  # Pass client to allow message creation
                         except Exception as e:
                             # Silently skip if message not modified (no changes)
                             if "MESSAGE_NOT_MODIFIED" not in str(e):
@@ -1648,9 +1652,6 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                         'VIDEO_FRAME': f"{sub_task.work_path}/video_frame.jpg"
                     })()
 
-                    # Add to TASK_QUEUE
-                    await TASK_QUEUE.add_task(sub_task)
-
                     # Share the single status message across all tasks
                     sub_task.status_msg = shared_status_msg
 
@@ -1660,17 +1661,25 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                         'sent_msg': sub_task.sent_msg
                     })()
 
+                    # Register task BEFORE launching to prevent race condition with dashboard update
+                    # (Dashboard needs to see all tasks immediately when force_update_summary is called)
+                    await TASK_QUEUE.add_task(sub_task)
+
                     # Launch task asynchronously
                     log.info(f"Launching parallel task {idx}/{len(links)}: {sub_task.get_short_id()}")
                     launched_tasks.append(sub_task.get_short_id())
 
                     # Launch parallel task (Tracked)
+                    # Note: skip_registration=True to avoid double-add inside run_parallel_task
                     TASK_QUEUE.create_background_task(
-                        run_parallel_task(client, message, sub_task),
+                        run_parallel_task(client, message, sub_task, skip_registration=True),
                         name=f"task-{sub_task.get_short_id()}"
                     )
 
                 log.info(f"✅ Launched {len(launched_tasks)} parallel tasks: {launched_tasks}")
+
+                # Update dashboard to show all newly launched tasks with progress bars
+                await force_update_summary(client)
 
             elif choice == "parallel_seq":
                 # User wants sequential (one by one) - continue with normal flow

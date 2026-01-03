@@ -270,12 +270,9 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
                                     _messages.total_files = 1  # Single archive being created
                                     _messages.files_processed = 1 if percentage >= 100 else 0
                                     _messages.current_file = archive_out_final_name
-                                    # Get current archive size if file exists
-                                    try:
-                                        if ospath.exists(archive_out_path):
-                                            _messages.archive_size = getSize(archive_out_path)
-                                    except Exception as size_err:
-                                        log.debug(f"Could not get archive size during progress: {size_err}")
+                                    # NOTE: Removed archive size check during progress to avoid I/O contention
+                                    # and potential file lock issues while archive is being written
+                                    # Size will be checked after archiving completes
 
                                     bar_length = 12
                                     filled_length = min(bar_length, max(0, int(percentage / 100 * bar_length)))
@@ -290,17 +287,37 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
                                 log.warning(f"Could not convert 7z percentage '{match.group(1)}' to int.")
                             except Exception as status_err:
                                 log.warning(f"Status update error in log_stream: {status_err}")
-                await asyncio.sleep(0.1)
+                # Reduced sleep time to avoid backing up the pipe (was 0.1)
+                await asyncio.sleep(0.01)
             return lines
 
         # Run stream loggers concurrently
         stdout_task = asyncio.create_task(log_stream_wrapper(proc.stdout, 'stdout', True))
         stderr_task = asyncio.create_task(log_stream_wrapper(proc.stderr, 'stderr', False))
 
-        # Wait for process completion and streams to finish reading
-        exit_code = await proc.wait()
-        stdout_lines, stderr_output = await asyncio.gather(stdout_task, stderr_task)
+        # CRITICAL FIX: Wait for BOTH process AND streams to complete simultaneously
+        # This prevents race condition where process exits but streams still reading
+        # and archive file not fully flushed to disk
+        exit_code, stdout_lines, stderr_output = await asyncio.gather(
+            proc.wait(),
+            stdout_task,
+            stderr_task
+        )
         log.debug(f"Archiver (7z) process finished with exit code: {exit_code}")
+
+        # CRITICAL FIX: Ensure archive file is fully written to disk before proceeding
+        # Small delay to allow OS buffers to flush
+        await asyncio.sleep(0.5)
+
+        # Explicitly sync the archive file to disk if it exists
+        if ospath.exists(archive_out_path):
+            try:
+                # Open and sync file to ensure all writes are committed to disk
+                with open(archive_out_path, 'rb') as f:
+                    os.fsync(f.fileno())
+                log.debug(f"Archive file synced to disk: {archive_out_path}")
+            except Exception as sync_err:
+                log.warning(f"Could not fsync archive file (may be fine): {sync_err}")
 
         # Check success and GET SIZE
         if exit_code == 0 and ospath.exists(archive_out_path):
@@ -308,7 +325,88 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
                  final_archive_size = getSize(archive_out_path)
                  if final_archive_size > 0:
                      log.info(f"Archiving completed successfully: {archive_out_path}, Size: {sizeUnit(final_archive_size)}")
-                     archive_success = True
+
+                     # INTEGRITY CHECK: Verify archive is valid before uploading
+                     log.info(f"🔍 Verifying archive integrity before upload: {archive_out_final_name}")
+
+                     # Update status message to show verification is in progress
+                     try:
+                         verify_msg = (f"{_messages.status_head}\n"
+                                      f"╭「🔍 VERIFYING ARCHIVE」\n"
+                                      f"├📦 **File »** __{archive_out_final_name}__\n"
+                                      f"├💾 **Size »** __{sizeUnit(final_archive_size)}__\n"
+                                      f"╰⚙️ **Status »** __Testing archive integrity...__")
+                         await status_bar(verify_msg, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
+                     except Exception as status_err:
+                         log.debug(f"Could not update status during verification: {status_err}")
+
+                     try:
+                         # Use 7z test command to verify archive integrity
+                         test_cmd = f'7z t "{archive_out_path}"'
+                         log.debug(f"Running integrity test: {test_cmd}")
+
+                         test_proc = await asyncio.create_subprocess_shell(
+                             test_cmd,
+                             stdout=asyncio.subprocess.PIPE,
+                             stderr=asyncio.subprocess.PIPE
+                         )
+
+                         test_stdout, test_stderr = await test_proc.communicate()
+                         test_exit_code = test_proc.returncode
+
+                         if test_exit_code == 0:
+                             log.info(f"✅ Archive integrity verified successfully: {archive_out_final_name}")
+                             archive_success = True
+
+                             # Update status to show verification passed
+                             try:
+                                 verify_success_msg = (f"{_messages.status_head}\n"
+                                                      f"╭「✅ ARCHIVE VERIFIED」\n"
+                                                      f"├📦 **File »** __{archive_out_final_name}__\n"
+                                                      f"├💾 **Size »** __{sizeUnit(final_archive_size)}__\n"
+                                                      f"╰✅ **Status »** __Integrity check passed! Ready to upload.__")
+                                 await status_bar(verify_success_msg, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
+                             except Exception as status_err:
+                                 log.debug(f"Could not update status after verification: {status_err}")
+                         else:
+                             # Archive is corrupted!
+                             log.error(f"❌ Archive integrity check FAILED for {archive_out_final_name} (exit code: {test_exit_code})")
+                             log.error(f"7z test stderr: {test_stderr.decode('utf-8', errors='ignore')[:500]}")
+                             error_reason = f"Archive integrity check failed (corrupted archive, code {test_exit_code})"
+                             archive_success = False
+
+                             # Update status to show verification failed
+                             try:
+                                 verify_fail_msg = (f"{_messages.status_head}\n"
+                                                   f"╭「❌ VERIFICATION FAILED」\n"
+                                                   f"├📦 **File »** __{archive_out_final_name}__\n"
+                                                   f"├💾 **Size »** __{sizeUnit(final_archive_size)}__\n"
+                                                   f"╰❌ **Status »** __Archive is corrupted! Removing file...__")
+                                 await status_bar(verify_fail_msg, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
+                             except Exception as status_err:
+                                 log.debug(f"Could not update status for verification failure: {status_err}")
+
+                             # Remove corrupted archive
+                             if ospath.exists(archive_out_path):
+                                 try:
+                                     os.remove(archive_out_path)
+                                     log.info(f"Removed corrupted archive: {archive_out_path}")
+                                 except OSError as e:
+                                     log.warning(f"Could not remove corrupted archive {archive_out_path}: {e}")
+
+                     except Exception as verify_err:
+                         log.error(f"❌ Exception during archive verification: {verify_err}")
+                         error_reason = f"Archive verification exception: {str(verify_err)[:100]}"
+                         archive_success = False
+
+                         # Remove potentially corrupted archive
+                         if ospath.exists(archive_out_path):
+                             try:
+                                 os.remove(archive_out_path)
+                                 log.info(f"Removed unverified archive: {archive_out_path}")
+                             except OSError as e:
+                                 log.warning(f"Could not remove unverified archive {archive_out_path}: {e}")
+
                  else: # Success code 0 but size is 0
                      log.error("Archiver (7z) finished (code 0) but output file size is 0.")
                      error_reason = "Archive success code 0 but output file size is 0."
