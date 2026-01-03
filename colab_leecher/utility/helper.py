@@ -1045,6 +1045,53 @@ def sizeUnit(size):
     # Calculate the value in the chosen unit and format
     return f"{size / (1024**unit_index):.2f} {units[unit_index]}"
 
+def parse_size_string(size_str):
+    """
+    Parses a human-readable size string (e.g., '2.97 GiB', '123.45 MiB') back to bytes.
+    This is the reverse of sizeUnit().
+
+    Args:
+        size_str: String in format "{value} {unit}" (e.g., "2.97 GiB")
+
+    Returns:
+        int: Size in bytes
+
+    Raises:
+        ValueError: If the string format is invalid
+    """
+    if not size_str or size_str == "N/A":
+        raise ValueError("Invalid size string")
+
+    # Define unit multipliers (matching sizeUnit's units)
+    units = {
+        'B': 1,
+        'KiB': 1024,
+        'MiB': 1024**2,
+        'GiB': 1024**3,
+        'TiB': 1024**4,
+        'PiB': 1024**5
+    }
+
+    # Parse the string (format: "2.97 GiB")
+    parts = size_str.strip().split()
+    if len(parts) != 2:
+        raise ValueError(f"Invalid size format: {size_str}")
+
+    value_str, unit = parts
+
+    # Convert value to float
+    try:
+        value = float(value_str)
+    except ValueError:
+        raise ValueError(f"Invalid numeric value: {value_str}")
+
+    # Get multiplier for unit
+    if unit not in units:
+        raise ValueError(f"Unknown unit: {unit}")
+
+    # Calculate bytes
+    return int(value * units[unit])
+
 def getSize(path):
     """Calculates the total size of a file or directory."""
     if not isinstance(path, str) or not ospath.exists(path):
