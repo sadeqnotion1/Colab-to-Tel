@@ -1476,12 +1476,28 @@ async def status_bar(down_msg, speed, percentage, eta, done, total_size, engine,
 
                 task_ctx.transfer.down_bytes = done_bytes
 
+                # Parse total_size string to bytes for dashboard display
+                total_bytes = 0
+                if isinstance(total_size, str):
+                    if ' GiB' in total_size:
+                        total_bytes = int(float(total_size.replace(' GiB', '').strip()) * 1024 * 1024 * 1024)
+                    elif ' MiB' in total_size:
+                        total_bytes = int(float(total_size.replace(' MiB', '').strip()) * 1024 * 1024)
+                    elif ' KiB' in total_size:
+                        total_bytes = int(float(total_size.replace(' KiB', '').strip()) * 1024)
+                    elif ' B' in total_size:
+                        total_bytes = int(float(total_size.replace(' B', '').strip()))
+                elif isinstance(total_size, (int, float)):
+                    total_bytes = int(total_size)
+
+                task_ctx.transfer.total_size = total_bytes
+
                 # Also update speed for dashboard display
                 task_ctx.transfer.last_speed = speed
             except (ValueError, AttributeError) as e:
                 task_ctx.transfer.down_bytes = 1  # Set to non-zero to indicate download started
-                log.warning(f"Failed to parse download size '{done}': {e}")
-            log.debug(f"⏩ status_bar {task_id_str}: Parallel mode - Updated stats: {done} ({task_ctx.transfer.down_bytes} bytes), speed: {speed}")
+                log.warning(f"Failed to parse download size '{done}' or total size '{total_size}': {e}")
+            log.debug(f"⏩ status_bar {task_id_str}: Parallel mode - Updated stats: {done} / {total_size} ({task_ctx.transfer.down_bytes} / {task_ctx.transfer.total_size} bytes), speed: {speed}")
 
             # Trigger dashboard update to show archiving progress (lazy import to avoid circular dependency)
             from .task_dashboard import try_update_summary
