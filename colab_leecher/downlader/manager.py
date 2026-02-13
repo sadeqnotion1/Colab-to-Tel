@@ -437,7 +437,7 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
         if not source: _task_error.state = True; _task_error.text = "No YTDL links provided."; return
         for i, link in enumerate(source):
             log.info(f"Starting YTDL status monitoring for link {i+1}/{len(source)}")
-            await YTDL_Status(link, i + 1, task_ctx) # Pass task_ctx
+            await YTDL_Status(link, i + 1, task_ctx=task_ctx)
             if _task_error and _task_error.state:
                  log.error(f"YTDL processing failed for link {i+1}.")
                  failed_info = {"link": link, "filename": "YTDL Download", "index": i + 1, "reason": _task_error.text or "YTDL Failed"}
@@ -493,7 +493,7 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
                           link_success = await instagram_download(link, i + 1)
                  elif is_ytdl_link(link):
                       log.debug("Detected YTDL-compatible link (YouTube, etc.)")
-                      await YTDL_Status(link, i + 1, task_ctx)
+                      await YTDL_Status(link, i + 1, task_ctx=task_ctx)
                       # Check if YTDL set error state
                       link_success = not (_task_error and _task_error.state)
                       if not link_success and _task_error:

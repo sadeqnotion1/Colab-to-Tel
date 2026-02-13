@@ -14,7 +14,7 @@ from colab_leecher.utility.helper import getTime, keyboard, sizeUnit, status_bar
 log = logging.getLogger(__name__)
 
 
-async def YTDL_Status(link, num, max_retries=3):
+async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
     """
     Download status tracker with retry logic
 
