@@ -1316,10 +1316,8 @@ async def handle_url(client: Client, message: Message):
                     task_ctx.messages.src_link = gist_url
 
                     upload_success = await Leech(
-                        file_path=zip_path,
-                        file_name=f"{zip_name}.zip",
-                        client=client,
-                        message=message,
+                        path=zip_path,
+                        remove_source=False,
                         task_ctx=task_ctx
                     )
 
