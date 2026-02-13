@@ -1305,6 +1305,12 @@ async def handle_url(client: Client, message: Message):
                         # Create ZIP archive for this batch
                         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
                         zip_name = f"TikTok_Bulk_{timestamp}_Part{part_num}of{total_parts}" if total_parts > 1 else f"TikTok_Bulk_{timestamp}"
+
+                        # Set download_name BEFORE create_zip_archive so archive() picks it up
+                        from colab_leecher.utility.variables import Messages, BotTimes
+                        task_ctx.messages.download_name = zip_name
+                        task_ctx.messages.src_link = gist_url
+
                         zip_success, zip_path = await downloader.create_zip_archive(zip_name)
 
                         if not zip_success or not zip_path or not os.path.exists(zip_path):
@@ -1321,10 +1327,6 @@ async def handle_url(client: Client, message: Message):
                             f"**ZIP File:** {zip_name}\n"
                             f"**Videos:** {len(downloader.successful_downloads)}/{len(batch_urls)}"
                         )
-
-                        from colab_leecher.utility.variables import Messages, BotTimes
-                        task_ctx.messages.download_name = zip_name
-                        task_ctx.messages.src_link = gist_url
 
                         await Leech(
                             path=zip_path,
