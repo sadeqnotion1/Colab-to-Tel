@@ -329,7 +329,6 @@ class TaskContext:
 
                 # Use global paths for these (shared across tasks)
                 self.thumbnail_ytdl = Paths.thumbnail_ytdl
-                self.config_file = Paths.config_file
 
         return _TaskPaths(self)
 
