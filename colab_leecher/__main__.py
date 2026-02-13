@@ -1271,7 +1271,18 @@ async def handle_url(client: Client, message: Message):
                     all_successful = 0
                     all_failed = 0
 
+                    async def _safe_edit(text):
+                        try:
+                            await status_msg.edit_text(text)
+                        except Exception:
+                            pass  # Message may be deleted/invalid after cancellation
+
                     for part_num, batch_urls in enumerate(batches, 1):
+                        # Stop if task was cancelled externally
+                        if task_ctx.is_cancelled or (task_ctx.error and task_ctx.error.state):
+                            log.info(f"TikTok bulk: task cancelled, stopping at part {part_num}")
+                            break
+
                         # Reset downloader state for this batch
                         downloader.successful_downloads = []
                         downloader.failed_downloads = []
@@ -1284,7 +1295,7 @@ async def handle_url(client: Client, message: Message):
 
                         part_label = f"Part {part_num}/{total_parts}" if total_parts > 1 else ""
 
-                        await status_msg.edit_text(
+                        await _safe_edit(
                             f"📥 **Downloading TikTok Videos{' — ' + part_label if part_label else ''}**\n\n"
                             f"**Videos in this batch:** {len(batch_urls)}\n"
                             f"**Total:** {total_urls} URLs"
@@ -1292,8 +1303,13 @@ async def handle_url(client: Client, message: Message):
 
                         download_success, summary = await downloader.download_bulk(batch_urls)
 
+                        # Stop if task was cancelled during download
+                        if task_ctx.is_cancelled or (task_ctx.error and task_ctx.error.state):
+                            log.info(f"TikTok bulk: task cancelled after download of part {part_num}, stopping")
+                            break
+
                         if not download_success:
-                            await status_msg.edit_text(
+                            await _safe_edit(
                                 f"❌ **All Downloads Failed{' (' + part_label + ')' if part_label else ''}**\n\n"
                                 f"{summary}\n\nSkipping to next batch..." if total_parts > 1 else
                                 f"❌ **All Downloads Failed**\n\n{summary}\n\nPlease check the URLs and try again."
@@ -1314,7 +1330,7 @@ async def handle_url(client: Client, message: Message):
                         zip_success, zip_path = await downloader.create_zip_archive(zip_name)
 
                         if not zip_success or not zip_path or not os.path.exists(zip_path):
-                            await status_msg.edit_text(
+                            await _safe_edit(
                                 f"❌ **ZIP Creation Failed{' (' + part_label + ')' if part_label else ''}**\n\n"
                                 f"Videos were downloaded but ZIP creation failed.\n"
                                 f"Please check the logs."
@@ -1322,7 +1338,7 @@ async def handle_url(client: Client, message: Message):
                             continue
 
                         # Upload ZIP to Telegram
-                        await status_msg.edit_text(
+                        await _safe_edit(
                             f"📤 **Uploading to Telegram...{' — ' + part_label if part_label else ''}**\n\n"
                             f"**ZIP File:** {zip_name}\n"
                             f"**Videos:** {len(downloader.successful_downloads)}/{len(batch_urls)}"
@@ -1348,7 +1364,7 @@ async def handle_url(client: Client, message: Message):
                     if total_parts > 1:
                         report += f"**Parts uploaded:** {total_parts}\n"
 
-                    await status_msg.edit_text(report)
+                    await _safe_edit(report)
 
                     log.info(f"TikTok Bulk download complete for task {task_ctx.get_short_id()}: {all_successful}/{total_urls} succeeded across {total_parts} part(s)")
 

@@ -238,7 +238,8 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int, task_ctx: 
         proc = await asyncio.create_subprocess_shell(
             cmd,
             stdout=asyncio.subprocess.PIPE, # Capture stdout for progress
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            limit=10 * 1024 * 1024  # 10MB buffer: prevents LimitOverrunError on long 7z output lines
         )
         log.debug(f"Archiver (7z) process started (PID: {proc.pid})")
 
