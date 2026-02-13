@@ -1263,7 +1263,7 @@ async def handle_url(client: Client, message: Message):
 
                 # Wrap entire download process in try/finally for proper cleanup
                 try:
-                    BATCH_SIZE = 100
+                    BATCH_SIZE = 250
                     total_urls = len(urls)
                     batches = [urls[i:i + BATCH_SIZE] for i in range(0, total_urls, BATCH_SIZE)]
                     total_parts = len(batches)
