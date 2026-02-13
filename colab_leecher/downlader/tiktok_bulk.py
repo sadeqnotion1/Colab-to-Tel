@@ -192,13 +192,13 @@ class TikTokBulkDownloader(BaseDownloader):
                 if _url_match:
                     _username = _url_match.group(1)
                     _video_id = _url_match.group(2)
-                    _suffix = f"_{_username}_{_video_id}"
-                else:
-                    _suffix = ""
 
                 # Sanitize filename and build output name (no numbering prefix)
                 safe_title = self._sanitize_filename(video_title)
-                output_filename = f"{safe_title}{_suffix}"
+                if _url_match:
+                    output_filename = f"{_username}_{_video_id}_{safe_title}"
+                else:
+                    output_filename = safe_title
                 output_template = str(Path(self.download_dir) / f"{output_filename}.%(ext)s")
 
                 # yt-dlp options for TikTok
