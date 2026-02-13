@@ -274,6 +274,51 @@ class TaskContext:
         """Backward compatibility alias for error attribute"""
         return self.error
 
+    @property
+    def bot(self):
+        """Backward compatibility: Return global BOT for archive/Leech functions"""
+        from .variables import BOT
+        return BOT
+
+    @property
+    def msg(self):
+        """Backward compatibility: Return global MSG for archive/Leech functions"""
+        from .variables import MSG
+        return MSG
+
+    @property
+    def paths(self):
+        """
+        Backward compatibility: Return Paths-like object for archive/Leech functions
+
+        Creates a dynamic object with path attributes needed by legacy code
+        """
+        from .variables import Paths
+
+        class _TaskPaths:
+            """Dynamic paths object that uses task-specific paths when available"""
+            def __init__(self, task_ctx):
+                self._task_ctx = task_ctx
+                self._global_paths = Paths
+
+                # Task-specific paths
+                self.down_path = task_ctx.down_path if task_ctx.down_path else Paths.down_path
+                self.work_path = task_ctx.work_path if task_ctx.work_path else Paths.work_path
+
+                # Generate task-specific temp paths
+                if task_ctx.work_path:
+                    self.temp_zpath = f"{task_ctx.work_path}/temp_zip"
+                    self.temp_unzip_path = f"{task_ctx.work_path}/temp_unzip"
+                else:
+                    self.temp_zpath = Paths.temp_zpath
+                    self.temp_unzip_path = Paths.temp_unzip_path
+
+                # Use global paths for these (shared across tasks)
+                self.thumbnail_ytdl = Paths.thumbnail_ytdl
+                self.config_file = Paths.config_file
+
+        return _TaskPaths(self)
+
 
 class TaskQueue:
     """

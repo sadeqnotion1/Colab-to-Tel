@@ -668,6 +668,76 @@ async def instagram_upload(client, message):
                 del user_tasks[user_id]
         await message.reply_text(f"❌ Failed to start task: {e}")
 
+@colab_bot.on_message(filters.command("tiktokbulk") & filters.private)
+async def tiktok_bulk_upload(client, message):
+    """TikTok Bulk Download - Download multiple TikTok videos from a Gist and create ZIP"""
+    global user_tasks
+    user_id = message.from_user.id
+    log.info(f"Received /tiktokbulk from {user_id}")
+
+    # ===== RATE LIMIT CHECK =====
+    allowed, rate_reason = RATE_LIMITER.can_proceed(user_id)
+    if not allowed:
+        await message.reply_text(f"❌ {rate_reason}")
+        return
+
+    # ===== CHECK TASK LIMITS =====
+    can_start, reason = await TASK_QUEUE.can_start_task(user_id)
+    if not can_start:
+        await message.reply_text(
+            f"❌ **Cannot Start Task**\n\n"
+            f"{reason}\n\n"
+            f"Use /tasks to see your active tasks."
+        )
+        return
+
+    # Create TaskContext for parallel task mode
+    task_ctx = create_task_context(
+        user_id=user_id,
+        chat_id=message.chat.id,
+        mode="leech"
+    )
+    task_ctx.service_type = "tiktokbulk"  # TikTok Bulk service
+    task_ctx.mode_type = "normal"
+
+    # Store in user_tasks registry (waiting for Gist URL)
+    async with user_tasks_lock:
+        user_tasks[user_id] = task_ctx
+    log.info(f"Created TaskContext {task_ctx.get_short_id()} for /tiktokbulk, stored in user_tasks for user {user_id}")
+
+    # Delete user's command message
+    try:
+        await message.delete()
+    except Exception as e:
+        log.warning(f"Could not delete command message: {e}")
+
+    # Send prompt for Gist URL
+    text = (
+        "<b>📦 TikTok Bulk Download » Send Me a GitHub Gist URL 🔗</b>\n\n"
+        "<b>Format:</b>\n"
+        "• Create a GitHub Gist with TikTok URLs (one per line)\n"
+        "• Send the <b>RAW</b> Gist URL here\n\n"
+        "<b>Example:</b>\n"
+        "<code>https://gist.githubusercontent.com/user/abc123/raw/...</code>\n\n"
+        "<b>Features:</b>\n"
+        "• Downloads 5 videos in parallel (fast!)\n"
+        "• Auto-creates ZIP with timestamp\n"
+        "• Continues on errors\n\n"
+        f"<i>📌 Task ID: {task_ctx.get_short_id()}</i>"
+    )
+
+    try:
+        prompt_msg = await message.reply_text(text)
+        task_ctx.status_msg = prompt_msg
+        log.info(f"Sent Gist URL prompt for task {task_ctx.get_short_id()}")
+    except Exception as e:
+        log.error(f"Failed to send URL prompt: {e}")
+        # Clean up on failure
+        async with user_tasks_lock:
+            if user_id in user_tasks:
+                del user_tasks[user_id]
+        await message.reply_text(f"❌ Failed to start task: {e}")
+
 # --- REMOVED /nzbclouddownload, /Debriddownload, /bitsodownload handlers ---
 
 @colab_bot.on_message(filters.command("settings") & filters.private)
@@ -1132,6 +1202,188 @@ async def handle_url(client: Client, message: Message):
 
     if task_ctx:
         log.info(f"Found pending parallel task {task_ctx.get_short_id()} for user {user_id}")
+
+        # === TIKTOK BULK DOWNLOAD HANDLING ===
+        if task_ctx.service_type == "tiktokbulk":
+            log.info(f"Processing TikTok Bulk download for task {task_ctx.get_short_id()}")
+
+            # Delete the prompt message
+            if task_ctx.status_msg:
+                try:
+                    await task_ctx.status_msg.delete()
+                except Exception:
+                    pass
+
+            try:
+                # Get Gist URL from message
+                gist_url = message.text.strip() if message.text else ""
+
+                if not gist_url:
+                    await message.reply_text("❌ Please provide a GitHub Gist URL.")
+                    return
+
+                # Import TikTok bulk downloader
+                from colab_leecher.downlader.tiktok_bulk import TikTokBulkDownloader
+                from colab_leecher.utility.handler import Leech
+                from datetime import datetime
+
+                # Create status message
+                status_msg = await message.reply_text(
+                    f"🎬 **TikTok Bulk Download**\n\n"
+                    f"**Task ID:** `{task_ctx.get_short_id()}`\n"
+                    f"**Status:** Initializing...\n\n"
+                    f"<i>Fetching URLs from Gist...</i>"
+                )
+                task_ctx.status_msg = status_msg
+
+                # Create downloader instance
+                downloader = TikTokBulkDownloader(client, message, task_ctx)
+
+                # Fetch URLs from Gist
+                success, urls = await downloader.fetch_gist_urls(gist_url)
+
+                if not success or not urls:
+                    await status_msg.edit_text(
+                        f"❌ **TikTok Bulk Download Failed**\n\n"
+                        f"Could not fetch TikTok URLs from Gist.\n"
+                        f"Please make sure:\n"
+                        f"• You provided a RAW Gist URL\n"
+                        f"• The Gist contains valid TikTok URLs\n"
+                        f"• Each URL is on a separate line"
+                    )
+                    # Cleanup: Remove from user_tasks on failure
+                    async with user_tasks_lock:
+                        if user_id in user_tasks:
+                            del user_tasks[user_id]
+                    return
+
+                # SECURITY: Limit number of videos to prevent DoS
+                MAX_VIDEOS_PER_TASK = 100
+                if len(urls) > MAX_VIDEOS_PER_TASK:
+                    await status_msg.edit_text(
+                        f"❌ **Too Many Videos**\n\n"
+                        f"Your Gist contains **{len(urls)} videos**.\n"
+                        f"Maximum allowed: **{MAX_VIDEOS_PER_TASK}**\n\n"
+                        f"Please split your URLs into multiple Gists and run separate downloads.\n\n"
+                        f"<i>This limit prevents system overload.</i>"
+                    )
+                    # Cleanup: Remove from user_tasks on failure
+                    async with user_tasks_lock:
+                        if user_id in user_tasks:
+                            del user_tasks[user_id]
+                    return
+
+                # CRITICAL: Add task to TASK_QUEUE for dashboard tracking
+                await TASK_QUEUE.add_task(task_ctx)
+                log.info(f"TikTok bulk task {task_ctx.get_short_id()} added to TASK_QUEUE")
+
+                # Wrap entire download process in try/finally for proper cleanup
+                try:
+                    # Download videos in parallel
+                    download_success, summary = await downloader.download_bulk(urls)
+
+                    if not download_success:
+                        await status_msg.edit_text(
+                            f"❌ **All Downloads Failed**\n\n"
+                            f"{summary}\n\n"
+                            f"Please check the URLs and try again."
+                        )
+                        return
+
+                    # Create ZIP archive
+                    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+                    zip_name = f"TikTok_Bulk_{timestamp}"
+                    zip_success, zip_path = await downloader.create_zip_archive(zip_name)
+
+                    if not zip_success or not zip_path or not os.path.exists(zip_path):
+                        await status_msg.edit_text(
+                            f"❌ **ZIP Creation Failed**\n\n"
+                            f"Videos were downloaded but ZIP creation failed.\n"
+                            f"Please check the logs."
+                        )
+                        return
+
+                    # Upload ZIP to Telegram
+                    await status_msg.edit_text(
+                        f"📤 **Uploading to Telegram...**\n\n"
+                        f"**ZIP File:** {zip_name}.zip\n"
+                        f"**Videos:** {len(downloader.successful_downloads)}/{len(urls)}"
+                    )
+
+                    # Use existing Leech handler to upload
+                    from colab_leecher.utility.variables import Messages, BotTimes
+                    task_ctx.messages.download_name = zip_name
+                    task_ctx.messages.src_link = gist_url
+
+                    upload_success = await Leech(
+                        file_path=zip_path,
+                        file_name=f"{zip_name}.zip",
+                        client=client,
+                        message=message,
+                        task_ctx=task_ctx
+                    )
+
+                    # Generate final report
+                    report = f"✅ **TikTok Bulk Download Complete**\n\n"
+                    report += f"**Downloaded:** {len(downloader.successful_downloads)}/{len(urls)} videos\n"
+
+                    if downloader.failed_downloads:
+                        report += f"**Failed:** {len(downloader.failed_downloads)} videos\n\n"
+                        report += f"**Failed URLs:**\n"
+                        for fail in downloader.failed_downloads[:5]:  # Show first 5
+                            report += f"• Video {fail['video_num']}\n"
+                        if len(downloader.failed_downloads) > 5:
+                            report += f"• ... and {len(downloader.failed_downloads) - 5} more\n"
+
+                    await status_msg.edit_text(report)
+
+                    log.info(f"TikTok Bulk download complete for task {task_ctx.get_short_id()}: {len(downloader.successful_downloads)}/{len(urls)} succeeded")
+
+                finally:
+                    # CRITICAL: Always cleanup task from TASK_QUEUE (even on exceptions)
+                    try:
+                        await TASK_QUEUE.remove_task(task_ctx.task_id)
+                        log.info(f"Removed task {task_ctx.get_short_id()} from TASK_QUEUE")
+                    except Exception as e:
+                        log.warning(f"Failed to remove task from TASK_QUEUE: {e}")
+
+                    # Update dashboard to reflect task completion
+                    try:
+                        await force_update_summary(client)
+                        log.info(f"Dashboard updated after task {task_ctx.get_short_id()} completion")
+                    except Exception as e:
+                        log.warning(f"Failed to update dashboard: {e}")
+
+                    # Cleanup: Remove task from user_tasks registry
+                    async with user_tasks_lock:
+                        if user_id in user_tasks:
+                            del user_tasks[user_id]
+                            log.info(f"Removed task {task_ctx.get_short_id()} from user_tasks registry")
+
+                    # Cleanup: Remove task directory after completion
+                    try:
+                        import shutil
+                        if task_ctx.work_path and os.path.exists(task_ctx.work_path):
+                            shutil.rmtree(task_ctx.work_path)
+                            log.info(f"Cleaned up task directory: {task_ctx.work_path}")
+                    except Exception as cleanup_err:
+                        log.warning(f"Failed to cleanup task directory: {cleanup_err}")
+
+            except Exception as e:
+                log.exception(f"Error in TikTok bulk download for task {task_ctx.get_short_id()}")
+
+                # Send error message to user (cleanup handled by finally block)
+                try:
+                    await message.reply_text(
+                        f"❌ **Error in TikTok Bulk Download**\n\n"
+                        f"Error: {str(e)[:200]}\n\n"
+                        f"Please try again or contact support."
+                    )
+                except:
+                    pass
+
+            return  # Exit after TikTok bulk processing
+        # === END TIKTOK BULK DOWNLOAD HANDLING ===
 
         # Delete the prompt message
         if task_ctx.status_msg:
@@ -3457,6 +3709,7 @@ async def help_command(client, message):
                  "  `/gdupload` - Mirror to GDrive\n"
                  "  `/ytupload` - Leech YouTube-DL links\n"
                  "  `/igupload` or `/ig` - Instagram downloader (posts, reels, stories)\n"
+                 "  `/tiktokbulk` - Bulk TikTok download (Gist → ZIP)\n"
                  "  `/drupload` - Leech from Colab directory\n"
                  "  `/mindvalley` - Download Mindvalley courses (M3U8)\n"
                  "  `/nzb` - Download from Usenet (NZB files)\n"
