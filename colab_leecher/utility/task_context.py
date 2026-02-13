@@ -277,14 +277,26 @@ class TaskContext:
     @property
     def bot(self):
         """Backward compatibility: Return global BOT for archive/Leech functions"""
+        if getattr(self, '_bot_override', None) is not None:
+            return self._bot_override
         from .variables import BOT
         return BOT
+
+    @bot.setter
+    def bot(self, value):
+        self._bot_override = value
 
     @property
     def msg(self):
         """Backward compatibility: Return global MSG for archive/Leech functions"""
+        if getattr(self, '_msg_override', None) is not None:
+            return self._msg_override
         from .variables import MSG
         return MSG
+
+    @msg.setter
+    def msg(self, value):
+        self._msg_override = value
 
     @property
     def paths(self):
@@ -293,6 +305,8 @@ class TaskContext:
 
         Creates a dynamic object with path attributes needed by legacy code
         """
+        if getattr(self, '_paths_override', None) is not None:
+            return self._paths_override
         from .variables import Paths
 
         class _TaskPaths:
@@ -318,6 +332,10 @@ class TaskContext:
                 self.config_file = Paths.config_file
 
         return _TaskPaths(self)
+
+    @paths.setter
+    def paths(self, value):
+        self._paths_override = value
 
 
 class TaskQueue:
