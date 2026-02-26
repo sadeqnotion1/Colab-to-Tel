@@ -314,9 +314,27 @@ bash install_mindvalley_deps.sh
 cp credentials.json.example credentials.json
 # Edit credentials.json with your actual credentials
 
+# Install commit-time security hooks
+pip install pre-commit
+pre-commit install
+
 # Run bot (choose one method)
 python -m colab_leecher              # Method 1: As module
 python -m colab_leecher.run_local    # Method 2: Direct script
+```
+
+### Testing and Gates
+
+```bash
+# Unit tests (default)
+pytest -q tests/unit
+
+# Integration scaffold tests (opt-in)
+pytest -q tests/integration -m integration --runintegration
+
+# Security guardrails
+python scripts/security/block_sensitive_files.py
+pre-commit run --all-files
 ```
 
 ## Credits
