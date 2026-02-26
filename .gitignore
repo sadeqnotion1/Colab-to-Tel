@@ -99,6 +99,16 @@ nul
 test*.*
 *_test.py
 testing_purpose/
+test_extraction/
+tests/debug/*.py
+!tests/unit/**/*.py
+!tests/unit/**/*.md
+!tests/integration/**/*.py
+!tests/integration/**/*.md
+!tests/__init__.py
+!tests/unit/__init__.py
+!tests/integration/__init__.py
+!tests/debug/README.md
 
 # ===================================
 # Backup Files
