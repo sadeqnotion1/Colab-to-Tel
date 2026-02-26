@@ -1,0 +1,14 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: detect-private-key
+      - id: check-merge-conflict
+
+  - repo: local
+    hooks:
+      - id: block-sensitive-files
+        name: Block tracked sensitive files
+        entry: python scripts/security/block_sensitive_files.py
+        language: system
+        pass_filenames: false
