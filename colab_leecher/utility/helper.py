@@ -1693,7 +1693,7 @@ def keyboard(task_id: str = None):
 
     Args:
         task_id: Optional task ID for multi-task cancellation.
-                 If provided, callback_data="cancel:{task_id}"
+                 If provided, callback_data="cancel:{short_task_id}"
                  If None, callback_data="cancel" (legacy single-task mode)
     """
     import logging
@@ -1701,15 +1701,17 @@ def keyboard(task_id: str = None):
 
     # pyrogram imports moved to top
     if task_id:
-        # Multi-task mode: include task_id in callback data
-        callback_data = f"cancel:{task_id}"
-        log.info(
-            f"🧾 keyboard() called with task_id='{task_id}' | callback_data='{callback_data}' | length={len(callback_data)}"
+        # Normalize to short ID so callback handlers can resolve reliably.
+        normalized_id = str(task_id).strip()
+        short_id = normalized_id[:8] if len(normalized_id) > 8 else normalized_id
+        callback_data = f"cancel:{short_id}"
+        log.debug(
+            f"keyboard() task_id='{task_id}' -> short_id='{short_id}' | callback_data='{callback_data}'"
         )
     else:
         # Legacy mode: simple cancel
         callback_data = "cancel"
-        log.info("🧾 keyboard() called with NO task_id | callback_data='cancel'")
+        log.debug("keyboard() called with no task_id | callback_data='cancel'")
 
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("Cancel", callback_data=callback_data)]])
@@ -1932,7 +1934,7 @@ async def status_bar(
             log.info(
                 f"⏱️ status_bar {task_id_str}: Throttled (global timer), skipping.")
             return
-        log.info(f"? status_bar {task_id_str}: Global timer OK, will update")
+        log.info(f"status_bar {task_id_str}: Global timer OK, will update")
 
     # NEW: Use task_ctx.status_msg if available, otherwise fall back to global
     # MSG
@@ -1966,7 +1968,7 @@ async def status_bar(
                         0, int(
                             percentage_float / 100 * bar_length)))
                 # Use unicode blocks for a richer Telegram progress display.
-                bar = "?" * filled_length + "?" * (bar_length - filled_length)
+                bar = "█" * filled_length + "░" * (bar_length - filled_length)
 
                 eta_str = eta  # Use eta string passed directly
 

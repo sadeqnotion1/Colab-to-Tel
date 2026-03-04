@@ -2187,14 +2187,30 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         # === NEW: Handle Parallel Download Choice ===
         if query_data.startswith("parallel_"):
             await callback_query.answer()  # Acknowledge
-            choice, task_short_id = query_data.split(":", 1)
+            parts = query_data.split(":", 1)
+            if len(parts) != 2:
+                await client.send_message(chat_id, "❌ Invalid parallel task action.")
+                return
+            choice, task_short_id = parts
 
             # Retrieve task from user_tasks
             async with user_tasks_lock:
                 task_ctx = user_tasks.pop(user_id, None)
 
             if not task_ctx:
-                await callback_query.answer("❌ Task expired. Please start over with /tupload", show_alert=True)
+                await client.send_message(
+                    chat_id,
+                    "❌ Task expired. Please start over with /tupload",
+                )
+                return
+            if task_ctx.get_short_id() != task_short_id:
+                # Stale button press: do not run actions against a newer pending task.
+                async with user_tasks_lock:
+                    user_tasks[user_id] = task_ctx
+                await client.send_message(
+                    chat_id,
+                    "❌ This selection is stale. Please use the latest task prompt.",
+                )
                 return
 
             links = task_ctx.source_urls  # List of parsed links
@@ -2559,6 +2575,12 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
              BOT.Options.stream_upload = False; BOT.Setting.stream_upload = "Document"
              await callback_query.answer("Uploading As Document", show_alert=False)
              await send_settings(client, message, msg_id, False)
+        elif query_data == "video":
+             await callback_query.answer("Video toggles are not available in this menu yet.", show_alert=True)
+        elif query_data == "caption":
+             await callback_query.answer("Caption style is fixed in this build.", show_alert=True)
+        elif query_data == "thumb":
+             await callback_query.answer("Send a photo in this chat to set thumbnail.", show_alert=True)
         elif query_data == "set-prefix":
              await callback_query.answer()
              await _clear_settings_reply_waiting(client, chat_id, user_id)
@@ -2593,6 +2615,13 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         elif query_data == "back":
             await callback_query.answer()
             await send_settings(client, message, msg_id, False)
+        elif query_data == "settings_back":
+            await callback_query.answer()
+            await send_settings(client, message, msg_id, False)
+        elif query_data == "page_info":
+            await callback_query.answer("Page info", show_alert=False)
+        elif query_data == "pause" or query_data.startswith("pause:"):
+            await callback_query.answer("Pause is not implemented yet.", show_alert=True)
 
         # --- Task Cancellation ---
         # <<< THIS BLOCK'S INDENTATION MUST MATCH THE PREVIOUS BLOCKS >>>
@@ -2600,22 +2629,32 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             # Parse callback data
             task_ctx = None
             if query_data.startswith("cancel:"):
-                # Multi-task cancellation: extract short_id
-                short_id = query_data.split(":", 1)[1]
+                # Multi-task cancellation: accept either short ID or full task UUID.
+                task_token = query_data.split(":", 1)[1].strip()
 
-                # Find task by short ID (first 8 chars of UUID)
+                # Find task by short ID or full ID for backward compatibility.
                 all_tasks = await TASK_QUEUE.get_all_tasks()
                 for task_id, task in all_tasks.items():
-                    if task.get_short_id() == short_id:
+                    short_id = task.get_short_id()
+                    full_id = str(task.task_id)
+                    if (
+                        task_token == short_id
+                        or task_token == full_id
+                        or full_id.startswith(task_token)
+                        or task_token.startswith(short_id)
+                    ):
                         task_ctx = task
                         break
 
                 if not task_ctx:
-                    await callback_query.answer("Task not found or already completed.", show_alert=True)
-                    log.warning(f"Cancel requested for task {short_id} but not found in queue")
-                    return
+                    log.warning(
+                        f"Cancel requested for token '{task_token}' but no direct task match found; trying context fallback."
+                    )
 
-                log.info(f"Multi-task cancellation requested for task {task_ctx.get_short_id()}")
+                if task_ctx:
+                    log.info(
+                        f"Multi-task cancellation requested for task {task_ctx.get_short_id()}"
+                    )
             else:
                 # Legacy single-task cancellation
                 log.info("Legacy task cancellation requested by user via button.")
@@ -2685,11 +2724,11 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             await _clear_settings_reply_waiting(client, chat_id, user_id)
             await _clear_setup_session(user_id)
         elif query_data == "cancel_all_tasks":
-            await callback_query.answer("Cancelling all tasks...", show_alert=True)
             all_tasks = await TASK_QUEUE.get_all_tasks()
             if not all_tasks:
                 await callback_query.answer("No active tasks to cancel.", show_alert=True)
                 return
+            await callback_query.answer("Cancelling all tasks...", show_alert=True)
 
             log.info(f"Bulk cancel requested: {len(all_tasks)} tasks")
             for task_ctx in list(all_tasks.values()):
@@ -3672,7 +3711,7 @@ async def handle_text_input(client, message):
                 OWNER,
                 photo=thumb_path,
                 caption=status_text,
-                reply_markup=keyboard(task_ctx.task_id)  # Add cancel button with task ID
+                reply_markup=keyboard(task_ctx.get_short_id())  # Add cancel button with task short ID
             )
             log.info(f"Sent Mindvalley status with thumbnail: {thumb_path} (task {task_ctx.get_short_id()})")
         else:
@@ -3681,7 +3720,7 @@ async def handle_text_input(client, message):
             task_ctx.status_msg = await client.send_message(
                 OWNER,
                 status_text,
-                reply_markup=keyboard(task_ctx.task_id)  # Add cancel button with task ID
+                reply_markup=keyboard(task_ctx.get_short_id())  # Add cancel button with task short ID
             )
 
         # Also set global MSG for backward compatibility with status_bar()
@@ -4166,11 +4205,11 @@ async def cancel_command(client, message):
             btn_text = f"❌ {name} ({ctx.get_short_id()})"
             keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"cancel:{ctx.get_short_id()}")])
             
-        # Add "Cancel All" option if multiple tasks
-        if len(user_tasks) > 1:
-            # We don't have a direct 'cancel_all' callback yet, so maybe omit for now or loop calls
-            # For safety, let's stick to individual cancellation for now or just legacy global cancel
-            pass
+        # Add owner-only "Cancel All" option when multiple tasks exist.
+        if len(user_tasks) > 1 and user_id == OWNER:
+            keyboard.append([
+                InlineKeyboardButton("❌ Cancel All Tasks", callback_data="cancel_all_tasks")
+            ])
             
         await message.reply_text(
             f"**🛑 Active Tasks ({len(user_tasks)})**\n\nSelect a task to cancel:",
