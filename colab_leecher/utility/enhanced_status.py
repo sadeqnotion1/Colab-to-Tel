@@ -19,6 +19,36 @@ class StatusDisplay:
         self.task_id = task_id
         self.start_time = datetime.now()
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def speed_emoji(bytes_per_second: float) -> str:
+        """Return a colored dot based on current speed tier."""
+        mb = bytes_per_second / (1024 * 1024)
+        if mb >= 10:
+            return "\U0001f7e2"   # Fast  (>= 10 MB/s)
+        elif mb >= 3:
+            return "\U0001f7e1"   # Medium (3-10 MB/s)
+        elif mb >= 0.5:
+            return "\U0001f7e0"   # Slow  (0.5-3 MB/s)
+        else:
+            return "\U0001f534"   # Very slow (< 0.5 MB/s)
+
+    @staticmethod
+    def smart_eta(seconds: float, downloaded: int = 0) -> str:
+        """Format ETA with a warm-up phase for very early estimates."""
+        if downloaded < 1024 * 512:          # < 512 KB transferred
+            return "\u23f3 Warming up..."
+        if seconds is None or seconds < 0 or seconds > 86400 * 7:
+            return "Calculating..."
+        return TimeFormatter.format_eta(seconds)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def download_status(
         self,
         filename: str,
@@ -28,38 +58,33 @@ class StatusDisplay:
         total_size: int,
         eta: float = None,
         engine: str = None,
-        style: str = "modern"
-    ) -> tuple[str, Any]:
+        style: str = "sleek"
+    ) -> "tuple[str, Any]":
         """
-        Create download status message
+        Create download status message.
 
-        Returns:
-            tuple: (message_text, keyboard)
+        Styles:  sleek (default) | modern | compact | classic
+        Returns: (message_text, keyboard)
         """
-        if style == "modern":
+        if style == "sleek":
+            return self._sleek_status(
+                "DOWNLOADING", Emoji.DOWNLOAD,
+                filename, progress, speed, downloaded, total_size, eta, engine
+            )
+        elif style == "modern":
             return self._modern_download_status(
                 filename, progress, speed, downloaded, total_size, eta, engine
             )
         elif style == "compact":
             return self._compact_status(
                 "DOWNLOADING",
-                filename,
-                progress,
-                speed,
-                downloaded,
-                total_size,
-                eta,
-                engine)
+                filename, progress, speed, downloaded, total_size, eta, engine
+            )
         else:
             return self._classic_status(
-                "📥 DOWNLOADING",
-                filename,
-                progress,
-                speed,
-                downloaded,
-                total_size,
-                eta,
-                engine)
+                "\U0001f4e5 DOWNLOADING",
+                filename, progress, speed, downloaded, total_size, eta, engine
+            )
 
     def upload_status(
         self,
@@ -69,9 +94,20 @@ class StatusDisplay:
         uploaded: int,
         total_size: int,
         eta: float = None,
-        destination: str = "Telegram"
-    ) -> tuple[str, Any]:
-        """Create upload status message"""
+        destination: str = "Telegram",
+        style: str = "sleek"
+    ) -> "tuple[str, Any]":
+        """
+        Create upload status message.
+
+        Styles:  sleek (default) | modern
+        Returns: (message_text, keyboard)
+        """
+        if style == "sleek":
+            return self._sleek_status(
+                f"UPLOADING -> {destination.upper()}", Emoji.UPLOAD,
+                filename, progress, speed, uploaded, total_size, eta, None
+            )
         return self._modern_upload_status(
             filename, progress, speed, uploaded, total_size, eta, destination
         )
@@ -84,40 +120,90 @@ class StatusDisplay:
         current_file: str = None,
         files_done: int = None,
         total_files: int = None
-    ) -> tuple[str, Any]:
+    ) -> "tuple[str, Any]":
         """Create processing/extracting status"""
         elapsed = (datetime.now() - self.start_time).total_seconds()
 
         lines = [f"<b>{Emoji.PROCESS} {operation.upper()}</b>\n"]
-
-        # Filename
         lines.append(
             f"{Box.TOP_LEFT}{Emoji.TAG} <b>Name:</b> <code>{filename}</code>")
 
-        # Progress bar if available
         if progress is not None:
-            bar = ProgressBar.generate(progress, 12, 'blocks')
-            lines.append(f"{Box.MIDDLE_LEFT}「{bar}」 <b>{progress:.1f}%</b>")
+            bar = ProgressBar.generate(progress, 12, "gradient")
+            lines.append(f"{Box.MIDDLE_LEFT}[{bar}] <b>{progress:.1f}%</b>")
 
-        # Current file
         if current_file:
             lines.append(
                 f"{Box.MIDDLE_LEFT}{Emoji.DOCUMENT} <b>Current:</b> <code>{current_file}</code>")
 
-        # Files progress
         if files_done is not None and total_files is not None:
             lines.append(
                 f"{Box.MIDDLE_LEFT}{Emoji.ARCHIVE} <b>Files:</b> {files_done}/{total_files}")
 
-        # Elapsed time
         elapsed_str = TimeFormatter.format_seconds(elapsed)
         lines.append(
             f"{Box.BOTTOM_LEFT}{Emoji.TIME} <b>Elapsed:</b> {elapsed_str}")
 
         message = "\n".join(lines)
         keyboard = ProgressKeyboards.processing(self.task_id, operation)
-
         return message, keyboard
+
+    # ------------------------------------------------------------------
+    # Sleek style  <- NEW default
+    # ------------------------------------------------------------------
+
+    def _sleek_status(
+        self,
+        operation: str,
+        op_emoji: str,
+        filename: str,
+        progress: float,
+        speed: float,
+        done: int,
+        total: int,
+        eta: float,
+        engine: str
+    ) -> "tuple[str, Any]":
+        """
+        Clean, scan-friendly layout. One dense block - no box-drawing noise.
+
+        Example output:
+        📥 DOWNLOADING
+        filename.mkv
+
+        ██████████▒░░░  73.4%
+
+        🟢 45.2 MB/s   ⏳ 12s   ⏱ 1m 4s
+        💾 3.20 GB / 4.37 GB
+        """
+        elapsed = (datetime.now() - self.start_time).total_seconds()
+
+        bar = ProgressBar.generate(progress, 15, "gradient")
+        speed_dot = self.speed_emoji(speed)
+        speed_str = SizeFormatter.format_speed(speed) if speed > 0 else "--"
+        eta_str = self.smart_eta(eta, done)
+        elapsed_str = TimeFormatter.format_seconds(elapsed)
+        done_str = SizeFormatter.format_bytes(done)
+        total_str = SizeFormatter.format_bytes(total)
+
+        msg = (
+            f"<b>{op_emoji} {operation}</b>\n"
+            f"<code>{filename}</code>\n\n"
+            f"<b>{bar}</b>  <b>{progress:.1f}%</b>\n\n"
+            f"{speed_dot} <b>{speed_str}</b>  "
+            f"\u23f3 <b>{eta_str}</b>  \u23f1 <b>{elapsed_str}</b>\n"
+            f"\U0001f4be <code>{done_str}</code> / <code>{total_str}</code>"
+        )
+
+        if engine:
+            msg += f"\n\u2699\ufe0f <i>{engine}</i>"
+
+        keyboard = ProgressKeyboards.downloading(self.task_id)
+        return msg, keyboard
+
+    # ------------------------------------------------------------------
+    # Modern style
+    # ------------------------------------------------------------------
 
     def _modern_download_status(
         self,
@@ -128,53 +214,45 @@ class StatusDisplay:
         total_size: int,
         eta: float,
         engine: str
-    ) -> tuple[str, Any]:
-        """Modern style download status"""
+    ) -> "tuple[str, Any]":
+        """Modern box-drawing download status (gradient bar)."""
         elapsed = (datetime.now() - self.start_time).total_seconds()
 
-        # Create message
         lines = [
             f"<b>{Emoji.DOWNLOAD} DOWNLOADING</b>\n",
             f"{Box.TOP_LEFT}{Emoji.TAG} <b>Name:</b> <code>{filename}</code>",
         ]
 
-        # Progress bar with percentage
-        bar = ProgressBar.generate(progress, 14, 'blocks')
-        lines.append(f"{Box.MIDDLE_LEFT}「{bar}」 <b>{progress:.1f}%</b>")
+        bar = ProgressBar.generate(progress, 14, "gradient")
+        lines.append(f"{Box.MIDDLE_LEFT}[{bar}] <b>{progress:.1f}%</b>")
 
-        # Speed
         if speed > 0:
+            speed_dot = self.speed_emoji(speed)
             speed_str = SizeFormatter.format_speed(speed)
             lines.append(
-                f"{Box.MIDDLE_LEFT}{Emoji.SPEED} <b>Speed:</b> {speed_str}")
+                f"{Box.MIDDLE_LEFT}{speed_dot} <b>Speed:</b> {speed_str}")
 
-        # Downloaded / Total
         downloaded_str = SizeFormatter.format_bytes(downloaded)
         total_str = SizeFormatter.format_bytes(total_size)
         lines.append(
             f"{Box.MIDDLE_LEFT}{Emoji.SIZE} <b>Progress:</b> {downloaded_str} / {total_str}")
 
-        # ETA
         if eta is not None and eta > 0:
-            eta_str = TimeFormatter.format_eta(eta)
+            eta_str = self.smart_eta(eta, downloaded)
             lines.append(f"{Box.MIDDLE_LEFT}{Emoji.ETA} <b>ETA:</b> {eta_str}")
 
-        # Elapsed
         elapsed_str = TimeFormatter.format_seconds(elapsed)
         lines.append(
             f"{Box.MIDDLE_LEFT}{Emoji.TIME} <b>Elapsed:</b> {elapsed_str}")
 
-        # Engine
         if engine:
             lines.append(
                 f"{Box.BOTTOM_LEFT}{Emoji.PROCESS} <b>Engine:</b> {engine}")
         else:
-            # Update last line to use BOTTOM_LEFT
             lines[-1] = lines[-1].replace(Box.MIDDLE_LEFT, Box.BOTTOM_LEFT, 1)
 
         message = "\n".join(lines)
         keyboard = ProgressKeyboards.downloading(self.task_id)
-
         return message, keyboard
 
     def _modern_upload_status(
@@ -186,8 +264,8 @@ class StatusDisplay:
         total_size: int,
         eta: float,
         destination: str
-    ) -> tuple[str, Any]:
-        """Modern style upload status"""
+    ) -> "tuple[str, Any]":
+        """Modern box-drawing upload status (gradient bar)."""
         elapsed = (datetime.now() - self.start_time).total_seconds()
 
         lines = [
@@ -195,36 +273,35 @@ class StatusDisplay:
             f"{Box.TOP_LEFT}{Emoji.TAG} <b>Name:</b> <code>{filename}</code>",
         ]
 
-        # Progress bar
-        bar = ProgressBar.generate(progress, 14, 'blocks')
-        lines.append(f"{Box.MIDDLE_LEFT}「{bar}」 <b>{progress:.1f}%</b>")
+        bar = ProgressBar.generate(progress, 14, "gradient")
+        lines.append(f"{Box.MIDDLE_LEFT}[{bar}] <b>{progress:.1f}%</b>")
 
-        # Speed
         if speed > 0:
+            speed_dot = self.speed_emoji(speed)
             speed_str = SizeFormatter.format_speed(speed)
             lines.append(
-                f"{Box.MIDDLE_LEFT}{Emoji.SPEED} <b>Speed:</b> {speed_str}")
+                f"{Box.MIDDLE_LEFT}{speed_dot} <b>Speed:</b> {speed_str}")
 
-        # Uploaded / Total
         uploaded_str = SizeFormatter.format_bytes(uploaded)
         total_str = SizeFormatter.format_bytes(total_size)
         lines.append(
             f"{Box.MIDDLE_LEFT}{Emoji.SIZE} <b>Progress:</b> {uploaded_str} / {total_str}")
 
-        # ETA
         if eta is not None and eta > 0:
-            eta_str = TimeFormatter.format_eta(eta)
+            eta_str = self.smart_eta(eta, uploaded)
             lines.append(f"{Box.MIDDLE_LEFT}{Emoji.ETA} <b>ETA:</b> {eta_str}")
 
-        # Elapsed
         elapsed_str = TimeFormatter.format_seconds(elapsed)
         lines.append(
             f"{Box.BOTTOM_LEFT}{Emoji.TIME} <b>Elapsed:</b> {elapsed_str}")
 
         message = "\n".join(lines)
         keyboard = ProgressKeyboards.uploading(self.task_id)
-
         return message, keyboard
+
+    # ------------------------------------------------------------------
+    # Compact style
+    # ------------------------------------------------------------------
 
     def _compact_status(
         self,
@@ -236,13 +313,14 @@ class StatusDisplay:
         total: int,
         eta: float,
         engine: str
-    ) -> tuple[str, Any]:
-        """Compact style status (saves vertical space)"""
+    ) -> "tuple[str, Any]":
+        """Compact style - saves vertical space."""
         elapsed = (datetime.now() - self.start_time).total_seconds()
 
-        bar = ProgressBar.generate(progress, 12, 'blocks')
-        speed_str = SizeFormatter.format_speed(speed) if speed > 0 else "---"
-        eta_str = TimeFormatter.format_eta(eta) if eta else "---"
+        bar = ProgressBar.generate(progress, 12, "gradient")
+        speed_dot = self.speed_emoji(speed)
+        speed_str = SizeFormatter.format_speed(speed) if speed > 0 else "--"
+        eta_str = self.smart_eta(eta, done)
         elapsed_str = TimeFormatter.format_seconds(elapsed)
         done_str = SizeFormatter.format_bytes(done)
         total_str = SizeFormatter.format_bytes(total)
@@ -251,7 +329,7 @@ class StatusDisplay:
             f"<b>{Emoji.ROCKET} {operation}</b>\n\n"
             f"<code>{filename}</code>\n\n"
             f"[{bar}] <b>{progress:.1f}%</b>\n"
-            f"{Emoji.SPEED} {speed_str}  {Emoji.ETA} {eta_str}  {Emoji.TIME} {elapsed_str}\n"
+            f"{speed_dot} {speed_str}  {Emoji.ETA} {eta_str}  {Emoji.TIME} {elapsed_str}\n"
             f"{Emoji.SIZE} {done_str}/{total_str}"
         )
 
@@ -260,6 +338,10 @@ class StatusDisplay:
 
         keyboard = ProgressKeyboards.downloading(self.task_id)
         return message, keyboard
+
+    # ------------------------------------------------------------------
+    # Classic style  (HTML/Markdown mix FIXED)
+    # ------------------------------------------------------------------
 
     def _classic_status(
         self,
@@ -271,40 +353,46 @@ class StatusDisplay:
         total: int,
         eta: float,
         engine: str
-    ) -> tuple[str, Any]:
-        """Classic style (similar to current implementation)"""
+    ) -> "tuple[str, Any]":
+        """Classic style - all formatting in HTML (no broken __markdown__ mix)."""
         elapsed = (datetime.now() - self.start_time).total_seconds()
 
-        bar = ProgressBar.generate(progress, 12, 'blocks')
+        bar = ProgressBar.generate(progress, 12, "gradient")
         message = f"<b>{header}</b>\n\n"
-        message += f"<b>🏷️ Name » </b><code>{filename}</code>\n\n"
-        message += f"╭「{bar}」 <b>»</b> __{progress:.1f}%__\n"
+        message += f"<b>\U0001f3f7\ufe0f Name >> </b><code>{filename}</code>\n\n"
+        # FIX: was  __{progress:.1f}%__  (Markdown in HTML mode) - now proper <i> tag
+        message += f"\u256d[{bar}] <b>>></b> <i>{progress:.1f}%</i>\n"
 
         if speed > 0:
-            message += f"├{
-                Emoji.SPEED} <b>Speed »</b> <b>{
-                SizeFormatter.format_speed(speed)}</b>\n"
+            speed_dot = self.speed_emoji(speed)
+            message += (
+                f"\u251c{speed_dot} <b>Speed >></b> "
+                f"<b>{SizeFormatter.format_speed(speed)}</b>\n"
+            )
 
         if engine:
-            message += f"├{Emoji.PROCESS} <b>Engine »</b> <b>{engine}</b>\n"
+            message += f"\u251c{Emoji.PROCESS} <b>Engine >></b> <b>{engine}</b>\n"
 
         if eta:
-            message += f"├{
-                Emoji.ETA} <b>ETA »</b> __{
-                TimeFormatter.format_eta(eta)}__\n"
+            message += (
+                f"\u251c{Emoji.ETA} <b>ETA >></b> "
+                f"<i>{self.smart_eta(eta, done)}</i>\n"
+            )
 
-        message += f"├{
-            Emoji.TIME} <b>Elapsed »</b> __{
-            TimeFormatter.format_seconds(elapsed)}__\n"
-        message += f"├✅ <b>Done »</b> <b>{
-            SizeFormatter.format_bytes(done)}</b>\n"
-        message += f"╰{
-            Emoji.ARCHIVE} <b>Total »</b> <b>{
-            SizeFormatter.format_bytes(total)}</b>"
+        message += (
+            f"\u251c{Emoji.TIME} <b>Elapsed >></b> "
+            f"<i>{TimeFormatter.format_seconds(elapsed)}</i>\n"
+        )
+        message += f"\u251c\u2705 <b>Done >></b> <b>{SizeFormatter.format_bytes(done)}</b>\n"
+        message += f"\u2570{Emoji.ARCHIVE} <b>Total >></b> <b>{SizeFormatter.format_bytes(total)}</b>"
 
         keyboard = ProgressKeyboards.downloading(self.task_id)
         return message, keyboard
 
+
+# ======================================================================
+# Completion Messages
+# ======================================================================
 
 class CompletionMessage:
     """Generate completion/success messages"""
@@ -348,8 +436,7 @@ class CompletionMessage:
         file_count = len(files)
 
         summary = {
-            "Files Uploaded": f"{file_count} file{
-                's' if file_count != 1 else ''}",
+            "Files Uploaded": f"{file_count} file{'s' if file_count != 1 else ''}",
             "Total Size": SizeFormatter.format_bytes(total_size),
             "Destination": destination,
             "Time Taken": TimeFormatter.format_seconds(duration),
@@ -361,9 +448,8 @@ class CompletionMessage:
             show_hashtag=True
         )
 
-        # Add file links if provided
         if links:
-            message += "\n\n<b>📎 Links:</b>"
+            message += "\n\n<b>\U0001f4ce Links:</b>"
             for i, (file, link) in enumerate(zip(files, links), 1):
                 message += f"\n{i}. <a href='{link}'>{file}</a>"
 
@@ -385,6 +471,10 @@ class CompletionMessage:
             show_hashtag=bool(hashtag)
         )
 
+
+# ======================================================================
+# Error Messages
+# ======================================================================
 
 class ErrorMessage:
     """Generate error messages"""
@@ -450,6 +540,10 @@ class ErrorMessage:
         )
 
 
+# ======================================================================
+# Info Messages
+# ======================================================================
+
 class InfoMessage:
     """Generate informational messages"""
 
@@ -489,7 +583,10 @@ class InfoMessage:
         return f"{Emoji.LOADING} <i>{message}</i>"
 
 
-# Convenience function for quick status creation
+# ======================================================================
+# Convenience functions
+# ======================================================================
+
 def create_download_status(
     filename: str,
     progress: float,
@@ -499,8 +596,8 @@ def create_download_status(
     eta: float = None,
     engine: str = None,
     task_id: str = None,
-    style: str = "modern"
-) -> tuple[str, Any]:
+    style: str = "sleek"
+) -> "tuple[str, Any]":
     """Quick download status creation"""
     status = StatusDisplay("Download", task_id)
     return status.download_status(
@@ -516,10 +613,11 @@ def create_upload_status(
     total_size: int,
     eta: float = None,
     destination: str = "Telegram",
-    task_id: str = None
-) -> tuple[str, Any]:
+    task_id: str = None,
+    style: str = "sleek"
+) -> "tuple[str, Any]":
     """Quick upload status creation"""
     status = StatusDisplay("Upload", task_id)
     return status.upload_status(
-        filename, progress, speed, uploaded, total_size, eta, destination
+        filename, progress, speed, uploaded, total_size, eta, destination, style
     )
