@@ -10,13 +10,17 @@ import aiofiles # Import aiofiles for async file writing
 from pyrogram import enums, filters, Client, ContinuePropagation
 from datetime import datetime
 from asyncio import sleep, get_event_loop
-from colab_leecher import colab_bot, OWNER, DUMP_ID # Absolute import
+from colab_leecher import ConfigError, DUMP_ID, OWNER, colab_bot, ensure_runtime_config  # Absolute import
 from .utility.handler import cancelTask
 from .utility.variables import BOT, MSG, BotTimes, Paths, TRANSFER, TaskError, Aria2c
 from .utility.task_context import TaskContext, TASK_QUEUE, create_task_context
 from .utility.task_dashboard import update_summary_dashboard, force_update_summary
 from .utility.task_manager import taskScheduler, task_starter
 from .utility.rate_limiter import RATE_LIMITER
+from .utility.reply_state import (
+    clear_password_reply_waiting,
+    get_password_reply_waiting,
+)
 from .utility.helper import (
     isLink, setThumbnail, message_deleter, send_settings,
     clean_filename, extract_filename_from_url, apply_dot_style, sizeUnit # Import sizeUnit if needed
@@ -48,9 +52,14 @@ not_command_filter = filters.create(not_command)
 
 log.info(f"--> MERGED V1: colab_bot instance used in __main__.py: ID = {id(colab_bot)}")
 
-src_request_msg = None
-reply_prompt_message_id = None
-extract_request_msg = None
+source_waiting_prompts = {}
+source_waiting_lock = asyncio.Lock()
+setup_sessions = {}
+setup_sessions_lock = asyncio.Lock()
+mindvalley_waiting_users = set()
+mindvalley_waiting_lock = asyncio.Lock()
+nzb_waiting_users = set()
+nzb_waiting_lock = asyncio.Lock()
 
 # Flag to ensure background tasks start only once
 _background_tasks_started = False
@@ -59,6 +68,401 @@ _background_tasks_started = False
 # Maps user_id -> TaskContext for pending tasks (waiting for URLs)
 user_tasks = {}  # Track when waiting for extract path input
 user_tasks_lock = asyncio.Lock()  # Thread-safety for concurrent access
+
+# Per-user extract prompt state to avoid cross-user collisions in /extract setup.
+# Maps user_id -> prompt_message_id.
+extract_waiting_prompts = {}
+extract_waiting_lock = asyncio.Lock()
+
+
+def _clone_setup_session(state: dict | None) -> dict | None:
+    """Return a defensive copy of per-user setup session state."""
+    if not state:
+        return None
+    return {
+        "mode": state.get("mode"),
+        "source_links": list(state.get("source_links", [])),
+        "service_type": state.get("service_type"),
+        "filenames": list(state.get("filenames", [])),
+        "custom_name": state.get("custom_name", ""),
+        "zip_pswd": state.get("zip_pswd", ""),
+        "unzip_pswd": state.get("unzip_pswd", ""),
+        "archive_format": state.get("archive_format", "7z"),
+    }
+
+
+async def _get_setup_session(user_id: int) -> dict | None:
+    """Fetch per-user setup session state."""
+    async with setup_sessions_lock:
+        return _clone_setup_session(setup_sessions.get(user_id))
+
+
+async def _update_setup_session(user_id: int, **updates) -> dict:
+    """Create/update per-user setup session state."""
+    async with setup_sessions_lock:
+        current = setup_sessions.get(user_id, {})
+        merged = {
+            "mode": current.get("mode"),
+            "source_links": list(current.get("source_links", [])),
+            "service_type": current.get("service_type"),
+            "filenames": list(current.get("filenames", [])),
+            "custom_name": current.get("custom_name", ""),
+            "zip_pswd": current.get("zip_pswd", ""),
+            "unzip_pswd": current.get("unzip_pswd", ""),
+            "archive_format": current.get("archive_format", "7z"),
+        }
+        for key, value in updates.items():
+            if key in {"source_links", "filenames"}:
+                merged[key] = list(value or [])
+            else:
+                merged[key] = value
+        setup_sessions[user_id] = merged
+        return _clone_setup_session(merged) or {}
+
+
+async def _clear_setup_session(user_id: int) -> dict | None:
+    """Clear per-user setup session state."""
+    async with setup_sessions_lock:
+        state = setup_sessions.pop(user_id, None)
+    return _clone_setup_session(state)
+
+
+def _build_task_paths(task_ctx: TaskContext):
+    """Build a Paths-like object expected by legacy scheduler internals."""
+    return type('obj', (object,), {
+        'down_path': task_ctx.down_path,
+        'work_path': task_ctx.work_path,
+        'WORK_PATH': task_ctx.work_path,
+        'temp_zpath': f"{task_ctx.work_path}/temp_zip",
+        'temp_unzip': f"{task_ctx.work_path}/temp_unzip",
+        'temp_unzip_path': f"{task_ctx.work_path}/temp_unzip",
+        'temp_dirleech_path': f"{task_ctx.work_path}/dir_leech_temp",
+        'temp_files_dir': f"{task_ctx.work_path}/leech_temp",
+        'thumbnail_ytdl': f"{task_ctx.work_path}/ytdl_thumbnails",
+        'HERO_IMAGE': task_ctx.hero_image,
+        'THMB_PATH': Paths.THMB_PATH,
+        'DEFAULT_HERO': Paths.DEFAULT_HERO,
+        'VIDEO_FRAME': f"{task_ctx.work_path}/video_frame.jpg"
+    })()
+
+
+def _build_task_bot(
+    task_ctx: TaskContext,
+    source_links: list[str],
+    filenames: list[str],
+    custom_name: str,
+    zip_pswd: str,
+    unzip_pswd: str,
+    archive_format: str,
+):
+    """Build a BOT-like object expected by taskScheduler(task_ctx)."""
+    is_ytdl = task_ctx.service_type == "ytdl"
+    return type('obj', (object,), {
+        'Mode': type('obj', (object,), {
+            'mode': task_ctx.mode,
+            'ytdl': is_ytdl,
+            'type': task_ctx.mode_type
+        })(),
+        'Options': type('obj', (object,), {
+            'service_type': task_ctx.service_type,
+            'filenames': list(filenames or []),
+            'custom_name': custom_name or '',
+            'zip_pswd': zip_pswd or '',
+            'unzip_pswd': unzip_pswd or '',
+            'archive_format': archive_format or '7z'
+        })(),
+        'SOURCE': list(source_links or []),
+        'Setting': BOT.Setting
+    })()
+
+
+def _prepare_task_context(
+    task_ctx: TaskContext,
+    source_links: list[str],
+    filenames: list[str] | None = None,
+    custom_name: str = "",
+    zip_pswd: str = "",
+    unzip_pswd: str = "",
+    archive_format: str = "7z",
+) -> None:
+    """Populate task_ctx with compatibility objects for taskScheduler(task_ctx)."""
+    task_ctx.source_urls = list(source_links or [])
+    task_ctx.filenames = list(filenames or [])
+    task_ctx.bot = _build_task_bot(
+        task_ctx=task_ctx,
+        source_links=task_ctx.source_urls,
+        filenames=task_ctx.filenames,
+        custom_name=custom_name,
+        zip_pswd=zip_pswd,
+        unzip_pswd=unzip_pswd,
+        archive_format=archive_format,
+    )
+    task_ctx.paths = _build_task_paths(task_ctx)
+    task_ctx.msg = type('obj', (object,), {
+        'status_msg': task_ctx.status_msg,
+        'sent_msg': task_ctx.sent_msg
+    })()
+
+
+def _attach_task_exception_handler(async_task: asyncio.Task, task_ctx: TaskContext) -> None:
+    """Attach uniform exception logging for launched background tasks."""
+    def _handle_task_exception(task):
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            log.info(f"Task {task_ctx.get_short_id()} was cancelled")
+        except Exception as e:
+            log.exception(f"Unhandled exception in background task {task_ctx.get_short_id()}: {e}")
+
+    async_task.add_done_callback(_handle_task_exception)
+
+
+def _extract_user_id(message: Message) -> int:
+    """Return a stable user key for extract waiting state."""
+    return message.from_user.id if message.from_user else message.chat.id
+
+
+async def _set_extract_waiting(user_id: int, prompt_message_id: int | None) -> None:
+    """Mark user as waiting for /extract path input and store prompt message id."""
+    async with extract_waiting_lock:
+        extract_waiting_prompts[user_id] = prompt_message_id
+
+
+async def _is_extract_waiting(user_id: int) -> bool:
+    """Check whether a user is currently expected to send /extract path input."""
+    async with extract_waiting_lock:
+        return user_id in extract_waiting_prompts
+
+
+async def _clear_extract_waiting(client: Client, chat_id: int, user_id: int) -> None:
+    """Clear extract-waiting state for one user and delete the pending prompt if present."""
+    prompt_message_id = None
+    async with extract_waiting_lock:
+        prompt_message_id = extract_waiting_prompts.pop(user_id, None)
+
+    if prompt_message_id:
+        try:
+            prompt_msg = await client.get_messages(chat_id, prompt_message_id)
+            if prompt_msg:
+                await prompt_msg.delete()
+        except Exception as delete_prompt_err:
+            log.debug(f"Could not delete extract prompt message {prompt_message_id}: {delete_prompt_err}")
+
+
+async def _set_source_waiting(user_id: int, chat_id: int, prompt_message_id: int | None) -> None:
+    """Store or clear per-user source-input prompt state."""
+    async with source_waiting_lock:
+        if prompt_message_id:
+            source_waiting_prompts[user_id] = {
+                "chat_id": chat_id,
+                "prompt_message_id": prompt_message_id,
+            }
+        else:
+            source_waiting_prompts.pop(user_id, None)
+
+
+async def _clear_source_waiting(client: Client | None, user_id: int) -> None:
+    """Clear per-user source-input prompt state and delete its prompt message."""
+    state = None
+    async with source_waiting_lock:
+        state = source_waiting_prompts.pop(user_id, None)
+
+    if not state or not client:
+        return
+
+    chat_id = state.get("chat_id")
+    prompt_message_id = state.get("prompt_message_id")
+    if not chat_id or not prompt_message_id:
+        return
+
+    try:
+        prompt_msg = await client.get_messages(chat_id, prompt_message_id)
+        if prompt_msg:
+            await prompt_msg.delete()
+    except Exception as delete_prompt_err:
+        log.debug(f"Could not delete source prompt message {prompt_message_id}: {delete_prompt_err}")
+
+
+async def _set_mindvalley_waiting(user_id: int, waiting: bool) -> None:
+    """Set per-user waiting state for Mindvalley URL input."""
+    async with mindvalley_waiting_lock:
+        if waiting:
+            mindvalley_waiting_users.add(user_id)
+        else:
+            mindvalley_waiting_users.discard(user_id)
+
+
+async def _is_mindvalley_waiting(user_id: int) -> bool:
+    """Check whether user is currently expected to provide Mindvalley URLs."""
+    async with mindvalley_waiting_lock:
+        return user_id in mindvalley_waiting_users
+
+
+async def _set_nzb_waiting(user_id: int, waiting: bool) -> None:
+    """Set per-user waiting state for NZB URL/file input."""
+    async with nzb_waiting_lock:
+        if waiting:
+            nzb_waiting_users.add(user_id)
+        else:
+            nzb_waiting_users.discard(user_id)
+
+
+async def _is_nzb_waiting(user_id: int) -> bool:
+    """Check whether user is currently expected to provide NZB URL/file."""
+    async with nzb_waiting_lock:
+        return user_id in nzb_waiting_users
+
+# Per-user manual filename-reply state to avoid global prompt collisions.
+# Maps user_id -> {"prompt_message_id", "service_type", "expected_count", "source_links"}.
+filename_reply_prompts = {}
+filename_reply_lock = asyncio.Lock()
+settings_reply_prompts = {}
+settings_reply_lock = asyncio.Lock()
+
+
+def _normalize_filename_service(service_type: str | None) -> str:
+    """Normalize service name from callback payload to canonical internal value."""
+    service_key = (service_type or "").strip().lower()
+    if service_key == "debrid":
+        return "Debrid"
+    if service_key == "nzbcloud":
+        return "nzbcloud"
+    if service_key == "bitso":
+        return "bitso"
+    return service_key
+
+
+def _filename_mode_label(service_type: str) -> str:
+    """Return user-facing label for filename reply logs/messages."""
+    normalized = _normalize_filename_service(service_type)
+    if normalized == "Debrid":
+        return "DebridLeech"
+    if normalized == "nzbcloud":
+        return "NZBCloud"
+    if normalized == "bitso":
+        return "bitso"
+    return normalized or "unknown"
+
+
+async def _set_filename_reply_waiting(
+    user_id: int,
+    prompt_message_id: int,
+    service_type: str,
+    source_links: list[str],
+) -> None:
+    """Store per-user filename-reply prompt context."""
+    async with filename_reply_lock:
+        filename_reply_prompts[user_id] = {
+            "prompt_message_id": prompt_message_id,
+            "service_type": _normalize_filename_service(service_type),
+            "expected_count": len(source_links),
+            "source_links": list(source_links),
+        }
+
+
+async def _get_filename_reply_waiting(user_id: int) -> dict | None:
+    """Get per-user filename-reply context."""
+    async with filename_reply_lock:
+        state = filename_reply_prompts.get(user_id)
+        if not state:
+            return None
+        return {
+            "prompt_message_id": state.get("prompt_message_id"),
+            "service_type": state.get("service_type"),
+            "expected_count": state.get("expected_count", 0),
+            "source_links": list(state.get("source_links", [])),
+        }
+
+
+async def _is_filename_reply_waiting(user_id: int) -> bool:
+    """Check whether user is currently expected to reply with filenames."""
+    async with filename_reply_lock:
+        return user_id in filename_reply_prompts
+
+
+async def _clear_filename_reply_waiting(client: Client | None, chat_id: int | None, user_id: int) -> None:
+    """Clear per-user filename-reply context and delete prompt message if available."""
+    state = None
+    async with filename_reply_lock:
+        state = filename_reply_prompts.pop(user_id, None)
+
+    if not state:
+        return
+
+    prompt_message_id = state.get("prompt_message_id")
+    if client and chat_id and prompt_message_id:
+        try:
+            prompt_msg = await client.get_messages(chat_id, prompt_message_id)
+            if prompt_msg:
+                await prompt_msg.delete()
+        except Exception as delete_prompt_err:
+            log.debug(f"Could not delete filename prompt message {prompt_message_id}: {delete_prompt_err}")
+
+
+async def _clear_password_reply_prompt(client: Client | None, user_id: int) -> None:
+    """Clear per-user password reply context and delete prompt message if available."""
+    state = await clear_password_reply_waiting(user_id)
+    if not state or not client:
+        return
+
+    chat_id = state.get("chat_id")
+    prompt_message_id = state.get("prompt_message_id")
+    if not chat_id or not prompt_message_id:
+        return
+
+    try:
+        prompt_msg = await client.get_messages(chat_id, prompt_message_id)
+        if prompt_msg:
+            await prompt_msg.delete()
+    except Exception as delete_prompt_err:
+        log.debug(f"Could not delete password prompt message {prompt_message_id}: {delete_prompt_err}")
+
+
+async def _set_settings_reply_waiting(
+    user_id: int,
+    prompt_message_id: int,
+    setting_key: str,
+    settings_message_id: int | None,
+) -> None:
+    """Store per-user settings-reply prompt context."""
+    async with settings_reply_lock:
+        settings_reply_prompts[user_id] = {
+            "prompt_message_id": prompt_message_id,
+            "setting_key": setting_key,
+            "settings_message_id": settings_message_id,
+        }
+
+
+async def _get_settings_reply_waiting(user_id: int) -> dict | None:
+    """Get per-user settings-reply context."""
+    async with settings_reply_lock:
+        state = settings_reply_prompts.get(user_id)
+        if not state:
+            return None
+        return {
+            "prompt_message_id": state.get("prompt_message_id"),
+            "setting_key": state.get("setting_key"),
+            "settings_message_id": state.get("settings_message_id"),
+        }
+
+
+async def _clear_settings_reply_waiting(client: Client | None, chat_id: int | None, user_id: int) -> None:
+    """Clear per-user settings-reply context and delete prompt message if available."""
+    state = None
+    async with settings_reply_lock:
+        state = settings_reply_prompts.pop(user_id, None)
+
+    if not state:
+        return
+
+    prompt_message_id = state.get("prompt_message_id")
+    if client and chat_id and prompt_message_id:
+        try:
+            prompt_msg = await client.get_messages(chat_id, prompt_message_id)
+            if prompt_msg:
+                await prompt_msg.delete()
+        except Exception as delete_prompt_err:
+            log.debug(f"Could not delete settings prompt message {prompt_message_id}: {delete_prompt_err}")
 
 # --- Helper function to ask for leech type (normal/zip/unzip) ---
 async def ask_leech_type(client, chat_id, mode_name, reply_to_message_id=None):
@@ -113,11 +517,15 @@ async def ask_filename_option(client, chat_id, service_name):
     await client.send_message(chat_id, f"🏷️ For {service_name}, extract filenames automatically from URLs?", reply_markup=keyboard)
 
 # --- Helper function to ask for manual filenames ---
-async def ask_manual_filenames(client, chat_id, service_name, count):
-    global reply_prompt_message_id
+async def ask_manual_filenames(client, chat_id, service_name, count, user_id=None, source_links=None):
     log.info(f"Asking for {count} manual filenames for {service_name}")
     prompt_msg = await client.send_message(chat_id, f"📝 Okay, **reply to this message** with the {count} filename(s) for {service_name}, one per line.")
-    reply_prompt_message_id = prompt_msg.id # Store prompt ID
+    await _set_filename_reply_waiting(
+        user_id=user_id if user_id is not None else chat_id,
+        prompt_message_id=prompt_msg.id,
+        service_type=service_name,
+        source_links=list(source_links or []),
+    )
 
 # --- Helper function to ask for upload destination (Google Drive or Local Mirror) ---
 async def ask_upload_destination(client, chat_id):
@@ -314,7 +722,7 @@ async def start(client, message):
 
 @colab_bot.on_message(filters.command("tupload") & filters.private)
 async def telegram_upload(client, message):
-    global BOT, src_request_msg, user_tasks
+    global BOT, user_tasks
     user_id = message.from_user.id
     log.info(f"Received /tupload from {user_id}")
 
@@ -462,7 +870,7 @@ async def drive_upload(client, message):
 
 @colab_bot.on_message(filters.command("drupload") & filters.private)
 async def directory_upload(client, message):
-    global BOT, src_request_msg, user_tasks
+    global BOT, user_tasks
     user_id = message.from_user.id
     log.info(f"Received /drupload from {user_id}")
 
@@ -541,7 +949,7 @@ async def directory_upload(client, message):
 
 @colab_bot.on_message(filters.command("ytupload") & filters.private)
 async def yt_upload(client, message):
-    global BOT, src_request_msg, user_tasks
+    global BOT, user_tasks
     user_id = message.from_user.id
     log.info(f"Received /ytupload from {user_id}")
 
@@ -605,7 +1013,7 @@ async def yt_upload(client, message):
 
 @colab_bot.on_message(filters.command("igupload") & filters.private)
 async def instagram_upload(client, message):
-    global BOT, src_request_msg, user_tasks
+    global BOT, user_tasks
     user_id = message.from_user.id
     log.info(f"Received /igupload from {user_id}")
 
@@ -749,35 +1157,28 @@ async def settings(client, message):
 # --- Reply Handler: Simplified for filenames only ---
 @colab_bot.on_message(filters.reply & filters.private)
 async def handle_reply(client: Client, message: Message):
-    """
-    Handle user replies for filename selection.
+    """Handle user replies for filename selection and other prompt-driven inputs."""
+    global BOT
+    user_id = _extract_user_id(message)
+    log.debug(f"Received reply (ID: {message.id}) from user {user_id}")
 
-    ⚠️ KNOWN LIMITATION - Multi-User Collision Risk:
-    This handler uses GLOBAL state (BOT.SOURCE, BOT.State.expecting_*_filenames).
-    If User A sends an NZB link (setting BOT.SOURCE), then User B sends a link
-    immediately after (overwriting BOT.SOURCE), when User A replies with filenames,
-    the bot may use User B's source data, causing:
-      - Wrong source count validation
-      - Tasks to fail or download wrong files
-      - Users accidentally hijacking each other's tasks
+    filename_ctx = await _get_filename_reply_waiting(user_id)
+    filename_prompt_id = filename_ctx.get("prompt_message_id") if filename_ctx else None
+    password_ctx = await get_password_reply_waiting(user_id)
+    password_prompt_id = password_ctx.get("prompt_message_id") if password_ctx else None
+    settings_ctx = await _get_settings_reply_waiting(user_id)
+    settings_prompt_id = settings_ctx.get("prompt_message_id") if settings_ctx else None
+    valid_prompt_ids = {
+        prompt_id
+        for prompt_id in (filename_prompt_id, password_prompt_id, settings_prompt_id)
+        if prompt_id
+    }
 
-    IMPACT: Task SETUP phase is NOT multi-user safe, though EXECUTION is parallel-safe.
-
-    TODO: Refactor to use per-user state dict instead of global BOT state.
-          This requires tracking user_id → {source, expecting_filenames, etc.}
-
-    For now: This is acceptable if bot doesn't expect high concurrent usage during
-    the filename selection phase. Once tasks are created and in TASK_QUEUE, they
-    are properly isolated.
-    """
-    global BOT, reply_prompt_message_id, src_request_msg # Declare globals used
-    log = logging.getLogger(__name__) # Ensure logger access
-    log.debug(f"Received reply (ID: {message.id}) from user {message.from_user.id}")
-
-    # Check if the reply is for the expected prompt message ID (check both local and BOT.State)
-    expected_msg_id = reply_prompt_message_id or BOT.State.reply_prompt_msg_id
-    if not expected_msg_id or not message.reply_to_message_id or message.reply_to_message_id != expected_msg_id:
-        log.debug(f"Reply (ID: {message.id}) is not for the expected prompt message ID ({expected_msg_id}). Ignoring.")
+    if not valid_prompt_ids or not message.reply_to_message_id or message.reply_to_message_id not in valid_prompt_ids:
+        log.debug(
+            f"Reply (ID: {message.id}) is not for expected prompts "
+            f"{sorted(valid_prompt_ids) if valid_prompt_ids else []}. Ignoring."
+        )
         return
 
     # Try to get the original prompt message (optional, for deletion/context)
@@ -789,67 +1190,58 @@ async def handle_reply(client: Client, message: Message):
         log.warning(f"Could not get original prompt message {message.reply_to_message_id}: {get_err}")
 
     state_handled = False
-    mode_name = "" # Initialize mode_name
-    current_service = BOT.Options.service_type # Get selected service
+    handled_filename_reply = False
+    handled_password_reply = False
+    handled_settings_reply = False
 
     try:
-        # --- Handle Filename Replies ---
-        # Check if we are expecting filenames for any supported service
-        expecting_filenames_now = (current_service == "nzbcloud" and BOT.State.expecting_nzb_filenames) or \
-                                  (current_service == "Debrid" and BOT.State.expecting_Debrid_filenames) or \
-                                  (current_service == "bitso" and BOT.State.expecting_bitso_filenames)
+        # --- Handle per-user filename replies ---
+        if filename_ctx and message.reply_to_message_id == filename_prompt_id:
+            current_service = _normalize_filename_service(filename_ctx.get("service_type"))
+            expected_count = filename_ctx.get("expected_count", 0)
+            source_links = filename_ctx.get("source_links", [])
 
-        if expecting_filenames_now:
-            log.info(f"Processing filename reply for service: {current_service}...")
-            user_input = message.text.strip() if message.text else "" # Ensure text exists
-            expected_count = len(BOT.SOURCE) # Determine expected count *once*
-
-            # <<< --- START LOGGING (Expected Count) --- >>>
-            log.debug(f"HANDLE_REPLY: Expecting {expected_count} filenames based on BOT.SOURCE.")
-            log.debug(f"HANDLE_REPLY: BOT.SOURCE content (first 5): {BOT.SOURCE[:5] if BOT.SOURCE else '[]'}")
-            # <<< --- END LOGGING --- >>>
+            log.info(f"Processing filename reply for service: {current_service} (user={user_id})")
+            user_input = message.text.strip() if message.text else ""
+            log.debug(f"HANDLE_REPLY: Expecting {expected_count} filenames from per-user prompt state.")
 
             filenames_to_use = []
             input_processed = False
 
-            # Check if the input looks like a supported URL for filenames
             is_potential_url = False
-            if user_input.lower().startswith(('http://', 'https://')):
-                # Basic check, fetch_filenames_from_url will do a more specific check
-                if ("pastebin.com" in user_input or "gist.githubusercontent.com" in user_input or
-                    "rentry.co" in user_input or user_input.lower().endswith(".txt")):
-                      is_potential_url = True
+            if user_input.lower().startswith(("http://", "https://")):
+                if (
+                    "pastebin.com" in user_input
+                    or "gist.githubusercontent.com" in user_input
+                    or "rentry.co" in user_input
+                    or user_input.lower().endswith(".txt")
+                ):
+                    is_potential_url = True
 
-            # --- Process URL Input ---
             if is_potential_url:
                 log.info(f"Detected potential filename URL: {user_input}")
-                # fetch_filenames_from_url now returns raw, stripped lines
                 raw_lines_list = await fetch_filenames_from_url(user_input)
-
-                # Get counts for comparison
                 fetched_count = len(raw_lines_list) if raw_lines_list is not None else -1
-
-                # <<< --- START LOGGING (URL) --- >>>
-                log.debug(f"HANDLE_REPLY (URL): Raw lines fetched from URL: {raw_lines_list}")
-                log.debug(f"HANDLE_REPLY (URL): Comparing Counts -> Fetched: {fetched_count}, Expected: {expected_count}")
-                # <<< --- END LOGGING --- >>>
+                log.debug(
+                    f"HANDLE_REPLY (URL): Comparing Counts -> Fetched: {fetched_count}, Expected: {expected_count}"
+                )
 
                 if raw_lines_list is None:
-                    # Fetching failed
-                    await message.reply_text(f"❌ Failed to fetch filenames from the provided URL or it's unsupported. Please provide a direct reply or a valid raw link (Gist/Pastebin/Rentry/.txt).", quote=True)
+                    await message.reply_text(
+                        "Error: Failed to fetch filenames from the provided URL or it's unsupported. "
+                        "Please provide a direct reply or a valid raw link (Gist/Pastebin/Rentry/.txt).",
+                        quote=True,
+                    )
                     log.warning(f"fetch_filenames_from_url returned None for: {user_input}")
-                    # Keep expecting reply (don't set state_handled=True)
-
                 elif fetched_count != expected_count:
-                    # Count mismatch based on raw lines
                     log.warning("Raw filename line count mismatch.")
-                    await message.reply_text(f"❌ Found {fetched_count} non-empty lines in the URL, but expected {expected_count} filenames (matching the number of links). Please check the file content and reply again.", quote=True)
-                    # Keep expecting reply (don't set state_handled=True)
-
+                    await message.reply_text(
+                        f"Error: Found {fetched_count} non-empty lines in the URL, but expected {expected_count} filenames "
+                        "(matching the number of links). Please check the file content and reply again.",
+                        quote=True,
+                    )
                 else:
-                    # Counts match! Now clean and style the raw lines
                     log.info(f"Raw line count matches expected count ({expected_count}). Cleaning/styling filenames...")
-                    filenames_to_use = []
                     all_valid_after_cleaning = True
                     for i, raw_line in enumerate(raw_lines_list):
                         cleaned = clean_filename(raw_line)
@@ -857,132 +1249,129 @@ async def handle_reply(client: Client, message: Message):
                             styled = apply_dot_style(cleaned)
                             filenames_to_use.append(styled)
                         else:
-                            log.warning(f"Filename at line {i+1} ('{raw_line[:50]}...') became invalid after cleaning. Aborting.")
-                            await message.reply_text(f"❌ Filename at line {i+1} ('{raw_line[:50]}...') is invalid after cleaning. Please check your list and reply again.", quote=True)
+                            log.warning(
+                                f"Filename at line {i + 1} ('{raw_line[:50]}...') became invalid after cleaning. Aborting."
+                            )
+                            await message.reply_text(
+                                f"Error: Filename at line {i + 1} ('{raw_line[:50]}...') is invalid after cleaning. "
+                                "Please check your list and reply again.",
+                                quote=True,
+                            )
                             all_valid_after_cleaning = False
-                            break # Stop processing if any filename is invalid
+                            break
 
                     if all_valid_after_cleaning:
-                        # Success! All filenames cleaned successfully
-                        BOT.Options.filenames = filenames_to_use # Store the final cleaned list
                         input_processed = True
                         log.info(f"Successfully cleaned and stored {len(filenames_to_use)} filenames from URL.")
-                    # Else (all_valid_after_cleaning is False): Error message already sent, loop broken.
-
-            # --- Process Direct Text Input ---
             else:
                 log.info("Processing input as direct filename list.")
                 filenames_raw = [fn.strip() for fn in user_input.splitlines() if fn.strip()]
-                fetched_count = len(filenames_raw) # Get count of non-empty raw lines
-
-                # <<< --- START LOGGING (Direct) --- >>>
-                log.debug(f"HANDLE_REPLY (Direct): Raw lines from input: {filenames_raw}")
-                log.debug(f"HANDLE_REPLY (Direct): Comparing Counts -> Fetched: {fetched_count}, Expected: {expected_count}")
-                # <<< --- END LOGGING --- >>>
+                fetched_count = len(filenames_raw)
+                log.debug(
+                    f"HANDLE_REPLY (Direct): Comparing Counts -> Fetched: {fetched_count}, Expected: {expected_count}"
+                )
 
                 if fetched_count != expected_count:
-                     # Count mismatch based on direct input lines
-                     log.warning("Filename count mismatch (direct input).")
-                     await message.reply_text(f"❌ Expected {expected_count} filenames, but got {fetched_count}. Reply again with the correct number of filenames.", quote=True)
-                     # Keep expecting reply (don't set state_handled=True)
+                    log.warning("Filename count mismatch (direct input).")
+                    await message.reply_text(
+                        f"Error: Expected {expected_count} filenames, but got {fetched_count}. "
+                        "Reply again with the correct number of filenames.",
+                        quote=True,
+                    )
                 else:
-                     # Counts match! Now clean and style the raw lines
-                     log.info(f"Direct input count matches expected count ({expected_count}). Cleaning/styling filenames...")
-                     filenames_to_use = []
-                     all_valid_after_cleaning = True
-                     for i, raw_line in enumerate(filenames_raw):
-                         cleaned = clean_filename(raw_line)
-                         if cleaned:
-                             styled = apply_dot_style(cleaned)
-                             filenames_to_use.append(styled)
-                         else:
-                             log.warning(f"Direct filename at line {i+1} ('{raw_line[:50]}...') became invalid after cleaning. Aborting.")
-                             await message.reply_text(f"❌ Filename at line {i+1} ('{raw_line[:50]}...') is invalid after cleaning. Please check your input and reply again.", quote=True)
-                             all_valid_after_cleaning = False
-                             break # Stop processing if any filename is invalid
+                    log.info(f"Direct input count matches expected count ({expected_count}). Cleaning/styling filenames...")
+                    all_valid_after_cleaning = True
+                    for i, raw_line in enumerate(filenames_raw):
+                        cleaned = clean_filename(raw_line)
+                        if cleaned:
+                            styled = apply_dot_style(cleaned)
+                            filenames_to_use.append(styled)
+                        else:
+                            log.warning(
+                                f"Direct filename at line {i + 1} ('{raw_line[:50]}...') became invalid after cleaning. Aborting."
+                            )
+                            await message.reply_text(
+                                f"Error: Filename at line {i + 1} ('{raw_line[:50]}...') is invalid after cleaning. "
+                                "Please check your input and reply again.",
+                                quote=True,
+                            )
+                            all_valid_after_cleaning = False
+                            break
 
-                     if all_valid_after_cleaning:
-                          # Success! All filenames cleaned successfully
-                          BOT.Options.filenames = filenames_to_use # Store the final cleaned list
-                          input_processed = True
-                          log.info(f"Successfully cleaned and stored {len(filenames_to_use)} filenames from direct input.")
+                    if all_valid_after_cleaning:
+                        input_processed = True
+                        log.info(f"Successfully cleaned and stored {len(filenames_to_use)} filenames from direct input.")
 
-            # --- Post-processing (only if input_processed is True) ---
             if input_processed:
-                state_handled = True
-                # Reset specific state and get mode name
-                if current_service == "nzbcloud": BOT.State.expecting_nzb_filenames = False; mode_name = "NZBCloud"
-                elif current_service == "Debrid": BOT.State.expecting_Debrid_filenames = False; mode_name = "DebridLeech"
-                elif current_service == "bitso": BOT.State.expecting_bitso_filenames = False; mode_name = "bitso"
+                await _update_setup_session(
+                    user_id,
+                    source_links=source_links,
+                    service_type=current_service,
+                    filenames=filenames_to_use,
+                )
+                mode_name = _filename_mode_label(current_service)
                 log.info(f"Received valid filenames for {mode_name} ({'URL' if is_potential_url else 'Direct'}).")
 
-                # Try deleting the original prompt message if obtained
-                if original_prompt_msg:
-                    try: await original_prompt_msg.delete()
-                    except Exception as del_err: log.warning(f"Could not delete original prompt: {del_err}")
-
-                # Filenames received, now ask for leech type (normal/zip/unzip)
-                # Make sure ask_leech_type is correctly imported/defined
+                state_handled = True
+                handled_filename_reply = True
                 await ask_leech_type(client, message.chat.id, BOT.Mode.mode)
 
-
-        # --- Handle Prefix/Suffix replies ---
-        elif BOT.State.prefix:
-            log.info("Processing prefix reply...")
-            BOT.Setting.prefix = message.text.strip() if message.text else "" # Strip whitespace
-            BOT.State.prefix = False
+        # --- Handle Settings Prefix/Suffix replies ---
+        elif settings_ctx and message.reply_to_message_id == settings_prompt_id:
+            setting_key = settings_ctx.get("setting_key")
+            new_value = message.text.strip() if message.text else ""
+            if new_value == "-":
+                new_value = ""
+            settings_message_id = settings_ctx.get("settings_message_id")
             state_handled = True
-            # Try sending updated settings if original prompt message exists
-            if original_prompt_msg:
-                try:
-                    # Make sure send_settings is correctly imported/defined
-                    await send_settings(client, original_prompt_msg, original_prompt_msg.id, False)
-                except Exception as send_err:
-                    log.error(f"Failed to send settings after prefix: {send_err}")
-                    await message.reply_text("Prefix set!") # Fallback confirmation
+            handled_settings_reply = True
+
+            if setting_key == "prefix":
+                log.info(f"Processing prefix reply (user={user_id})...")
+                BOT.Setting.prefix = new_value
+            elif setting_key == "suffix":
+                log.info(f"Processing suffix reply (user={user_id})...")
+                BOT.Setting.suffix = new_value
             else:
-                await message.reply_text("Prefix set!") # Fallback confirmation
+                log.warning(f"Unknown settings reply key '{setting_key}' for user {user_id}")
+                await message.reply_text("Error: Unknown settings reply type.", quote=True)
+                return
 
-
-        elif BOT.State.suffix:
-            log.info("Processing suffix reply...")
-            BOT.Setting.suffix = message.text.strip() if message.text else "" # Strip whitespace
-            BOT.State.suffix = False
-            state_handled = True
-            # Try sending updated settings if original prompt message exists
-            if original_prompt_msg:
+            if settings_message_id:
                 try:
-                    # Make sure send_settings is correctly imported/defined
-                    await send_settings(client, original_prompt_msg, original_prompt_msg.id, False)
+                    settings_msg = await client.get_messages(message.chat.id, settings_message_id)
+                    if settings_msg:
+                        await send_settings(client, settings_msg, settings_message_id, False)
+                    else:
+                        await message.reply_text(f"{setting_key.title()} set!")
                 except Exception as send_err:
-                    log.error(f"Failed to send settings after suffix: {send_err}")
-                    await message.reply_text("Suffix set!") # Fallback confirmation
+                    log.error(f"Failed to refresh settings after {setting_key}: {send_err}")
+                    await message.reply_text(f"{setting_key.title()} set!")
             else:
-                await message.reply_text("Suffix set!") # Fallback confirmation
+                await message.reply_text(f"{setting_key.title()} set!")
 
-        elif BOT.State.password_waiting:
+        elif password_ctx and message.reply_to_message_id == password_prompt_id:
             log.info("Processing password reply for archive extraction...")
             user_password = message.text.strip() if message.text else ""
 
             if not user_password:
-                await message.reply_text("❌ Password cannot be empty. Please reply with a valid password.", quote=True)
+                await message.reply_text("Error: Password cannot be empty. Please reply with a valid password.", quote=True)
                 return  # Keep waiting for valid password
 
             # Get the extraction context
-            retry_ctx = BOT.State.password_retry_context
+            retry_ctx = password_ctx.get("retry_context")
             if not retry_ctx:
                 log.error("Password reply received but no retry context found!")
-                await message.reply_text("❌ Error: Extraction context lost. Please restart the download.", quote=True)
-                BOT.State.password_waiting = False
+                await message.reply_text("Error: Extraction context lost. Please restart the download.", quote=True)
                 state_handled = True
+                handled_password_reply = True
                 return
 
-            # Reset waiting state
-            BOT.State.password_waiting = False
             state_handled = True
+            handled_password_reply = True
 
             # Send confirmation message
-            status_msg = await message.reply_text("🔐 Password received. Retrying extraction...", quote=True)
+            status_msg = await message.reply_text("Password received. Retrying extraction...", quote=True)
 
             try:
                 # Import converters to access extract functions
@@ -1026,37 +1415,42 @@ async def handle_reply(client: Client, message: Message):
                         task_ctx=retry_ctx.get('task_ctx')
                     )
 
-                # Clear the retry context
-                BOT.State.password_retry_context = None
-
                 if success:
-                    await status_msg.edit_text("✅ Extraction completed successfully with the provided password!")
+                    await status_msg.edit_text("Extraction completed successfully with the provided password!")
                     log.info("Password-protected extraction succeeded.")
                 else:
-                    await status_msg.edit_text("❌ Extraction failed. The password might be incorrect or there's another issue. Check logs for details.")
+                    await status_msg.edit_text("Extraction failed. The password might be incorrect or there's another issue. Check logs for details.")
                     log.error("Password-protected extraction failed even with user-provided password.")
 
             except Exception as extract_err:
                 log.error(f"Error during password-retry extraction: {extract_err}", exc_info=True)
-                await status_msg.edit_text(f"❌ Error during extraction: {str(extract_err)[:100]}")
-                BOT.State.password_retry_context = None
+                await status_msg.edit_text(f"Error during extraction: {str(extract_err)[:100]}")
 
         else:
-            # This case should ideally not be reached if the prompt ID check works
-            log.warning(f"Received reply (for msg {reply_prompt_message_id}) but no matching state active. Ignoring.")
+            log.warning(
+                f"Received reply for prompt {message.reply_to_message_id} but no matching active reply state was found."
+            )
 
     except Exception as e:
         log.error(f"Error processing reply: {e}", exc_info=True)
         # Inform user about the error
-        try: await message.reply_text(f"⚠️ Error processing your reply: {e}", quote=True)
-        except Exception: pass # Ignore if sending error fails
+        try:
+            await message.reply_text(f"Error processing your reply: {e}", quote=True)
+        except Exception as reply_err:
+            log.debug(f"Could not send reply-processing error message: {reply_err}")
 
     finally:
         # --- Final cleanup inside handle_reply ---
         if state_handled:
-            log.debug(f"State handled for reply {message.id}. Resetting prompt ID.")
-            reply_prompt_message_id = None # Reset prompt ID as it's been handled
-            BOT.State.reply_prompt_msg_id = None  # Also reset shared state
+            log.debug(f"State handled for reply {message.id}. Resetting prompt state.")
+            if handled_filename_reply:
+                await _clear_filename_reply_waiting(client, message.chat.id, user_id)
+            elif handled_password_reply:
+                await _clear_password_reply_prompt(client, user_id)
+            elif handled_settings_reply:
+                await _clear_settings_reply_waiting(client, message.chat.id, user_id)
+            else:
+                await _clear_settings_reply_waiting(client, message.chat.id, user_id)
             try:
                 # Check if message exists before deleting
                 if message: await message.delete() # Delete user's reply
@@ -1064,7 +1458,7 @@ async def handle_reply(client: Client, message: Message):
                  log.warning(f"Could not delete user reply message {message.id if message else 'N/A'}: {del_err}")
         else:
             # Only log if we were actually expecting a reply (prompt ID was set)
-            expected_msg_id = reply_prompt_message_id or BOT.State.reply_prompt_msg_id
+            expected_msg_id = filename_prompt_id or password_prompt_id or settings_prompt_id
             if expected_msg_id == message.reply_to_message_id:
                  log.debug(f"State not handled for reply {message.id}. Prompt ID {expected_msg_id} remains active.")
             # No need to log if the reply wasn't for our prompt anyway
@@ -1185,14 +1579,16 @@ async def ask_service_type(client, message):
      except Exception as e:
           log.error(f"Failed to ask service type: {e}", exc_info=True)
           # Try sending error message to owner as fallback
-          try: await client.send_message(OWNER, f"⚠️ Error asking service type: {e}")
-          except Exception: pass
+          try:
+              await client.send_message(OWNER, f"⚠️ Error asking service type: {e}")
+          except Exception as owner_notify_err:
+              log.debug(f"Could not notify owner about service-type error: {owner_notify_err}")
 # --- End ask_service_type function ---
 
 # --- Replace the entire handle_url function ---
 @colab_bot.on_message(filters.create(isLink) & ~filters.photo & filters.private)
 async def handle_url(client: Client, message: Message):
-    global BOT, src_request_msg, reply_prompt_message_id, user_tasks
+    global BOT, user_tasks
     user_id = message.from_user.id
 
     # === NEW: Check for Parallel Task Mode First ===
@@ -1211,8 +1607,8 @@ async def handle_url(client: Client, message: Message):
             if task_ctx.status_msg:
                 try:
                     await task_ctx.status_msg.delete()
-                except Exception:
-                    pass
+                except Exception as delete_prompt_err:
+                    log.debug(f"Could not delete TikTok prompt message: {delete_prompt_err}")
 
             try:
                 # Get Gist URL from message
@@ -1274,8 +1670,8 @@ async def handle_url(client: Client, message: Message):
                     async def _safe_edit(text):
                         try:
                             await status_msg.edit_text(text)
-                        except Exception:
-                            pass  # Message may be deleted/invalid after cancellation
+                        except Exception as cancelled_edit_err:
+                            log.debug(f"Could not edit cancelled status message: {cancelled_edit_err}")
 
                     for part_num, batch_urls in enumerate(batches, 1):
                         # Stop if task was cancelled externally
@@ -1408,8 +1804,8 @@ async def handle_url(client: Client, message: Message):
                         f"Error: {str(e)[:200]}\n\n"
                         f"Please try again or contact support."
                     )
-                except:
-                    pass
+                except Exception as notify_err:
+                    log.warning(f"Failed to send TikTok bulk error reply: {notify_err}")
 
             return  # Exit after TikTok bulk processing
         # === END TIKTOK BULK DOWNLOAD HANDLING ===
@@ -1477,51 +1873,15 @@ async def handle_url(client: Client, message: Message):
             )
             task_ctx.status_msg = processing_msg
 
-            # Copy necessary state from global BOT to task context
-            # (taskScheduler expects these in BOT structure)
-            # Determine ytdl flag based on service type
-            is_ytdl = task_ctx.service_type == "ytdl"
-
-            task_ctx.bot = type('obj', (object,), {
-                'Mode': type('obj', (object,), {
-                    'mode': task_ctx.mode,
-                    'ytdl': is_ytdl,
-                    'type': task_ctx.mode_type
-                })(),
-                'Options': type('obj', (object,), {
-                    'service_type': task_ctx.service_type,
-                    'filenames': [],
-                    'custom_name': BOT.Options.custom_name if hasattr(BOT.Options, 'custom_name') else '',
-                    'zip_pswd': BOT.Options.zip_pswd if hasattr(BOT.Options, 'zip_pswd') else '',
-                    'unzip_pswd': BOT.Options.unzip_pswd if hasattr(BOT.Options, 'unzip_pswd') else '',
-                    'archive_format': BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else '7z'
-                })(),
-                'SOURCE': [input_text],  # Raw source input
-                'Setting': BOT.Setting  # Share global settings
-            })()
-
-            # Create isolated paths and message objects
-            task_ctx.paths = type('obj', (object,), {
-                'down_path': task_ctx.down_path,
-                'work_path': task_ctx.work_path,
-                'WORK_PATH': task_ctx.work_path,  # Required by task_manager.py:659
-                'temp_zpath': f"{task_ctx.work_path}/temp_zip",
-                'temp_unzip': f"{task_ctx.work_path}/temp_unzip",
-                'temp_unzip_path': f"{task_ctx.work_path}/temp_unzip",  # Required by task_manager.py:1130
-                'temp_dirleech_path': f"{task_ctx.work_path}/dir_leech_temp",  # Required by task_manager.py:619,960,1462
-                'temp_files_dir': f"{task_ctx.work_path}/leech_temp",  # May be needed
-                'thumbnail_ytdl': f"{task_ctx.work_path}/ytdl_thumbnails",  # May be needed
-                'HERO_IMAGE': task_ctx.hero_image,  # Required by task_manager.py:666
-                'THMB_PATH': Paths.THMB_PATH,  # Required by task_manager.py:768 - use global thumbnail
-                'DEFAULT_HERO': Paths.DEFAULT_HERO,  # Required by task_manager.py:739 - fallback thumbnail
-                'VIDEO_FRAME': f"{task_ctx.work_path}/video_frame.jpg"  # May be needed
-            })()
-
-            task_ctx.msg = type('obj', (object,), {
-                'status_msg': task_ctx.status_msg
-            })()
-
-            task_ctx.messages = task_ctx.messages  # Already exists in TaskContext
+            _prepare_task_context(
+                task_ctx=task_ctx,
+                source_links=[input_text],
+                filenames=task_ctx.filenames,
+                custom_name=BOT.Options.custom_name if hasattr(BOT.Options, 'custom_name') else '',
+                zip_pswd=BOT.Options.zip_pswd if hasattr(BOT.Options, 'zip_pswd') else '',
+                unzip_pswd=BOT.Options.unzip_pswd if hasattr(BOT.Options, 'unzip_pswd') else '',
+                archive_format=BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else '7z',
+            )
 
             # Launch task in parallel (NON-BLOCKING!)
             # Tracked background task to prevent leaks
@@ -1531,16 +1891,7 @@ async def handle_url(client: Client, message: Message):
             )
             task_ctx.async_task = async_task
 
-            # Add exception handler for background task
-            def handle_task_exception(task):
-                try:
-                    task.result()  # Raises if task had unhandled exception
-                except asyncio.CancelledError:
-                    log.info(f"Task {task_ctx.get_short_id()} was cancelled")
-                except Exception as e:
-                    log.exception(f"Unhandled exception in background task {task_ctx.get_short_id()}: {e}")
-
-            async_task.add_done_callback(handle_task_exception)
+            _attach_task_exception_handler(async_task, task_ctx)
 
             log.info(f"Launched parallel task {task_ctx.get_short_id()} - returning immediately!")
 
@@ -1556,8 +1907,9 @@ async def handle_url(client: Client, message: Message):
 
     # --- Initial State Checks ---
     # Handle extract waiting state FIRST (before command check)
-    if BOT.State.extract_waiting:
-        log.info(f"extract_waiting=True, processing path input: {message.text[:50] if message.text else 'None'}...")
+    extract_user_id = _extract_user_id(message)
+    if await _is_extract_waiting(extract_user_id):
+        log.info(f"extract_waiting=True for user {extract_user_id}, processing path input: {message.text[:50] if message.text else 'None'}...")
         await _handle_extract_input(client, message)
         return
 
@@ -1572,79 +1924,80 @@ async def handle_url(client: Client, message: Message):
             log.debug("handle_url: Ignoring command message.")
             raise ContinuePropagation
 
-    # Ignore if expecting filenames or waiting for mindvalley URLs
-    if BOT.State.expecting_nzb_filenames or \
-       BOT.State.expecting_Debrid_filenames or \
-       BOT.State.expecting_bitso_filenames or \
-       BOT.State.mindvalley_waiting:
+    # Ignore if waiting for per-user filename reply or waiting for mindvalley/NZB URLs
+    if (
+        await _is_filename_reply_waiting(user_id)
+        or await _is_mindvalley_waiting(user_id)
+        or await _is_nzb_waiting(user_id)
+    ):
         log.debug("handle_url: Ignoring link/path message - waiting for other input.")
         raise ContinuePropagation
 
-    # Allow only owner input if task is started but not yet running
-    if BOT.State.started and not BOT.State.task_going and user_id != OWNER:
-        await message.reply_text("Bot is waiting for owner input.")
-        return
-
-    # Ignore if another task is actively running
-    if BOT.State.task_going:
-        log.warning("Task going, ignoring link/path in handle_url.")
-        await message.reply_text("<i>🚨 Already working!</i>")
-        return
-
-    # Ignore if no task command was initiated
-    if not BOT.State.started:
+    setup_session = await _get_setup_session(user_id)
+    if not setup_session:
         log.warning("Task not started by command, ignoring link/path in handle_url.")
         await message.reply_text("<i>Start task with /tupload, /gdupload, or /drupload first.</i>")
         return
     # --- End Initial State Checks ---
 
-
-    log.info(f"Handling URL/Path message from user {user_id}. Current Mode: {BOT.Mode.mode}")
+    active_mode = (setup_session.get("mode") if setup_session else None) or BOT.Mode.mode
+    log.info(f"Handling URL/Path message from user {user_id}. Current Mode: {active_mode}")
     # Save currently set options (from /setname, /zippswd, /archivetype, etc.) before processing new input
     saved_custom_name = BOT.Options.custom_name
     saved_zip_pswd = BOT.Options.zip_pswd
     saved_unzip_pswd = BOT.Options.unzip_pswd
     saved_archive_format = BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else '7z'
-    # Reset only filenames and service_type (these are per-request, not persistent)
-    BOT.Options.filenames = []; BOT.Options.service_type = None
 
-    # Delete the initial prompt message ("Send Me THEM LINK(s)...")
-    if src_request_msg:
-        try: await src_request_msg.delete(); src_request_msg = None
-        except Exception as del_err: log.warning(f"Could not delete source request prompt: {del_err}"); src_request_msg = None
+    # Delete the initial source prompt message for this user.
+    await _clear_source_waiting(client, user_id)
 
     try:
         input_text = message.text.strip() if message.text else ""
         if not input_text:
-             await message.reply_text("❌ Input cannot be empty."); BOT.State.started = False; return
+             await message.reply_text("❌ Input cannot be empty."); await _clear_setup_session(user_id); return
+
+        current_service_type = setup_session.get("service_type") if setup_session else None
+        current_filenames = list(setup_session.get("filenames", [])) if setup_session else []
+        current_mode = active_mode
 
         # --- === Handle Directory Leech Path === ---
-        if BOT.Mode.mode == "dir-leech":
+        if current_mode == "dir-leech":
             log.info(f"Processing input as directory path for dir-leech: '{input_text}'")
             # Check if path exists
             if not os.path.exists(input_text):
                  log.error(f"Dir-leech path does not exist: {input_text}")
                  await message.reply_text(f"❌ Path not found or invalid: `{input_text}`")
-                 BOT.State.started = False # Reset state as input was invalid
+                 await _clear_setup_session(user_id)
                  return
 
-            # Path is valid, store it
-            BOT.SOURCE = [input_text]
-            BOT.Options.service_type = "local" # Confirm service type
-            log.info(f"Stored valid path for dir-leech. Source: {BOT.SOURCE}")
+            source_links = [input_text]
+            current_service_type = "local"
+            current_filenames = []
+            await _update_setup_session(
+                user_id,
+                mode=current_mode,
+                source_links=source_links,
+                service_type=current_service_type,
+                filenames=current_filenames,
+                custom_name=saved_custom_name,
+                zip_pswd=saved_zip_pswd,
+                unzip_pswd=saved_unzip_pswd,
+                archive_format=saved_archive_format,
+            )
+            log.info(f"Stored valid path for dir-leech. Source: {source_links}")
 
             # Dir-leech doesn't need service selection, proceed to leech type selection
-            await ask_leech_type(client, message.chat.id, BOT.Mode.mode) # Ask normal/zip/unzip
+            await ask_leech_type(client, message.chat.id, current_mode) # Ask normal/zip/unzip
             # The task will be scheduled after leech type is selected via callback
 
         # --- === Handle Normal Link Processing (Leech/Mirror Modes) === ---
         else:
             log.info("Processing input as URL(s) for leech/mirror mode...")
             urls = []
+            parsed_links = None
             extracted_args = {"custom_name": "", "zip_pswd": "", "unzip_pswd": ""}
 
             # Try fetching external links first
-            parsed_links = None
             try: parsed_links = await fetch_links_from_url(input_text) # Ensure fetch_links_from_url is imported
             except Exception as fetch_err: log.error(f"Error during fetch_links_from_url call: {fetch_err}", exc_info=True)
 
@@ -1652,12 +2005,13 @@ async def handle_url(client: Client, message: Message):
                 if not parsed_links:
                      log.warning(f"External URL '{input_text}' contained no valid links.")
                      await message.reply_text(f"❌ Found 0 valid links in the provided URL: {input_text}")
-                     BOT.State.started = False; return
+                     await _clear_setup_session(user_id)
+                     return
                 log.info(f"Using {len(parsed_links)} links fetched from external URL: {input_text}")
                 urls = parsed_links
 
                 # Check if service_type was pre-selected (e.g., via /nzbcloud command)
-                service_already_selected = BOT.Options.service_type is not None
+                service_already_selected = current_service_type is not None
 
                 # AUTO-DETECT service type based on fetched links (only if not already selected)
                 if urls and len(urls) > 0 and not service_already_selected:
@@ -1668,19 +2022,19 @@ async def handle_url(client: Client, message: Message):
 
                     if all_nzbcloud:
                         log.info(f"🔍 AUTO-DETECTED: All {len(urls)} links are from NZBcloud, setting service_type to 'nzbcloud'")
-                        BOT.Options.service_type = "nzbcloud"
+                        current_service_type = "nzbcloud"
                     elif all_instagram:
                         log.info(f"🔍 AUTO-DETECTED: All {len(urls)} links are from Instagram, setting service_type to 'direct' (Instagram auto-handled)")
-                        BOT.Options.service_type = "direct"
+                        current_service_type = "direct"
                     elif all_m3u8:
                         log.info(f"🔍 AUTO-DETECTED: All {len(urls)} links are M3U8/Mindvalley, setting service_type to 'mindvalley'")
-                        BOT.Options.service_type = "mindvalley"
-                        BOT.State.mindvalley_waiting = True
+                        current_service_type = "mindvalley"
+                        await _set_mindvalley_waiting(user_id, True)
                     else:
                         log.info(f"Mixed or unrecognized link types, will ask for service selection")
 
                 # If service is NZBcloud (auto-detected OR pre-selected), extract TITLE= filenames
-                if BOT.Options.service_type == "nzbcloud":
+                if current_service_type == "nzbcloud":
                     try:
                         log.info(f"Parsing TITLE= filenames from gist URL for NZBcloud: {input_text}")
                         filenames_from_gist = await fetch_filenames_from_url(input_text)
@@ -1695,17 +2049,17 @@ async def handle_url(client: Client, message: Message):
                                         log.debug(f"Extracted filename: {filename}")
 
                             if len(parsed_filenames) == len(urls):
-                                BOT.Options.filenames = parsed_filenames
+                                current_filenames = parsed_filenames
                                 log.info(f"✅ Extracted {len(parsed_filenames)} filenames from TITLE= lines")
                             else:
                                 log.warning(f"Filename count mismatch: {len(parsed_filenames)} filenames vs {len(urls)} URLs")
-                                BOT.Options.filenames = []
+                                current_filenames = []
                         else:
                             log.warning("Could not fetch content from gist for filename extraction")
-                            BOT.Options.filenames = []
+                            current_filenames = []
                     except Exception as e:
                         log.error(f"Error parsing TITLE= filenames: {e}")
-                        BOT.Options.filenames = []
+                        current_filenames = []
 
             else:
                 # Fallback: Process message directly for links and args
@@ -1722,17 +2076,15 @@ async def handle_url(client: Client, message: Message):
                      else: break
                 urls = temp_source[:-args_to_remove] if args_to_remove > 0 else temp_source
 
-            # Set options from extracted args - only override if new args were provided, otherwise preserve saved values
-            BOT.Options.custom_name = extracted_args["custom_name"] if extracted_args["custom_name"] else saved_custom_name
-            BOT.Options.zip_pswd = extracted_args["zip_pswd"] if extracted_args["zip_pswd"] else saved_zip_pswd
-            BOT.Options.unzip_pswd = extracted_args["unzip_pswd"] if extracted_args["unzip_pswd"] else saved_unzip_pswd
-            BOT.Options.archive_format = saved_archive_format  # Restore archive format setting
-            # Only reset filenames if not already set by NZBcloud TITLE= parsing
-            if BOT.Options.service_type != "nzbcloud":
-                BOT.Options.filenames = []
+            current_custom_name = extracted_args["custom_name"] if extracted_args["custom_name"] else saved_custom_name
+            current_zip_pswd = extracted_args["zip_pswd"] if extracted_args["zip_pswd"] else saved_zip_pswd
+            current_unzip_pswd = extracted_args["unzip_pswd"] if extracted_args["unzip_pswd"] else saved_unzip_pswd
+            current_archive_format = saved_archive_format
+            if current_service_type != "nzbcloud":
+                current_filenames = []
 
             if not urls:
-                log.warning("No valid URLs found after processing."); await message.reply_text("❌ No valid URLs found in the message."); BOT.State.started = False; return
+                log.warning("No valid URLs found after processing."); await message.reply_text("❌ No valid URLs found in the message."); await _clear_setup_session(user_id); return
 
             # Basic validation check (similar to previous version)
             standard_download_pattern = re.compile(r"^(https?://|magnet:\?|ftps?://)")
@@ -1741,22 +2093,34 @@ async def handle_url(client: Client, message: Message):
                 if not standard_download_pattern.match(urls[0]) or paste_site_pattern.search(urls[0]):
                      log.error(f"Input '{input_text}' was not parsed and is not a direct download link.")
                      await message.reply_text(f"❌ Input is not a direct download link or a supported raw list URL: {input_text}")
-                     BOT.State.started = False; return
+                     await _clear_setup_session(user_id)
+                     return
 
-            BOT.SOURCE = urls # Store the final list of links
-            log.info(f"Received {len(BOT.SOURCE)} URLs for mode {BOT.Mode.mode} in handle_url.")
+            source_links = list(urls)
+            await _update_setup_session(
+                user_id,
+                mode=current_mode,
+                source_links=source_links,
+                service_type=current_service_type,
+                filenames=current_filenames,
+                custom_name=current_custom_name,
+                zip_pswd=current_zip_pswd,
+                unzip_pswd=current_unzip_pswd,
+                archive_format=current_archive_format,
+            )
+            log.info(f"Received {len(source_links)} URLs for mode {current_mode} in handle_url.")
 
             # Check if service was auto-detected
-            if BOT.Options.service_type is not None:
-                log.info(f"✅ Service auto-detected as '{BOT.Options.service_type}', skipping service selection")
+            if current_service_type is not None:
+                log.info(f"✅ Service auto-detected as '{current_service_type}', skipping service selection")
 
                 # Route to appropriate next step based on auto-detected service
-                if BOT.Options.service_type == "nzbcloud":
+                if current_service_type == "nzbcloud":
                     # NZBcloud filenames should already be extracted from TITLE= lines
-                    if BOT.Options.filenames and len(BOT.Options.filenames) > 0:
+                    if current_filenames and len(current_filenames) > 0:
                         log.info(f"✅ NZBcloud filenames already extracted, proceeding to leech type selection")
-                        await message.reply_text(f"☁️ Detected {len(BOT.SOURCE)} NZBcloud files with filenames!\n\nProceeding...")
-                        await ask_leech_type(client, message.chat.id, BOT.Mode.mode)
+                        await message.reply_text(f"☁️ Detected {len(source_links)} NZBcloud files with filenames!\n\nProceeding...")
+                        await ask_leech_type(client, message.chat.id, current_mode)
                     else:
                         log.warning("NZBcloud detected but no filenames found")
                         await message.reply_text(
@@ -1765,17 +2129,17 @@ async def handle_url(client: Client, message: Message):
                             "<code>TITLE=filename.mkv\nhttps://files.nzbcloud.com/...</code>\n\n"
                             "**Tip:** Use the extension's \"Create Gist\" button to generate the correct format!"
                         )
-                        BOT.State.started = False
+                        await _clear_setup_session(user_id)
                         return
-                elif BOT.Options.service_type == "mindvalley":
+                elif current_service_type == "mindvalley":
                     # Mindvalley is already handled by mindvalley_waiting state
                     # Just set the SOURCE and let the mindvalley handler process it
-                    log.info("Mindvalley auto-detected, URLs stored in BOT.SOURCE for processing")
-                    await message.reply_text(f"🎬 Detected {len(BOT.SOURCE)} Mindvalley M3U8 URL(s)!\n\nProcessing...")
+                    log.info("Mindvalley auto-detected, URLs stored in setup session for processing")
+                    await message.reply_text(f"🎬 Detected {len(source_links)} Mindvalley M3U8 URL(s)!\n\nProcessing...")
                     # The mindvalley handler will process these URLs
-                elif BOT.Options.service_type in ["direct", "instagram"]:
+                elif current_service_type in ["direct", "instagram"]:
                     # Direct/Instagram can go straight to leech type
-                    await ask_leech_type(client, message.chat.id, BOT.Mode.mode)
+                    await ask_leech_type(client, message.chat.id, current_mode)
                 else:
                     # Fallback to asking for service
                     await ask_service_type(client, message)
@@ -1786,12 +2150,12 @@ async def handle_url(client: Client, message: Message):
     except Exception as e:
         log.error(f"Error handling URL/Path message: {e}", exc_info=True)
         await message.reply_text(f"⚠️ Error processing input: {e}")
-        BOT.State.started = False # Reset state on error
+        await _clear_setup_session(user_id)
 # --- End handle_url ---
 
 @colab_bot.on_callback_query()
 async def handle_options(client: Client, callback_query: CallbackQuery):
-    global BOT, MSG, TaskError, TRANSFER, OWNER, DUMP_ID, src_request_msg, reply_prompt_message_id, extract_request_msg
+    global BOT, MSG, TaskError, TRANSFER, OWNER, DUMP_ID
     user_id = callback_query.from_user.id
     message = callback_query.message
     query_data = callback_query.data
@@ -1800,9 +2164,6 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
     chat_id = message.chat.id if message and hasattr(message, 'chat') and message.chat else OWNER # Default to OWNER if chat missing
 
     # Authorization Checks (ensure correct indentation)
-    if BOT.State.started and not BOT.State.task_going and user_id != OWNER:
-        await callback_query.answer("Please wait for the owner...", show_alert=True)
-        return
     if user_id != OWNER and (
         query_data == "cancel"
         or query_data.startswith("cancel:")
@@ -1841,8 +2202,8 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             # Delete choice message
             try:
                 await message.delete()
-            except Exception:
-                pass
+            except Exception as delete_msg_err:
+                log.debug(f"Could not delete callback command message: {delete_msg_err}")
 
             if choice == "parallel_all":
                 # User wants parallel downloads!
@@ -1878,11 +2239,11 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 # Create a separate TaskContext for EACH link and launch them
                 launched_tasks = []
 
-                # Get filenames from BOT.Options if available (for NZBCloud TITLE= parsing)
-                filenames_from_global = BOT.Options.filenames if hasattr(BOT.Options, 'filenames') and BOT.Options.filenames else []
-                has_filenames = len(filenames_from_global) == len(links)
+                # Use filenames carried by this task context (if provided by setup parsing).
+                filenames_from_task = list(task_ctx.filenames) if getattr(task_ctx, "filenames", None) else []
+                has_filenames = len(filenames_from_task) == len(links)
                 if has_filenames:
-                    log.info(f"Using {len(filenames_from_global)} TITLE= filenames for parallel tasks")
+                    log.info(f"Using {len(filenames_from_task)} TITLE= filenames for parallel tasks")
 
                 for idx, link in enumerate(links, 1):
                     # Create new TaskContext for this link
@@ -1896,54 +2257,21 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                     sub_task.service_type = task_ctx.service_type
 
                     # Get the corresponding filename for this task (if available)
-                    task_filenames = [filenames_from_global[idx-1]] if has_filenames else []
+                    task_filenames = [filenames_from_task[idx-1]] if has_filenames else []
                     log.info(f"Task {idx}/{len(links)} assigned filename: {task_filenames[0] if task_filenames else 'None'}")
-
-                    # Create mock bot object (required by task scheduler)
-                    is_ytdl = sub_task.service_type == "ytdl"
-                    sub_task.bot = type('obj', (object,), {
-                        'Mode': type('obj', (object,), {
-                            'mode': sub_task.mode,
-                            'ytdl': is_ytdl,
-                            'type': sub_task.mode_type
-                        })(),
-                        'Options': type('obj', (object,), {
-                            'service_type': sub_task.service_type,
-                            'filenames': task_filenames,  # Pass the TITLE= filename to this task
-                            'custom_name': '',
-                            'zip_pswd': '',
-                            'unzip_pswd': '',
-                            'archive_format': '7z'
-                        })(),
-                        'SOURCE': [link],
-                        'Setting': BOT.Setting
-                    })()
-
-                    # Create paths object (required by task scheduler)
-                    sub_task.paths = type('obj', (object,), {
-                        'down_path': sub_task.down_path,
-                        'work_path': sub_task.work_path,
-                        'WORK_PATH': sub_task.work_path,
-                        'temp_zpath': f"{sub_task.work_path}/temp_zip",
-                        'temp_unzip': f"{sub_task.work_path}/temp_unzip",
-                        'temp_unzip_path': f"{sub_task.work_path}/temp_unzip",
-                        'temp_dirleech_path': f"{sub_task.work_path}/dir_leech_temp",
-                        'temp_files_dir': f"{sub_task.work_path}/leech_temp",
-                        'thumbnail_ytdl': f"{sub_task.work_path}/ytdl_thumbnails",
-                        'HERO_IMAGE': sub_task.hero_image,
-                        'THMB_PATH': Paths.THMB_PATH,
-                        'DEFAULT_HERO': Paths.DEFAULT_HERO,
-                        'VIDEO_FRAME': f"{sub_task.work_path}/video_frame.jpg"
-                    })()
 
                     # Share the single status message across all tasks
                     sub_task.status_msg = shared_status_msg
 
-                    # Initialize msg object (required by converters and handlers)
-                    sub_task.msg = type('obj', (object,), {
-                        'status_msg': shared_status_msg,
-                        'sent_msg': sub_task.sent_msg
-                    })()
+                    _prepare_task_context(
+                        task_ctx=sub_task,
+                        source_links=[link],
+                        filenames=task_filenames,
+                        custom_name='',
+                        zip_pswd='',
+                        unzip_pswd='',
+                        archive_format='7z',
+                    )
 
                     # Register task BEFORE launching to prevent race condition with dashboard update
                     # (Dashboard needs to see all tasks immediately when force_update_summary is called)
@@ -1989,7 +2317,8 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             await callback_query.answer() # Acknowledge first
             service = query_data.split("_", 1)[1]
             log.info(f"User selected service: {service}")
-            BOT.Options.service_type = service
+            setup_session = await _update_setup_session(user_id, service_type=service)
+            current_mode = setup_session.get("mode") or BOT.Mode.mode
 
             # Delete the service selection message AFTER processing choice
             try:
@@ -2007,7 +2336,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             else:
                 # No filename choice needed for this service
                 log.info(f"Service '{service}' selected. Proceeding to ask leech type.")
-                await ask_leech_type(client, chat_id, BOT.Mode.mode)
+                await ask_leech_type(client, chat_id, current_mode)
 
         # --- Upload Destination Selection (Google Drive or Local Mirror) ---
         elif query_data.startswith("destination_"):
@@ -2017,17 +2346,36 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
             # Set the mode based on user's choice
             if destination == "gdrive":
-                BOT.Mode.mode = "gdrive"
+                selected_mode = "gdrive"
                 text = "<b>☁️ Google Drive Upload » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, Bitso)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
                 log.info("Mode set to 'gdrive' for Google Drive upload")
             elif destination == "mirror":
-                BOT.Mode.mode = "mirror"
+                selected_mode = "mirror"
                 text = "<b>📂 Local Mirror » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, Bitso)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
                 log.info("Mode set to 'mirror' for local Colab mirror")
             else:
                 log.error(f"Unknown destination: {destination}")
                 await callback_query.answer("Unknown destination!", show_alert=True)
                 return
+
+            pending_service = None
+            async with user_tasks_lock:
+                pending_task = user_tasks.get(user_id)
+                if pending_task:
+                    pending_task.mode = selected_mode
+                    pending_service = pending_task.service_type
+
+            await _update_setup_session(
+                user_id,
+                mode=selected_mode,
+                source_links=[],
+                service_type=pending_service,
+                filenames=[],
+                custom_name=BOT.Options.custom_name,
+                zip_pswd=BOT.Options.zip_pswd,
+                unzip_pswd=BOT.Options.unzip_pswd,
+                archive_format=BOT.Options.archive_format if hasattr(BOT.Options, "archive_format") else "7z",
+            )
 
             # Delete the destination selection message
             try:
@@ -2036,20 +2384,15 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 log.warning(f"Could not delete destination selection message: {e}")
 
             # Send prompt message to collect links (similar to task_starter behavior)
-            if not BOT.State.task_going:
-                BOT.State.started = True
-                log.debug(f"BOT.State.started=True for {destination} destination")
-                try:
-                    global src_request_msg
-                    src_request_msg = await client.send_message(chat_id, text)
-                    log.info(f"Link collection prompt sent for {destination} destination")
-                except Exception as e:
-                    log.error(f"Failed to send link prompt: {e}", exc_info=True)
-                    BOT.State.started = False
-                    await client.send_message(chat_id, f"❌ Error sending prompt: {e}")
-            else:
-                log.warning("Task already going, cannot start new destination selection")
-                await client.send_message(chat_id, "**I'm already on it! Wait up! 💯🔥**")
+            try:
+                await _clear_source_waiting(client, user_id)
+                prompt_msg = await client.send_message(chat_id, text)
+                await _set_source_waiting(user_id, chat_id, prompt_msg.id)
+                log.info(f"Link collection prompt sent for {destination} destination")
+            except Exception as e:
+                log.error(f"Failed to send link prompt: {e}", exc_info=True)
+                await _clear_setup_session(user_id)
+                await client.send_message(chat_id, f"❌ Error sending prompt: {e}")
 
         # --- Filename Options ---
         # <<< THIS BLOCK'S INDENTATION MUST MATCH THE 'if' ABOVE >>>
@@ -2064,18 +2407,23 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
             service_type = parts[1] # e.g., 'Debrid' or 'bitso'
             fn_choice = parts[2]    # e.g., 'extract' or 'manual'
+            normalized_service = _normalize_filename_service(service_type)
+            setup_session = await _get_setup_session(user_id) or {}
+            source_links = list(setup_session.get("source_links", []))
+            current_mode = setup_session.get("mode") or BOT.Mode.mode
 
             if fn_choice == "extract":
-                log.info(f"User chose extract filenames for {service_type}.")
+                log.info(f"User chose extract filenames for {normalized_service}.")
+                await _clear_filename_reply_waiting(client, chat_id, user_id)
                 extracted_filenames = []
-                if not BOT.SOURCE:
+                if not source_links:
                     await message.edit_text("❌ Error: No links found.")
-                    BOT.State.started = False
+                    await _clear_setup_session(user_id)
                     return
 
-                log.info(f"Extracting filenames for {len(BOT.SOURCE)} links...")
+                log.info(f"Extracting filenames for {len(source_links)} links...")
                 all_extracted = True # Flag to track success
-                for i, link in enumerate(BOT.SOURCE):
+                for i, link in enumerate(source_links):
                     extracted_name = await extract_filename_from_url(link) # Use await
                     if extracted_name:
                         cleaned = apply_dot_style(clean_filename(extracted_name))
@@ -2092,32 +2440,44 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                         all_extracted = False; break # Stop loop
 
                 if all_extracted:
-                    BOT.Options.filenames = extracted_filenames
+                    await _update_setup_session(
+                        user_id,
+                        service_type=normalized_service,
+                        source_links=source_links,
+                        filenames=extracted_filenames,
+                    )
                     log.info(f"Extraction success: {len(extracted_filenames)} filenames.")
                     # Check if message still exists before deleting
                     if message: await message.delete() # Delete filename option message
-                    await ask_leech_type(client, chat_id, BOT.Mode.mode) # Ask next step
+                    await ask_leech_type(client, chat_id, current_mode) # Ask next step
                 else:
                     # Extraction failed, reset relevant states
-                    BOT.State.started = False; TaskError.reset(); TRANSFER.reset(); BOT.SOURCE=[]; BOT.Options.filenames=[] # Reset state
+                    TaskError.reset()
+                    TRANSFER.reset()
+                    await _clear_setup_session(user_id)
 
             elif fn_choice == "manual":
-                log.info(f"User chose manual filenames for {service_type}.")
-                expected_count = len(BOT.SOURCE)
+                log.info(f"User chose manual filenames for {normalized_service}.")
+                expected_count = len(source_links)
+                if expected_count == 0:
+                    await message.edit_text("❌ Error: No links found.")
+                    await _clear_setup_session(user_id)
+                    return
                 # This is where the prompt message is defined and sent:
-                prompt_text = (f"📝 Okay, **reply to this message** with the {expected_count} filename(s) for {service_type.capitalize()}, one per line.\n\n"
+                prompt_text = (f"📝 Okay, **reply to this message** with the {expected_count} filename(s) for {normalized_service}, one per line.\n\n"
                                f"**OR provide a link** (Gist/Pastebin/Rentry raw URL, or direct `.txt` link) containing the filenames.")
                 try:
                     # Send the prompt
+                    await _clear_filename_reply_waiting(client, chat_id, user_id)
                     prompt_msg = await client.send_message(chat_id, prompt_text)
-                    reply_prompt_message_id = prompt_msg.id # Store prompt ID
+                    await _set_filename_reply_waiting(
+                        user_id=user_id,
+                        prompt_message_id=prompt_msg.id,
+                        service_type=normalized_service,
+                        source_links=source_links,
+                    )
                     # Check if message still exists before deleting
                     if message: await message.delete() # Delete the button message
-                    # Set state to expect reply
-                    if service_type == 'Debrid': BOT.State.expecting_Debrid_filenames = True
-                    elif service_type == 'bitso': BOT.State.expecting_bitso_filenames = True
-                    elif service_type == 'nzbcloud': BOT.State.expecting_nzb_filenames = True    
-                    # Add nzbcloud if needed: elif service_type == 'nzbcloud': BOT.State.expecting_nzb_filenames = True
                 except Exception as e:
                     log.error(f"Failed to send manual filename prompt: {e}")
                     if message: await client.send_message(chat_id, f"❌ Error asking for filenames: {e}") # Use message if possible
@@ -2132,26 +2492,54 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             await callback_query.answer()
             leech_type = query_data.split("_", 1)[1]
             log.info(f"User selected leech type: {leech_type}")
-            BOT.Mode.type = leech_type
+            setup_session = await _get_setup_session(user_id)
+            source_links = list(setup_session.get("source_links", [])) if setup_session else []
+            if not source_links:
+                await client.send_message(chat_id, "❌ Setup state expired. Start again with /tupload, /gdupload, or /drupload.")
+                await _clear_setup_session(user_id)
+                return
+
+            task_ctx = create_task_context(
+                user_id=user_id,
+                chat_id=chat_id,
+                mode=setup_session.get("mode") if setup_session else "leech"
+            )
+            task_ctx.mode_type = leech_type
+            task_ctx.service_type = setup_session.get("service_type") if setup_session else None
+
             if message: await message.delete() # Delete leech type selection message
 
-            # --- REMOVED PASSWORD ASKING LOGIC FOR SIMPLICITY ---
-            # Assuming passwords are set via commands /zipaswd /unzipaswd if needed
-
-            # Directly schedule the task
-            log.info("Proceeding to start task...")
-            try: # Send status to OWNER
-                # Ensure keyboard() is imported or defined if used here
+            log.info("Proceeding to start task via TaskContext...")
+            try:
                 status_msg_obj = await client.send_message(OWNER, "#STARTING_TASK\n\n**Task commencing...**", reply_markup=keyboard())
-                MSG.status_msg = status_msg_obj
+                task_ctx.status_msg = status_msg_obj
             except Exception as start_err:
                 log.error(f"Failed send status msg: {start_err}", exc_info=True)
                 if message: await client.send_message(chat_id, "❌ Failed initialize task status.")
-                BOT.State.started = False; BOT.State.task_going = False; return
+                await _clear_setup_session(user_id)
+                return
 
-            BOT.State.task_going = True; BOT.State.started = False; reply_prompt_message_id = None;
-            BOT.TASK = asyncio.create_task(taskScheduler())
-            # --- END REMOVED PASSWORD ASKING LOGIC ---
+            _prepare_task_context(
+                task_ctx=task_ctx,
+                source_links=source_links,
+                filenames=list(setup_session.get("filenames", [])) if setup_session else [],
+                custom_name=setup_session.get("custom_name", "") if setup_session else "",
+                zip_pswd=setup_session.get("zip_pswd", "") if setup_session else "",
+                unzip_pswd=setup_session.get("unzip_pswd", "") if setup_session else "",
+                archive_format=setup_session.get("archive_format", "7z") if setup_session else "7z",
+            )
+
+            await _clear_filename_reply_waiting(client, chat_id, user_id)
+            await _clear_password_reply_prompt(client, user_id)
+            await _clear_settings_reply_waiting(client, chat_id, user_id)
+            await _clear_setup_session(user_id)
+
+            async_task = TASK_QUEUE.create_background_task(
+                run_parallel_task(client, message, task_ctx),
+                name=f"task-{task_ctx.get_short_id()}"
+            )
+            task_ctx.async_task = async_task
+            _attach_task_exception_handler(async_task, task_ctx)
 
         # --- REMOVED Password Skipping Callbacks ---
         # Assuming passwords are now handled via commands only
@@ -2171,6 +2559,32 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
              BOT.Options.stream_upload = False; BOT.Setting.stream_upload = "Document"
              await callback_query.answer("Uploading As Document", show_alert=False)
              await send_settings(client, message, msg_id, False)
+        elif query_data == "set-prefix":
+             await callback_query.answer()
+             await _clear_settings_reply_waiting(client, chat_id, user_id)
+             prompt_msg = await client.send_message(
+                 chat_id,
+                 "Reply to this message with the new prefix text.\nReply with '-' to clear it.",
+             )
+             await _set_settings_reply_waiting(
+                 user_id=user_id,
+                 prompt_message_id=prompt_msg.id,
+                 setting_key="prefix",
+                 settings_message_id=msg_id,
+             )
+        elif query_data == "set-suffix":
+             await callback_query.answer()
+             await _clear_settings_reply_waiting(client, chat_id, user_id)
+             prompt_msg = await client.send_message(
+                 chat_id,
+                 "Reply to this message with the new suffix text.\nReply with '-' to clear it.",
+             )
+             await _set_settings_reply_waiting(
+                 user_id=user_id,
+                 prompt_message_id=prompt_msg.id,
+                 setting_key="suffix",
+                 settings_message_id=msg_id,
+             )
         # ... add other settings callbacks like "video", "caption", "thumb", "set-prefix", "set-suffix", "close", "back" ...
         # Ensure they all start with 'elif' and have the same indentation as the main 'if'/'elif' blocks
         elif query_data == "close":
@@ -2207,9 +2621,9 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 log.info("Legacy task cancellation requested by user via button.")
 
             try:
-                await callback_query.answer("Task Cancelled!", show_alert=True)
+                await callback_query.answer("Cancelling...")
             except Exception:
-                await callback_query.answer("Cancelling...") # Fallback answer
+                pass
 
             if task_ctx:
                 # Multi-task mode: cancel specific task
@@ -2220,31 +2634,56 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 # Update summary dashboard
                 await force_update_summary(client)
             else:
-                # Legacy mode: global cancellation
-                if BOT.State.started and not BOT.State.task_going:
-                    log.info("Cancelling task during setup phase.")
-                    BOT.State.started = False; reply_prompt_message_id = None;
-                    if message: await message.delete() # Delete the message with the cancel button
-                    # Reset states fully
-                    TaskError.reset(); TRANSFER.reset(); BOT.SOURCE = []; BOT.Options.filenames = []
-                elif BOT.State.task_going:
-                    log.info("Calling cancelTask for running task.")
-                    await cancelTask("User pressed Cancel button.")
-                    # cancelTask handles deleting the status message
-                else:
-                    log.info("Cancel pressed but no task/setup active.")
-                    if message: await message.delete() # Delete the message if it exists
+                setup_session = await _get_setup_session(user_id)
+                all_tasks = await TASK_QUEUE.get_all_tasks()
+                matched_task = None
+                for candidate in all_tasks.values():
+                    if user_id != OWNER and candidate.user_id != user_id:
+                        continue
+                    if candidate.status_msg and message and candidate.status_msg.id == message.id:
+                        matched_task = candidate
+                        break
 
-            # Reset extract waiting state if active
-            if BOT.State.extract_waiting:
-                log.info("Resetting extract waiting state")
-                BOT.State.extract_waiting = False
-                if extract_request_msg:
-                    try:
-                        await extract_request_msg.delete()
-                    except Exception:
-                        pass
-                    extract_request_msg = None
+                if matched_task:
+                    log.info(f"Cancelling inferred task from callback message: {matched_task.get_short_id()}")
+                    await cancelTask("User pressed Cancel button.", task_ctx=matched_task)
+                    await TASK_QUEUE.remove_task(matched_task.task_id)
+                    await force_update_summary(client)
+                elif setup_session:
+                    log.info("Cancelling task during setup phase (setup session present).")
+                    if message: await message.delete()
+                    TaskError.reset(); TRANSFER.reset()
+                    await _clear_setup_session(user_id)
+                    await _clear_filename_reply_waiting(client, chat_id, user_id)
+                else:
+                    user_active_tasks = [
+                        candidate for candidate in all_tasks.values()
+                        if candidate.user_id == user_id or user_id == OWNER
+                    ]
+                    if len(user_active_tasks) == 1:
+                        only_task = user_active_tasks[0]
+                        log.info(f"Cancelling single active task for user: {only_task.get_short_id()}")
+                        await cancelTask("User pressed Cancel button.", task_ctx=only_task)
+                        await TASK_QUEUE.remove_task(only_task.task_id)
+                        await force_update_summary(client)
+                    elif len(user_active_tasks) > 1:
+                        log.info("Cancel pressed with multiple active tasks; requiring explicit selection.")
+                        await client.send_message(chat_id, "Multiple active tasks found. Use /cancel to select one.")
+                    else:
+                        log.info("Cancel pressed but no task/setup active.")
+                        if message: await message.delete()
+
+            # Reset extract waiting state for this user if active
+            if await _is_extract_waiting(user_id):
+                log.info(f"Resetting extract waiting state for user {user_id}")
+                await _clear_extract_waiting(client, chat_id, user_id)
+            await _set_mindvalley_waiting(user_id, False)
+            await _set_nzb_waiting(user_id, False)
+            await _clear_source_waiting(client, user_id)
+            await _clear_filename_reply_waiting(client, chat_id, user_id)
+            await _clear_password_reply_prompt(client, user_id)
+            await _clear_settings_reply_waiting(client, chat_id, user_id)
+            await _clear_setup_session(user_id)
         elif query_data == "cancel_all_tasks":
             await callback_query.answer("Cancelling all tasks...", show_alert=True)
             all_tasks = await TASK_QUEUE.get_all_tasks()
@@ -2262,16 +2701,17 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
             await force_update_summary(client)
 
-            # Reset extract waiting state if active
-            if BOT.State.extract_waiting:
-                log.info("Resetting extract waiting state")
-                BOT.State.extract_waiting = False
-                if extract_request_msg:
-                    try:
-                        await extract_request_msg.delete()
-                    except Exception:
-                        pass
-                    extract_request_msg = None
+            # Reset extract waiting state for this user if active
+            if await _is_extract_waiting(user_id):
+                log.info(f"Resetting extract waiting state for user {user_id}")
+                await _clear_extract_waiting(client, chat_id, user_id)
+            await _set_mindvalley_waiting(user_id, False)
+            await _set_nzb_waiting(user_id, False)
+            await _clear_source_waiting(client, user_id)
+            await _clear_filename_reply_waiting(client, chat_id, user_id)
+            await _clear_password_reply_prompt(client, user_id)
+            await _clear_settings_reply_waiting(client, chat_id, user_id)
+            await _clear_setup_session(user_id)
 
         # --- Fallback for Unknown Callbacks ---
         # <<< THIS BLOCK'S INDENTATION MUST MATCH THE PREVIOUS BLOCKS >>>
@@ -2284,12 +2724,18 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         log.error(f"Error handling callback {query_data}: {e}", exc_info=True)
         try:
             await callback_query.answer("An error occurred!", show_alert=True)
-        except Exception: pass # Ignore if answering fails too
-        # Reset state fully on unhandled error
-        BOT.State.started = False; BOT.State.task_going = False; reply_prompt_message_id = None;
+        except Exception as callback_answer_err:
+            log.debug(f"Could not send callback error answer: {callback_answer_err}")
+        # Reset shared runtime objects used by legacy code paths.
         if TaskError: TaskError.reset()
         if TRANSFER: TRANSFER.reset()
-        BOT.SOURCE = []; BOT.Options.filenames = []
+        await _clear_setup_session(user_id)
+        await _set_mindvalley_waiting(user_id, False)
+        await _set_nzb_waiting(user_id, False)
+        await _clear_source_waiting(client, user_id)
+        await _clear_filename_reply_waiting(client, chat_id, user_id)
+        await _clear_password_reply_prompt(client, user_id)
+        await _clear_settings_reply_waiting(client, chat_id, user_id)
 
 # --- End handle_options function ---
 # Image Handler (handle_image - remains the same)
@@ -2337,7 +2783,7 @@ async def archive_type(client, message):
     await sleep(15); await message_deleter(message, msg)
 
 # Helper function to perform extraction
-async def _perform_extraction(archive_path, file_filter=None):
+async def _perform_extraction(archive_path, file_filter=None, task_ctx=None):
     """
     Core extraction logic with streaming upload - returns (success: bool, message: str)
     Extracts files one-by-one, uploads to Telegram, then deletes temp file
@@ -2359,7 +2805,7 @@ async def _perform_extraction(archive_path, file_filter=None):
                 rar_filepath=archive_path,
                 password=BOT.Options.unzip_pswd if BOT.Options.unzip_pswd else None,
                 file_filter=file_filter,
-                task_ctx=None
+                task_ctx=task_ctx
             )
 
             if success:
@@ -2388,7 +2834,7 @@ async def _perform_extraction(archive_path, file_filter=None):
 # Helper function to process reply-to-document extraction
 async def _process_extract_reply(client, message):
     """Handle extraction when user replies to a document"""
-    global BOT, Paths, MSG
+    global BOT, Paths
     import os
     import random
     import aiohttp
@@ -2443,6 +2889,15 @@ async def _process_extract_reply(client, message):
             thumb_path = None
 
         # Create extraction status message
+        user_id = message.from_user.id if message.from_user else message.chat.id
+        extract_task_ctx = create_task_context(
+            user_id=user_id,
+            chat_id=message.chat.id,
+            mode="leech"
+        )
+        extract_task_ctx.service_type = "extract"
+        extract_task_ctx.mode_type = "extract"
+
         filename = os.path.basename(file_path)
         filter_text = f" (filter: {', '.join(file_filter)})" if file_filter else ""
 
@@ -2466,10 +2921,10 @@ async def _process_extract_reply(client, message):
         else:
             status_msg = await message.reply_text(status_text)
 
-        # Link to global MSG.status_msg
-        MSG.status_msg = status_msg
+        # Use per-task status message to avoid global cross-user collisions
+        extract_task_ctx.status_msg = status_msg
 
-        success, result_msg = await _perform_extraction(file_path, file_filter)
+        success, result_msg = await _perform_extraction(file_path, file_filter, task_ctx=extract_task_ctx)
 
         # Update final message
         if hasattr(status_msg, 'photo') and status_msg.photo:
@@ -2484,7 +2939,7 @@ async def _process_extract_reply(client, message):
 # Helper function to handle extract path input from user
 async def _handle_extract_input(client, message):
     """Process user's path input after /extract command"""
-    global BOT, Paths, MSG, extract_request_msg
+    global BOT, Paths
     import os
     import re
     import random
@@ -2493,16 +2948,8 @@ async def _handle_extract_input(client, message):
     from .utility.task_manager import thumbnail_urls
     from .utility.helper import keyboard
 
-    # Reset state
-    BOT.State.extract_waiting = False
-
-    # Delete the prompt message
-    if extract_request_msg:
-        try:
-            await extract_request_msg.delete()
-            extract_request_msg = None
-        except Exception:
-            pass
+    # Reset waiting state for this user and clean up their prompt.
+    await _clear_extract_waiting(client, message.chat.id, _extract_user_id(message))
 
     # Parse input: "<path>" or "<path> <filter>"
     input_text = message.text.strip() if message.text else ""
@@ -2580,6 +3027,15 @@ async def _handle_extract_input(client, message):
         thumb_path = None
 
     # Create status message
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    extract_task_ctx = create_task_context(
+        user_id=user_id,
+        chat_id=message.chat.id,
+        mode="leech"
+    )
+    extract_task_ctx.service_type = "extract"
+    extract_task_ctx.mode_type = "extract"
+
     filename = os.path.basename(archive_path)
     filter_text = f" (filter: {', '.join(file_filter)})" if file_filter else ""
 
@@ -2601,11 +3057,11 @@ async def _handle_extract_input(client, message):
     else:
         status_msg = await message.reply_text(status_text)
 
-    # Link to global MSG.status_msg for progress updates
-    MSG.status_msg = status_msg
+    # Use per-task status message to avoid global cross-user collisions
+    extract_task_ctx.status_msg = status_msg
 
     # Perform extraction
-    success, result_msg = await _perform_extraction(archive_path, file_filter)
+    success, result_msg = await _perform_extraction(archive_path, file_filter, task_ctx=extract_task_ctx)
 
     # Update final message
     if hasattr(status_msg, 'photo') and status_msg.photo:
@@ -2626,7 +3082,7 @@ async def extract_archive(client, message):
         /extract /path/to/file.rar .mkv - Extract specific path with filter
         Reply to archive: Reply to RAR/ZIP file with /extract [filter]
     """
-    global BOT, Paths, MSG, extract_request_msg
+    global BOT, Paths
     from .utility.converters import extract_rar_streaming, extract_zip_streaming
     from .utility.task_manager import thumbnail_urls
     from .utility.helper import keyboard
@@ -2646,7 +3102,6 @@ async def extract_archive(client, message):
     # If no arguments provided, ask for path
     if len(message.command) == 1:
         log.info("No arguments provided, setting extract_waiting=True and prompting for path")
-        BOT.State.extract_waiting = True
         help_text = (
             "📂 **Extract Archive**\n\n"
             "Send me the archive path and optional file filter:\n\n"
@@ -2658,7 +3113,8 @@ async def extract_archive(client, message):
             "`<path>` or `<path> <filter>`\n\n"
             "Cancel with /cancel"
         )
-        extract_request_msg = await message.reply_text(help_text)
+        prompt_msg = await message.reply_text(help_text)
+        await _set_extract_waiting(_extract_user_id(message), prompt_msg.id)
         return
 
     # Parse command arguments (file path and/or filters)
@@ -2744,7 +3200,6 @@ async def extract_archive(client, message):
 
     if not archive_path:
         # No archive found - prompt user to send path manually
-        BOT.State.extract_waiting = True
         help_text = (
             "📂 **Extract Archive**\n\n"
             "❌ No recent archive found in downloads.\n\n"
@@ -2757,7 +3212,8 @@ async def extract_archive(client, message):
             "`<path>` or `<path> <filter>`\n\n"
             "Cancel with /cancel"
         )
-        extract_request_msg = await message.reply_text(help_text)
+        prompt_msg = await message.reply_text(help_text)
+        await _set_extract_waiting(_extract_user_id(message), prompt_msg.id)
         return
 
     # Download random thumbnail
@@ -2794,6 +3250,15 @@ async def extract_archive(client, message):
         thumb_path = None
 
     # Create status message
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    extract_task_ctx = create_task_context(
+        user_id=user_id,
+        chat_id=message.chat.id,
+        mode="leech"
+    )
+    extract_task_ctx.service_type = "extract"
+    extract_task_ctx.mode_type = "extract"
+
     filename = os.path.basename(archive_path)
     filter_text = f" (filter: {', '.join(file_filter)})" if file_filter else ""
 
@@ -2815,11 +3280,11 @@ async def extract_archive(client, message):
     else:
         status_msg = await message.reply_text(status_text)
 
-    # Link to global MSG.status_msg for progress updates
-    MSG.status_msg = status_msg
+    # Use per-task status message to avoid global cross-user collisions
+    extract_task_ctx.status_msg = status_msg
 
     # Perform extraction using helper function
-    success, result_msg = await _perform_extraction(archive_path, file_filter)
+    success, result_msg = await _perform_extraction(archive_path, file_filter, task_ctx=extract_task_ctx)
 
     # Update final message
     if hasattr(status_msg, 'photo') and status_msg.photo:
@@ -2833,14 +3298,21 @@ async def mindvalley_download(client, message):
     Download Mindvalley course streams from M3U8 URLs
     Usage: /mindvalley then send URLs on separate lines
     """
-    global BOT, src_request_msg
+    global BOT
     log.info(f"Received /mindvalley from {message.from_user.id}")
 
     # Set bot state and mode
     BOT.Mode.mode = "leech"  # Use leech mode for proper completion message
     BOT.Mode.ytdl = False
-    BOT.Options.service_type = "mindvalley"  # Track service type
-    BOT.State.mindvalley_waiting = True
+    user_id = _extract_user_id(message)
+    await _set_mindvalley_waiting(user_id, True)
+    await _update_setup_session(
+        user_id,
+        mode="leech",
+        service_type="mindvalley",
+        source_links=[],
+        filenames=[],
+    )
 
     help_text = (
         "**🎬 Mindvalley Course Downloader**\n\n"
@@ -2861,8 +3333,11 @@ async def mindvalley_download(client, message):
         "💡 **Tip:** Put long URLs in a gist to avoid character limits!\n"
         "📝 **Note:** Subtitles uploaded as both SRT and VTT formats"
     )
-    src_request_msg = await task_starter(message, help_text)
-    log.debug(f"/mindvalley: task_starter called, src_request_msg set")
+    await _clear_source_waiting(client, user_id)
+    prompt_msg = await task_starter(message, help_text)
+    if prompt_msg:
+        await _set_source_waiting(user_id, message.chat.id, prompt_msg.id)
+    log.debug("/mindvalley: task_starter called, source prompt tracked per user")
 
 
 # Handler for Mindvalley URLs and NZB URLs (when user sends URLs after commands)
@@ -2870,27 +3345,22 @@ async def mindvalley_download(client, message):
 @colab_bot.on_message(filters.text & not_command_filter & filters.private)
 async def handle_text_input(client, message):
     """Handle text input: Mindvalley M3U8 URLs, NZB URLs, etc."""
-    global BOT, MSG, src_request_msg, Messages, BotTimes
+    global BOT, MSG, Messages, BotTimes
+
+    input_user_id = _extract_user_id(message)
 
     # Check if waiting for NZB URL
-    if BOT.State.nzb_waiting:
+    if await _is_nzb_waiting(input_user_id):
         log.info(f"Received NZB URL from {message.from_user.id}")
 
         # Check if message contains .nzb URL
         text = message.text.strip()
         if '.nzb' in text.lower():
-            import aiohttp
-            import os
+            await _set_nzb_waiting(input_user_id, False)
+            await _clear_setup_session(input_user_id)
 
-            BOT.State.nzb_waiting = False
-
-            # Delete help message
-            if src_request_msg:
-                try:
-                    await src_request_msg.delete()
-                    src_request_msg = None
-                except Exception:
-                    pass
+            # Delete per-user help message.
+            await _clear_source_waiting(client, _extract_user_id(message))
 
             # Extract URL (take first line if multiple)
             nzb_url = text.split('\n')[0].strip()
@@ -2903,15 +3373,13 @@ async def handle_text_input(client, message):
                     "Or upload a .nzb file instead.",
                     quote=True
                 )
-                BOT.State.nzb_waiting = False
+                await _set_nzb_waiting(input_user_id, False)
                 return
 
             log.info(f"Downloading NZB from URL: {nzb_url}")
 
             try:
                 # Download .nzb file from URL
-                from .utility.task_context import create_task_context
-
                 task_ctx = create_task_context(
                     user_id=message.from_user.id,
                     chat_id=message.chat.id,
@@ -2938,8 +3406,8 @@ async def handle_text_input(client, message):
                             # Delete status message
                             try:
                                 await status_msg.delete()
-                            except:
-                                pass
+                            except Exception as delete_err:
+                                log.warning(f"Failed to delete NZB status message: {delete_err}")
 
                             # Process the downloaded NZB file
                             await handle_nzb_file(client, message, nzb_file_path=nzb_path)
@@ -2962,21 +3430,17 @@ async def handle_text_input(client, message):
             return
 
     # Check if we're waiting for Mindvalley URLs
-    if not BOT.State.mindvalley_waiting:
+    if not await _is_mindvalley_waiting(input_user_id):
         return  # Not in Mindvalley/NZB mode, let other handlers process this
 
     log.info(f"Received Mindvalley input from {message.from_user.id}")
 
     # Reset the flag
-    BOT.State.mindvalley_waiting = False
+    await _set_mindvalley_waiting(input_user_id, False)
+    await _clear_setup_session(input_user_id)
 
-    # Delete the help/request message
-    if src_request_msg:
-        try:
-            await src_request_msg.delete()
-            src_request_msg = None
-        except Exception:
-            pass
+    # Delete the per-user help/request message.
+    await _clear_source_waiting(client, _extract_user_id(message))
 
     # NEW: Create TaskContext for this download (enables parallel tasks)
     task_ctx = create_task_context(
@@ -3415,14 +3879,21 @@ async def nzb_download(client, message):
     Download files from Usenet using NZB file
     Usage: /nzb then upload .nzb file or send .nzb URL
     """
-    global BOT, src_request_msg
+    global BOT
     log.info(f"Received /nzb from {message.from_user.id}")
 
     # Set bot state
     BOT.Mode.mode = "leech"  # Upload to Telegram
     BOT.Mode.ytdl = False
-    BOT.Options.service_type = "nzb"
-    BOT.State.nzb_waiting = True
+    user_id = _extract_user_id(message)
+    await _set_nzb_waiting(user_id, True)
+    await _update_setup_session(
+        user_id,
+        mode="leech",
+        service_type="nzb",
+        source_links=[],
+        filenames=[],
+    )
 
     help_text = (
         "**📰 NZB Usenet Downloader**\n\n"
@@ -3435,8 +3906,11 @@ async def nzb_download(client, message):
         f"**Active Provider:** {BOT.Setting.nzb_active_provider or 'Not configured'}"
     )
 
-    src_request_msg = await task_starter(message, help_text)
-    log.debug(f"/nzb: task_starter called, src_request_msg set")
+    await _clear_source_waiting(client, user_id)
+    prompt_msg = await task_starter(message, help_text)
+    if prompt_msg:
+        await _set_source_waiting(user_id, message.chat.id, prompt_msg.id)
+    log.debug("/nzb: task_starter called, source prompt tracked per user")
 
 
 @colab_bot.on_message(filters.document & filters.private)
@@ -3445,7 +3919,7 @@ async def handle_document_upload(client, message):
     global BOT
 
     # Check if waiting for NZB file
-    if BOT.State.nzb_waiting and message.document.file_name.lower().endswith('.nzb'):
+    if await _is_nzb_waiting(_extract_user_id(message)) and message.document.file_name.lower().endswith('.nzb'):
         log.info(f"Received .nzb file upload: {message.document.file_name}")
         await handle_nzb_file(client, message)
         return
@@ -3461,7 +3935,7 @@ async def handle_nzb_file(client, message, nzb_file_path=None):
         message: Message object
         nzb_file_path: Optional path to .nzb file (if already downloaded from URL)
     """
-    global BOT, MSG, src_request_msg, BotTimes
+    global BOT, MSG, BotTimes
     from .downlader.nzb import NZBDownloader
     from .utility.task_context import create_task_context
     from .uploader.telegram import upload_file
@@ -3469,15 +3943,10 @@ async def handle_nzb_file(client, message, nzb_file_path=None):
     import aiohttp
     import aiofiles
 
-    BOT.State.nzb_waiting = False
+    await _set_nzb_waiting(_extract_user_id(message), False)
 
-    # Delete help message
-    if src_request_msg:
-        try:
-            await src_request_msg.delete()
-            src_request_msg = None
-        except Exception:
-            pass
+    # Delete per-user help prompt.
+    await _clear_source_waiting(client, _extract_user_id(message))
 
     # Create TaskContext for this NZB download
     task_ctx = create_task_context(
@@ -3668,7 +4137,7 @@ async def handle_nzb_file(client, message, nzb_file_path=None):
 
     except Exception as e:
         log.exception("Error processing NZB file")
-        BOT.State.nzb_waiting = False
+        await _set_nzb_waiting(_extract_user_id(message), False)
         await message.reply_text(f"❌ **Error:** {str(e)}", quote=True)
 
 
@@ -3710,10 +4179,17 @@ async def cancel_command(client, message):
         )
         return
 
-    # 2. Legacy/Setup Cancellation
-    # If no active tasks, checks legacy states (BOT.State.started, etc.)
-    await cancelTask("User sent /cancel command.")
-    await message.reply_text("✅ Global cancellation signal sent.", quote=True)
+    # 2. Setup/runtime cancellation fallback
+    if await _is_extract_waiting(user_id):
+        await _clear_extract_waiting(client, message.chat.id, user_id)
+    await _set_mindvalley_waiting(user_id, False)
+    await _set_nzb_waiting(user_id, False)
+    await _clear_source_waiting(client, user_id)
+    await _clear_filename_reply_waiting(client, message.chat.id, user_id)
+    await _clear_password_reply_prompt(client, user_id)
+    await _clear_settings_reply_waiting(client, message.chat.id, user_id)
+    await _clear_setup_session(user_id)
+    await message.reply_text("Cleared pending setup/reply state for this user.", quote=True)
 
 
 @colab_bot.on_message(filters.command("health") & filters.private)
@@ -3810,7 +4286,11 @@ async def debug_all_messages(client, message):
 # Main Execution Guard
 if __name__ == "__main__":
      log.info("Colab Leecher Script Starting as main...")
-     if colab_bot:
+     try:
+          ensure_runtime_config()
+     except ConfigError as config_err:
+          log.critical(f"Bot configuration error: {config_err}")
+     else:
           log.info("colab_bot instance found, attempting run()...")
 
           # Auto-detect SABnzbd and create notification file if running
@@ -3851,4 +4331,10 @@ if __name__ == "__main__":
           try:
               colab_bot.run()
           except Exception as run_err: log.critical(f"Bot crashed during run: {run_err}", exc_info=True)
-     else: log.critical("colab_bot was not initialized successfully.")
+
+
+
+
+
+
+

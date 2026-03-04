@@ -5,9 +5,11 @@ import io
 import logging
 import pickle
 import asyncio
+import os
+from pathlib import Path
 from natsort import natsorted
 from re import search as re_search
-from os import makedirs, path as ospath, remove # Added remove
+from os import path as ospath
 from urllib.parse import parse_qs, urlparse
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -23,15 +25,34 @@ from ..utility.variables import Gdrive, Messages, Paths, BotTimes, TRANSFER # Im
 log = logging.getLogger(__name__)
 
 
+def _load_pickled_credentials(token_path: str):
+    token_file = Path(token_path)
+    if token_file.suffix.lower() != ".pickle":
+        raise ValueError(f"Unsupported token format: {token_file.name}")
+    if token_file.stat().st_size > 5 * 1024 * 1024:
+        raise ValueError("Token file is unexpectedly large")
+    with token_file.open("rb") as token:
+        # token.pickle is a local trusted artifact provided by the operator.
+        return pickle.load(token)  # nosec
+
+
 async def build_service():
     """Initializes the Google Drive API service."""
     global Gdrive
-    if ospath.exists(Paths.access_token):
-        try:
-            with open(Paths.access_token, "rb") as token:
-                creds = pickle.load(token); Gdrive.service = build("drive", "v3", credentials=creds); log.info("GDrive service built.")
-        except Exception as e: log.error(f"Failed build GDrive service: {e}", exc_info=True); Gdrive.service = None; await cancelTask(f"GDrive Error: {e}")
-    else: log.error(f"Token file not found: {Paths.access_token}"); Gdrive.service = None; await cancelTask("token.pickle NOT FOUND!")
+    if not ospath.exists(Paths.access_token):
+        log.error(f"Token file not found: {Paths.access_token}")
+        Gdrive.service = None
+        await cancelTask("token.pickle NOT FOUND!")
+        return
+
+    try:
+        creds = _load_pickled_credentials(Paths.access_token)
+        Gdrive.service = build("drive", "v3", credentials=creds)
+        log.info("GDrive service built.")
+    except Exception as e:
+        log.error(f"Failed build GDrive service: {e}", exc_info=True)
+        Gdrive.service = None
+        await cancelTask(f"GDrive Error: {e}")
 
 
 async def g_DownLoad(link, num):
@@ -171,7 +192,15 @@ async def _update_gdrive_progress(downloaded, total):
     # Use TRANSFER instance total size if available
     display_total = TRANSFER.total_down_size if TRANSFER.total_down_size > 0 else total # Use instance
     speed_string, eta, percentage = speedETA(start_time_for_eta, current_overall, display_total)
-    await status_bar( down_msg=Messages.status_head, speed=speed_string, percentage=percentage, eta=getTime(eta), done=sizeUnit(current_overall), left=sizeUnit(display_total), engine="G-Api ♻️",)
+    await status_bar(
+        down_msg=Messages.status_head,
+        speed=speed_string,
+        percentage=percentage,
+        eta=getTime(eta),
+        done=sizeUnit(current_overall),
+        total_size=sizeUnit(display_total),
+        engine="G-Api ♻️",
+    )
 
 
 async def gDownloadFolder(folder_id, path):

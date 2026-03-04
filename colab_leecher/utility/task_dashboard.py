@@ -14,7 +14,7 @@ from typing import Optional
 from pyrogram import enums
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 from .. import OWNER, colab_bot
-from .task_context import TASK_QUEUE, TaskContext
+from .task_context import TASK_QUEUE
 from .helper import getTime
 from .variables import Paths
 
@@ -24,11 +24,11 @@ def format_bytes(bytes_value: int) -> str:
     if bytes_value < 1024:
         return f"{bytes_value} B"
     elif bytes_value < 1024 * 1024:
-        return f"{bytes_value/1024:.1f} KB"
+        return f"{bytes_value / 1024:.1f} KB"
     elif bytes_value < 1024 * 1024 * 1024:
-        return f"{bytes_value/(1024*1024):.1f} MB"
+        return f"{bytes_value / (1024 * 1024):.1f} MB"
     else:
-        return f"{bytes_value/(1024*1024*1024):.2f} GB"
+        return f"{bytes_value / (1024 * 1024 * 1024):.2f} GB"
 
 
 def create_progress_bar(percentage: float, length: int = 10) -> str:
@@ -36,6 +36,7 @@ def create_progress_bar(percentage: float, length: int = 10) -> str:
     filled = int(percentage / 100 * length)
     empty = length - filled
     return f"[{'█' * filled}{'░' * empty}]"
+
 
 log = logging.getLogger(__name__)
 
@@ -52,8 +53,9 @@ def _keyboard_signature(keyboard: Optional[InlineKeyboardMarkup]) -> str:
     return "|".join(rows)
 
 
-
-async def update_summary_dashboard(client=None, force: bool = False) -> Optional[Message]:
+async def update_summary_dashboard(
+        client=None,
+        force: bool = False) -> Optional[Message]:
     """
     Update or create the summary dashboard showing all active tasks (thread-safe).
 
@@ -77,12 +79,14 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
         if not force and not TASK_QUEUE.should_update_summary():
             return TASK_QUEUE.summary_msg
 
-        # Even for forced updates, apply debouncing to prevent Telegram rate limits
+        # Even for forced updates, apply debouncing to prevent Telegram rate
+        # limits
         if force:
             import time
             time_since_last = time.time() - TASK_QUEUE.last_summary_update
             if time_since_last < TASK_QUEUE.min_forced_update_interval:
-                log.debug(f"Forced update debounced (last update {time_since_last:.1f}s ago)")
+                log.debug(
+                    f"Forced update debounced (last update {time_since_last:.1f}s ago)")
                 return TASK_QUEUE.summary_msg
 
         tasks = await TASK_QUEUE.get_all_tasks()
@@ -90,24 +94,26 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
 
         # === DEBUG MODE: Dump complete state to file ===
         try:
-            import json
             from datetime import datetime
             debug_file = "dashboard_debug.txt"
             with open(debug_file, "a", encoding="utf-8") as f:
-                f.write(f"\n{'='*80}\n")
+                f.write(f"\n{'=' * 80}\n")
                 f.write(f"DASHBOARD UPDATE at {datetime.now()}\n")
-                f.write(f"{'='*80}\n")
+                f.write(f"{'=' * 80}\n")
                 f.write(f"Tasks found: {len(tasks)}\n")
                 f.write(f"Force update: {force}\n")
-                f.write(f"Summary message exists: {TASK_QUEUE.summary_msg is not None}\n")
+                f.write(
+                    f"Summary message exists: {TASK_QUEUE.summary_msg is not None}\n")
                 if TASK_QUEUE.summary_msg:
-                    f.write(f"Summary message ID: {TASK_QUEUE.summary_msg.id}\n")
-                f.write(f"\nTask details:\n")
+                    f.write(
+                        f"Summary message ID: {TASK_QUEUE.summary_msg.id}\n")
+                f.write("\nTask details:\n")
                 for task_id, task_ctx in tasks.items():
                     f.write(f"  - {task_ctx.get_short_id()}: ")
-                    f.write(f"down={task_ctx.transfer.down_bytes}, up={task_ctx.transfer.up_bytes}, ")
+                    f.write(
+                        f"down={task_ctx.transfer.down_bytes}, up={task_ctx.transfer.up_bytes}, ")
                     f.write(f"total={task_ctx.transfer.total_size}\n")
-                f.write(f"\n")
+                f.write("\n")
         except Exception as debug_err:
             log.warning(f"Debug file write failed: {debug_err}")
 
@@ -129,13 +135,18 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
         # --- Build summary text with Safe Truncation ---
         # Determine strict limit based on message type
         has_photo = False
-        if TASK_QUEUE.summary_msg and hasattr(TASK_QUEUE.summary_msg, 'photo') and TASK_QUEUE.summary_msg.photo:
+        if TASK_QUEUE.summary_msg and hasattr(
+                TASK_QUEUE.summary_msg,
+                'photo') and TASK_QUEUE.summary_msg.photo:
             has_photo = True
         elif not TASK_QUEUE.summary_msg:
             # If creating new, check if we have a thumbnail
             first_task = next(iter(tasks.values()), None) if tasks else None
             thumbnail_path = None
-            if first_task and hasattr(first_task, 'hero_image') and first_task.hero_image and os.path.exists(first_task.hero_image):
+            if first_task and hasattr(
+                    first_task,
+                    'hero_image') and first_task.hero_image and os.path.exists(
+                    first_task.hero_image):
                 thumbnail_path = first_task.hero_image
             elif os.path.exists(Paths.DEFAULT_HERO):
                 thumbnail_path = Paths.DEFAULT_HERO
@@ -146,7 +157,7 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
         # Limits: Caption=1024, Text=4096. Reserve 100 chars for header/footer.
         CHAR_LIMIT = 900 if has_photo else 3800
 
-        header = f"<b>Parallel Tasks</b> ({len(tasks)} active)\n"
+        header = f"<b>🚀 Parallel Tasks</b> ({len(tasks)} active)\n"
         summary_text = header
         tasks_shown = 0
 
@@ -155,7 +166,8 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
 
             # Get filename - prioritize download_name over URL parsing
             filename = "Unknown"
-            # First, try getting it from messages.download_name (set by task_manager)
+            # First, try getting it from messages.download_name (set by
+            # task_manager)
             if task_ctx.messages and task_ctx.messages.download_name:
                 filename = task_ctx.messages.download_name
             # Fallback: try to extract from URL
@@ -164,11 +176,13 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                 try:
                     from urllib.parse import urlparse, unquote
                     path = urlparse(url).path
-                    # Skip parsing for NZBCloud "play" endpoints (use message.download_name instead)
+                    # Skip parsing for NZBCloud "play" endpoints (use
+                    # message.download_name instead)
                     if '/play?' in url or '/play#' in url:
                         filename = "NZBCloud File"  # Placeholder until download_name is set
                     else:
-                        filename = unquote(path.split('/')[-1]) if path else url[:50]
+                        filename = unquote(path.split(
+                            '/')[-1]) if path else url[:50]
                 except Exception:
                     # Fallback if URL parsing fails
                     filename = url[:50] if url else "Unknown"
@@ -186,10 +200,11 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                 uploaded_count = len(task_ctx.transfer.sent_file_names)
                 uploaded = format_bytes(task_ctx.transfer.up_bytes)
 
-                status_label = "Uploading"
+                status_label = "📤 Uploading"
                 if task_ctx.transfer.total_size > 0:
                     # Show percentage if we know total size
-                    percentage = min(100.0, (task_ctx.transfer.up_bytes / task_ctx.transfer.total_size) * 100)
+                    percentage = min(
+                        100.0, (task_ctx.transfer.up_bytes / task_ctx.transfer.total_size) * 100)
                     total = format_bytes(task_ctx.transfer.total_size)
 
                     # Create visual progress bar
@@ -200,19 +215,24 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                     status_detail = f"{uploaded} • {speed} • {uploaded_count} file(s)"
             elif task_ctx.transfer.down_bytes > 0:
                 # Check if we're in archiving/zipping/extracting phase (download done but upload not started)
-                # Detect by checking if status_head contains archiving/extracting keywords
+                # Detect by checking if status_head contains
+                # archiving/extracting keywords
                 is_archiving = False
                 is_extracting = False
                 if task_ctx.messages and task_ctx.messages.status_head:
                     status_head_lower = task_ctx.messages.status_head.lower()
-                    is_archiving = any(keyword in status_head_lower for keyword in ['archiving', 'zipping', 'creating archive', 'compressing'])
-                    is_extracting = any(keyword in status_head_lower for keyword in ['extracting', 'unzipping', 'decompressing', 'unpacking'])
+                    is_archiving = any(
+                        keyword in status_head_lower for keyword in [
+                            'archiving', 'zipping', 'creating archive', 'compressing'])
+                    is_extracting = any(
+                        keyword in status_head_lower for keyword in [
+                            'extracting', 'unzipping', 'decompressing', 'unpacking'])
 
                 if is_archiving or is_extracting:
                     # Archiving/Zipping/Extracting phase
                     elapsed = task_ctx.get_elapsed_time()
                     elapsed_str = getTime(elapsed) if elapsed > 0 else "0s"
-                    status_label = "Extracting" if is_extracting else "Archiving"
+                    status_label = "📂 Extracting" if is_extracting else "🗜️ Archiving"
 
                     # Build detailed processing status
                     details = []
@@ -221,15 +241,18 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                     if task_ctx.messages.total_files > 0:
                         files_done = task_ctx.messages.files_processed
                         total = task_ctx.messages.total_files
-                        file_pct = (files_done / total * 100) if total > 0 else 0
+                        file_pct = (
+                            files_done / total * 100) if total > 0 else 0
 
                         # Create progress bar for file processing
                         progress_bar = create_progress_bar(file_pct, length=8)
-                        details.append(f"{progress_bar} {files_done}/{total} files")
+                        details.append(
+                            f"{progress_bar} {files_done}/{total} files")
 
                     # Show archive size if available
                     if task_ctx.messages.archive_size > 0:
-                        archive_size = format_bytes(task_ctx.messages.archive_size)
+                        archive_size = format_bytes(
+                            task_ctx.messages.archive_size)
                         details.append(archive_size)
 
                     # Show current file being processed
@@ -242,14 +265,16 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                     # Always show elapsed time
                     details.append(elapsed_str)
 
-                    status_detail = " • ".join(details) if details else elapsed_str
+                    status_detail = " • ".join(
+                        details) if details else elapsed_str
                 else:
                     # Downloading phase
                     speed = task_ctx.transfer.last_speed
                     if not speed or speed == "0 B/s":
                         speed = task_ctx.transfer.get_speed()
 
-                    # Show progress with percentage and file sizes if total_size is known
+                    # Show progress with percentage and file sizes if
+                    # total_size is known
                     if task_ctx.transfer.total_size > 0:
                         percentage = task_ctx.transfer.get_percentage()
                         downloaded = format_bytes(task_ctx.transfer.down_bytes)
@@ -258,25 +283,27 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                         eta_str = getTime(eta) if eta > 0 else "?"
 
                         # Create visual progress bar
-                        progress_bar = create_progress_bar(percentage, length=10)
+                        progress_bar = create_progress_bar(
+                            percentage, length=10)
 
                         # Get server/service info if available
                         server_info = ""
                         if task_ctx.service_type:
                             server_info = f"{task_ctx.service_type.upper()} • "
 
-                        status_label = "Downloading"
+                        status_label = "📥 Downloading"
                         status_detail = f"{progress_bar} {percentage:.1f}%\n{server_info}{downloaded}/{total} • {speed} • ETA: {eta_str}"
                     else:
                         # Fallback if total size unknown
                         elapsed = task_ctx.get_elapsed_time()
                         elapsed_str = getTime(elapsed) if elapsed > 0 else "0s"
-                        downloaded = format_bytes(task_ctx.transfer.down_bytes) if task_ctx.transfer.down_bytes > 0 else "?"
-                        status_label = "Downloading"
+                        downloaded = format_bytes(
+                            task_ctx.transfer.down_bytes) if task_ctx.transfer.down_bytes > 0 else "?"
+                        status_label = "📥 Downloading"
                         status_detail = f"{downloaded} • {speed} • {elapsed_str}"
             else:
                 # Initializing
-                status_label = "Initializing"
+                status_label = "📝 Initializing"
                 status_detail = ""
 
             status_line = f"<b>{status_label}</b>"
@@ -302,7 +329,8 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
         # Create cancel buttons for each SHOWN task
         buttons = []
         # Re-iterate only up to tasks_shown to match display
-        for idx, (task_id, task_ctx) in enumerate(list(tasks.items())[:tasks_shown], 1):
+        for idx, (task_id, task_ctx) in enumerate(
+                list(tasks.items())[:tasks_shown], 1):
             short_id = task_ctx.get_short_id()
             buttons.append([InlineKeyboardButton(
                 f"Cancel Task {idx}",
@@ -328,8 +356,10 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
         thumbnail_path = None
         first_task = next(iter(tasks.values()), None) if tasks else None
 
-        if first_task and hasattr(first_task, 'hero_image') and first_task.hero_image:
-            # Check file exists before using (TOCTOU safe - handled in try-except below)
+        if first_task and hasattr(first_task,
+                                  'hero_image') and first_task.hero_image:
+            # Check file exists before using (TOCTOU safe - handled in
+            # try-except below)
             if os.path.exists(first_task.hero_image):
                 thumbnail_path = first_task.hero_image
 
@@ -344,65 +374,82 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
             from datetime import datetime
             debug_file = "dashboard_debug.txt"
             with open(debug_file, "a", encoding="utf-8") as f:
-                f.write(f"Generated dashboard text ({len(summary_text)} chars, {tasks_shown} tasks shown):\n")
-                f.write(f"{'-'*80}\n")
+                f.write(
+                    f"Generated dashboard text ({len(summary_text)} chars, {tasks_shown} tasks shown):\n")
+                f.write(f"{'-' * 80}\n")
                 f.write(summary_text)
-                f.write(f"\n{'-'*80}\n\n")
+                f.write(f"\n{'-' * 80}\n\n")
         except Exception as debug_err:
             log.warning(f"Debug text dump failed: {debug_err}")
 
         # Update or create message
-        log.info(f"📊 Updating dashboard: {tasks_shown} tasks shown, message exists: {TASK_QUEUE.summary_msg is not None}")
+        log.info(
+            f"📊 Updating dashboard: {tasks_shown} tasks shown, message exists: {TASK_QUEUE.summary_msg is not None}")
         try:
             if TASK_QUEUE.summary_msg:
                 # Update existing message
-                log.debug(f"Editing existing summary message (ID: {TASK_QUEUE.summary_msg.id})")
+                log.debug(
+                    f"Editing existing summary message (ID: {TASK_QUEUE.summary_msg.id})")
                 try:
-                    # Check if message has a photo (use edit_caption) or is text-only (use edit_text)
-                    if hasattr(TASK_QUEUE.summary_msg, 'photo') and TASK_QUEUE.summary_msg.photo:
+                    # Check if message has a photo (use edit_caption) or is
+                    # text-only (use edit_text)
+                    if hasattr(
+                            TASK_QUEUE.summary_msg,
+                            'photo') and TASK_QUEUE.summary_msg.photo:
                         await TASK_QUEUE.summary_msg.edit_caption(
                             summary_text,
                             parse_mode=enums.ParseMode.HTML,
                             reply_markup=keyboard
                         )
-                        log.debug(f"Summary dashboard caption updated ({tasks_shown}/{len(tasks)} tasks shown)")
+                        log.debug(
+                            f"Summary dashboard caption updated ({tasks_shown}/{len(tasks)} tasks shown)")
                     else:
-                        log.debug(f"Editing text-only message with {len(summary_text)} chars")
+                        log.debug(
+                            f"Editing text-only message with {len(summary_text)} chars")
                         await TASK_QUEUE.summary_msg.edit_text(
                             summary_text,
                             parse_mode=enums.ParseMode.HTML,
                             disable_web_page_preview=True,
                             reply_markup=keyboard
                         )
-                        log.info(f"✅ Summary dashboard text updated ({tasks_shown}/{len(tasks)} tasks shown)")
+                        log.info(
+                            f"✅ Summary dashboard text updated ({tasks_shown}/{len(tasks)} tasks shown)")
                 except Exception as edit_err:
                     # === DEBUG MODE: Dump full exception details ===
                     try:
                         import traceback
                         debug_file = "dashboard_debug.txt"
                         with open(debug_file, "a", encoding="utf-8") as f:
-                            f.write(f"❌ EDIT FAILED:\n")
-                            f.write(f"Exception type: {type(edit_err).__name__}\n")
+                            f.write("❌ EDIT FAILED:\n")
+                            f.write(
+                                f"Exception type: {type(edit_err).__name__}\n")
                             f.write(f"Exception message: {str(edit_err)}\n")
-                            f.write(f"Full traceback:\n")
+                            f.write("Full traceback:\n")
                             f.write(traceback.format_exc())
-                            f.write(f"\n")
+                            f.write("\n")
                     except Exception as debug_err2:
-                        log.warning(f"Debug exception dump failed: {debug_err2}")
+                        log.warning(
+                            f"Debug exception dump failed: {debug_err2}")
 
-                    # Check if error is "message is not modified" - if so, skip recreation
+                    # Check if error is "message is not modified" - if so, skip
+                    # recreation
                     error_msg = str(edit_err).lower()
-                    log.warning(f"⚠️ Edit failed: {type(edit_err).__name__}: {edit_err}")
+                    log.warning(
+                        f"⚠️ Edit failed: {type(edit_err).__name__}: {edit_err}")
                     if "not modified" in error_msg or "message is not modified" in error_msg:
-                        log.debug("Summary message unchanged, skipping update (content identical)")
+                        log.debug(
+                            "Summary message unchanged, skipping update (content identical)")
                         TASK_QUEUE.last_summary_text = summary_text
                         TASK_QUEUE.last_summary_keyboard_signature = keyboard_signature
                         TASK_QUEUE.mark_summary_updated()
                         return TASK_QUEUE.summary_msg
 
-                    # Message might have been deleted or other serious error - recreate ONCE
-                    log.warning(f"Failed to edit summary: {type(edit_err).__name__}: {edit_err}")
-                    log.warning("Attempting message recreation (clearing reference first)")
+                    # Message might have been deleted or other serious error -
+                    # recreate ONCE
+                    log.warning(
+                        f"Failed to edit summary: {type(edit_err).__name__}: {edit_err}")
+                    log.warning(
+                        "Attempting message recreation (clearing reference first)")
                     TASK_QUEUE.summary_msg = None  # Clear reference before recreating
                     try:
                         if thumbnail_path and os.path.exists(thumbnail_path):
@@ -423,7 +470,8 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                             )
                     except FileNotFoundError:
                         # Thumbnail file deleted - fallback to text
-                        log.warning(f"Thumbnail {thumbnail_path} not found, creating text-only dashboard")
+                        log.warning(
+                            f"Thumbnail {thumbnail_path} not found, creating text-only dashboard")
                         TASK_QUEUE.summary_msg = await client.send_message(
                             OWNER,
                             text=summary_text,
@@ -452,10 +500,13 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                             disable_web_page_preview=True,
                             reply_markup=keyboard
                         )
-                        log.info("Summary dashboard created (text-only, no thumbnail)")
+                        log.info(
+                            "Summary dashboard created (text-only, no thumbnail)")
                 except FileNotFoundError:
-                    # Thumbnail deleted between check and send - fallback to text
-                    log.warning(f"Thumbnail {thumbnail_path} deleted during send, creating text-only")
+                    # Thumbnail deleted between check and send - fallback to
+                    # text
+                    log.warning(
+                        f"Thumbnail {thumbnail_path} deleted during send, creating text-only")
                     TASK_QUEUE.summary_msg = await client.send_message(
                         OWNER,
                         text=summary_text,
@@ -471,11 +522,12 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
             try:
                 debug_file = "dashboard_debug.txt"
                 with open(debug_file, "a", encoding="utf-8") as f:
-                    f.write(f"✅ Dashboard update SUCCESS\n")
-                    f.write(f"   Message ID: {TASK_QUEUE.summary_msg.id if TASK_QUEUE.summary_msg else 'None'}\n")
+                    f.write("✅ Dashboard update SUCCESS\n")
+                    f.write(
+                        f"   Message ID: {TASK_QUEUE.summary_msg.id if TASK_QUEUE.summary_msg else 'None'}\n")
                     f.write(f"   Tasks shown: {tasks_shown}/{len(tasks)}\n")
-                    f.write(f"\n")
-            except Exception as debug_err4:
+                    f.write("\n")
+            except Exception:
                 pass
 
             # Mark as updated
@@ -488,16 +540,18 @@ async def update_summary_dashboard(client=None, force: bool = False) -> Optional
                 import traceback
                 debug_file = "dashboard_debug.txt"
                 with open(debug_file, "a", encoding="utf-8") as f:
-                    f.write(f"❌❌❌ CRITICAL DASHBOARD FAILURE ❌❌❌\n")
+                    f.write("❌❌❌ CRITICAL DASHBOARD FAILURE ❌❌❌\n")
                     f.write(f"Exception type: {type(e).__name__}\n")
                     f.write(f"Exception message: {str(e)}\n")
-                    f.write(f"Full traceback:\n")
+                    f.write("Full traceback:\n")
                     f.write(traceback.format_exc())
-                    f.write(f"\n{'='*80}\n\n")
-            except Exception as debug_err3:
+                    f.write(f"\n{'=' * 80}\n\n")
+            except Exception:
                 pass  # Give up on debug if this fails
 
-            log.error(f"Failed to update summary dashboard: {e}", exc_info=True)
+            log.error(
+                f"Failed to update summary dashboard: {e}",
+                exc_info=True)
             return None
 
 
@@ -511,6 +565,7 @@ async def try_update_summary(client=None):
 
 
 _scheduled_update_task = None
+
 
 async def force_update_summary(client=None):
     """
@@ -530,26 +585,27 @@ async def force_update_summary(client=None):
             f.write(f"🔥 force_update_summary() CALLED at {datetime.now()}\n")
             f.write(f"   Client provided: {client is not None}\n")
             f.write(f"   Active tasks: {TASK_QUEUE.get_task_count()}\n")
-            f.write(f"\n")
-    except Exception as debug_err5:
+            f.write("\n")
+    except Exception:
         pass
 
     # Try immediate update
-    result = await update_summary_dashboard(client, force=True)
-    
+    await update_summary_dashboard(client, force=True)
+
     # Check if we need to schedule a delayed update to catch any debounced changes
     # We do this blindly on every force update to be safe, or we could return a 'debounced' flag
-    # For simplicity/safety against race conditions, if an update happens, 
+    # For simplicity/safety against race conditions, if an update happens,
     # ensure one final check runs after the debounce window.
-    
+
     if _scheduled_update_task and not _scheduled_update_task.done():
-        return # Already scheduled
-        
+        return  # Already scheduled
+
     async def delayed_update():
         import asyncio
-        # Wait slightly longer than the min_forced_update_interval (assumed ~1-2s)
-        await asyncio.sleep(2.0) 
+        # Wait slightly longer than the min_forced_update_interval (assumed
+        # ~1-2s)
+        await asyncio.sleep(2.0)
         await update_summary_dashboard(client, force=True)
-        
+
     import asyncio
     _scheduled_update_task = asyncio.create_task(delayed_update())
