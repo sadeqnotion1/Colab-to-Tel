@@ -232,7 +232,7 @@ async def Leech(path: str, remove_source: bool, task_ctx: TaskContext = None):
                 _task_error.state = True
                 # Use the specific error message if _task_error.text wasn't set
                 # by the failing function
-                _task_error.text = _task_error.text or f"Error processing {current_item_name}: {str(item_err)[ :100]}"
+                _task_error.text = _task_error.text or f"Error processing {current_item_name}: {str(item_err)[:100]}"
             # The loop will continue to the next item unless _task_error.state
             # causes skipping at the top
 
@@ -503,7 +503,7 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
 
     processed_urls = set()
 
-    report_content += f"--- Successful Downloads ({len( transfer_obj.successful_downloads)}) ---\n"
+    report_content += f"--- Successful Downloads ({len(transfer_obj.successful_downloads)}) ---\n"
     if transfer_obj.successful_downloads:
         for idx, item in enumerate(transfer_obj.successful_downloads):
             url = item.get("url", "N/A")
@@ -581,7 +581,9 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
             f"Check {work_path} for partial downloads and report."
         )
 
-    final_summary_header = "❌ **Task Failed!**" if task_failed else "🛑 **Task Cancelled by User**"
+    # FIX #2: was "❌ **Task Failed!**" / "🛑 **Task Cancelled by User**"
+    # Markdown ** renders as literal asterisks in HTML-mode messages.
+    final_summary_header = "<b>\u274c Task Failed!</b>" if task_failed else "<b>\U0001f6d1 Task Cancelled by User</b>"
     final_summary_text = (
         f"{final_summary_header}\n"
         f"Task ID: {task_ctx.get_short_id()}\n"
@@ -589,9 +591,9 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
         f"Elapsed: {time_spent}\n"
     )
     if report_saved:
-        final_summary_text += "\n📜 Report file generated & sent."
+        final_summary_text += "\n\U0001f4dc Report file generated & sent."
     else:
-        final_summary_text += "\n⚠️ Report file generation failed."
+        final_summary_text += "\n\u26a0\ufe0f Report file generation failed."
 
     if error_obj.failed_links:
         final_summary_text += f"\nFailed Downloads: {len(error_obj.failed_links)}"
@@ -622,10 +624,11 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
                 log.warning(
                     "Report file not saved or found, cannot send document.")
 
+            # FIX #5: unified emoji style with cancelTask keyboard
             final_markup = InlineKeyboardMarkup(
                 [[
-                    InlineKeyboardButton("Channel 📣", url="https://t.me/Colab_Leecher"),
-                    InlineKeyboardButton("Group 💬", url="https://t.me/Colab_Leecher_Discuss"),
+                    InlineKeyboardButton("\U0001f4e3 Channel", url="https://t.me/Colab_Leecher"),
+                    InlineKeyboardButton("\U0001f4ac Group", url="https://t.me/Colab_Leecher_Discuss"),
                 ]]
             )
             status_msg = task_ctx.status_msg
@@ -752,7 +755,7 @@ async def Zip_Handler(
             return
         _transfer.total_down_size = getSize(_paths.temp_zpath)
         log.info(
-            f"Zipping complete. Output size: {sizeUnit( _transfer.total_down_size)}")
+            f"Zipping complete. Output size: {sizeUnit(_transfer.total_down_size)}")
     except Exception as zip_err:
         log.error(f"Error in Zip_Handler: {zip_err}", exc_info=True)
         if _task_error:
@@ -861,7 +864,7 @@ async def Zip_Handler(
         if ospath.exists(temp_unzip_path):
             TRANSFER.total_down_size = getSize(temp_unzip_path)
             log.info(
-                f"Extraction/Copy complete. Final size in '{temp_unzip_path}': {sizeUnit( TRANSFER.total_down_size)}")
+                f"Extraction/Copy complete. Final size in '{temp_unzip_path}': {sizeUnit(TRANSFER.total_down_size)}")
         elif not TaskError.state:
             # If no error state was set, but output path is missing, set error
             log.error(
@@ -906,13 +909,17 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
         file_count = len(transfer_obj.sent_file)
         file_count_str = f"<code>{file_count}</code>"
 
+        # FIX #4: proper HTML anchor replacing broken Markdown link with ┬─────┬ prefix.
+        # FIX #8: unified box style — ╭/├/╰ throughout, no rogue ┬─────┬.
         l_ink = (
-            "┬─────[ Colab Usage ]"
-            "(https://colab.research.google.com/drive/12hdEqaidRZ8krqj7rpnyDzg1dkKmvdvp)"
-            "─────┬")
+            "\n\u251c\u2500\u2500\u2500\u2500\u2500 "
+            "<a href='https://colab.research.google.com/drive/12hdEqaidRZ8krqj7rpnyDzg1dkKmvdvp'>"
+            "\u2601\ufe0f Colab Usage</a> "
+            "\u2500\u2500\u2500\u2500\u2500\u2524\n"
+        )
 
         if is_leech:
-            file_count_display = f"├<b>File Count » </b>{file_count_str} Files\n"
+            file_count_display = f"\u251c<b>File Count \u00bb </b>{file_count_str} Files\n"
             size_label = "Uploaded"
             size_value = sizeUnit(total_uploaded_size)
         else:
@@ -931,27 +938,30 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
         mode_label = (task_ctx.mode or "task").upper()
         last_text = (
             f"\n\n<b>#{mode_label}_COMPLETE</b> {task_id_str}\n\n"
-            f"╭<b>Name » </b><code>{display_name}</code>\n"
-            f"├<b>{size_label} » </b><code>{size_value}</code>\n"
+            f"\u256d<b>Name \u00bb </b><code>{display_name}</code>\n"
+            f"\u251c<b>{size_label} \u00bb </b><code>{size_value}</code>\n"
             f"{file_count_display}"
-            f"╰<b>Time Taken »</b> <code>{elapsed_time_str}</code>"
+            # FIX #6: was '\u00bb</b>' (no space), now '\u00bb </b>' — consistent with other fields
+            f"\u2570<b>Time Taken \u00bb </b><code>{elapsed_time_str}</code>"
         )
 
         if status_msg:
             final_status_text = messages_obj.task_msg + l_ink + last_text
+            # FIX #5: added emojis to match cancelTask keyboard style
             final_markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("Git Repo", url="https://github.com/XronTrix10/Telegram-Leecher")],
+                [InlineKeyboardButton("\u2b50 GitHub", url="https://github.com/XronTrix10/Telegram-Leecher")],
                 [
-                    InlineKeyboardButton("Channel", url="https://t.me/Colab_Leecher"),
-                    InlineKeyboardButton("Group", url="https://t.me/Colab_Leecher_Discuss"),
+                    InlineKeyboardButton("\U0001f4e3 Channel", url="https://t.me/Colab_Leecher"),
+                    InlineKeyboardButton("\U0001f4ac Group", url="https://t.me/Colab_Leecher_Discuss"),
                 ],
             ])
             try:
                 sent_msg = task_ctx.sent_msg
                 if sent_msg:
+                    # FIX #3: was '**SOURCE »** __[Here](url)__' (Markdown in HTML context)
                     await sent_msg.reply_text(
-                        text=f"**SOURCE »** __[Here]({messages_obj.src_link})__" + last_text,
-                        disable_web_page_preview=True,
+                        text=f"<b>SOURCE \u00bb</b> <a href='{messages_obj.src_link}'>Here</a>" + last_text,
+                        disable_web_page_preview=False,
                     )
                     log.info(f"Sent final summary to dump chat {task_id_str}.")
                 else:

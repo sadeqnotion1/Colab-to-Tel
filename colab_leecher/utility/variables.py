@@ -187,11 +187,13 @@ class Paths:
 # Define Messages class for storing message content fragments
 class Messages:
     """Stores strings and context related to messages."""
-    caution_msg = "\n\n<i>💖✨ ¡Hala Madrid!...y nada más ✨💖</b></i>"
+    # FIX #1: removed orphaned </b> tag (was </b></i>, should be </i>)
+    caution_msg = "\n\n<i>\U0001f496\u2728 \u00a1Hala Madrid!...y nada m\u00e1s \u2728\U0001f496</i>"
     download_name = ""
     task_msg = ""
-    status_head = f"<b>📥 DOWNLOADING » </b>\n"  # Default status head
-    extract_head = f"<b>📂 EXTRACTING »</b>\n"  # Extraction status head
+    # FIX #7: unified » spacing — both now use '<b>LABEL »</b>' (no trailing space before </b>)
+    status_head = f"<b>\U0001f4e5 DOWNLOADING \u00bb</b>\n"
+    extract_head = f"<b>\U0001f4c2 EXTRACTING \u00bb</b>\n"
     dump_task = ""
     src_link = ""
     link_p = ""
