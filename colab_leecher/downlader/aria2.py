@@ -24,9 +24,9 @@ def get_Aria2c_Name(link):
     log.debug(f"Attempting Aria2c dry run for name: {link[:100]}...")
     name = "UNKNOWN DOWNLOAD NAME" # Default
     try:
-        cmd = f'aria2c -x10 --dry-run --file-allocation=none "{link}"'
+        cmd_args = ["aria2c", "-x10", "--dry-run", "--file-allocation=none", link]
         # Use subprocess.run with timeout
-        result = subprocess.run(cmd, capture_output=True, shell=True, text=True, timeout=15, check=False)
+        result = subprocess.run(cmd_args, capture_output=True, text=True, timeout=15, check=False)
 
         if result.returncode == 0 and result.stdout:
             # Look for 'complete:' or 'out=' lines
@@ -521,8 +521,10 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
             log.error(f"aiohttp fallback failed for link index {num}: {aiohttp_err}")
             success = False
             if os.path.exists(file_path):
-                try: os.remove(file_path)
-                except: pass
+                try:
+                    os.remove(file_path)
+                except OSError as remove_err:
+                    log.warning(f"Failed to remove fallback file {file_path}: {remove_err}")
 
     except Exception as e:
         # Handle other general exceptions

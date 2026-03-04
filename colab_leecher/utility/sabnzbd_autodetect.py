@@ -49,8 +49,8 @@ def detect_sabnzbd(host: str = "127.0.0.1", port: int = 8080, api_key: str = "")
                 'base_url': base_url,
                 'version': version
             }
-    except:
-        pass
+    except (requests.RequestException, ValueError) as detect_err:
+        log.debug(f"SABnzbd not reachable at {base_url}: {detect_err}")
 
     return None
 

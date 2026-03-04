@@ -4,11 +4,18 @@ SABnzbd API Client
 Wrapper for SABnzbd API to submit NZBs, monitor queue, and retrieve completed downloads.
 """
 
+import logging
 import requests
 import time
 import os
 from typing import Optional, Dict, List, Tuple
-from pathlib import Path
+
+
+log = logging.getLogger(__name__)
+
+
+class SABnzbdClientError(RuntimeError):
+    """Raised when SABnzbd API calls fail or return invalid payloads."""
 
 
 class SABnzbdClient:
@@ -49,10 +56,17 @@ class SABnzbdClient:
                 response = requests.get(self.base_url, params=params, timeout=30)
 
             response.raise_for_status()
-            return response.json()
+        except requests.RequestException as request_err:
+            raise SABnzbdClientError(
+                f"SABnzbd API request failed ({self.host}:{self.port})"
+            ) from request_err
 
-        except requests.RequestException as e:
-            raise Exception(f"SABnzbd API request failed: {e}")
+        try:
+            return response.json()
+        except ValueError as decode_err:
+            raise SABnzbdClientError(
+                f"SABnzbd API returned non-JSON response ({self.host}:{self.port})"
+            ) from decode_err
 
     def get_version(self) -> str:
         """Get SABnzbd version"""
@@ -64,7 +78,17 @@ class SABnzbdClient:
         try:
             self.get_version()
             return True
-        except:
+        except SABnzbdClientError as health_err:
+            log.debug(
+                "SABnzbd health check failed",
+                extra={
+                    "component": "sabnzbd_client",
+                    "operation": "is_alive",
+                    "host": self.host,
+                    "port": self.port,
+                    "error_type": type(health_err).__name__,
+                },
+            )
             return False
 
     def add_nzb_file(self, nzb_path: str, category: str = "Default", priority: int = 0) -> Tuple[bool, str]:
@@ -103,8 +127,21 @@ class SABnzbdClient:
                     error = result.get('error', 'Unknown error')
                     return False, error
 
-        except Exception as e:
-            return False, str(e)
+        except (OSError, SABnzbdClientError, TypeError, ValueError, AttributeError) as add_file_err:
+            log.warning(
+                "SABnzbd add_nzb_file failed",
+                extra={
+                    "component": "sabnzbd_client",
+                    "operation": "add_nzb_file",
+                    "host": self.host,
+                    "port": self.port,
+                    "path": nzb_path,
+                    "category": category,
+                    "priority": priority,
+                    "error_type": type(add_file_err).__name__,
+                },
+            )
+            return False, str(add_file_err)
 
     def add_nzb_url(self, nzb_url: str, category: str = "Default", priority: int = 0) -> Tuple[bool, str]:
         """
@@ -138,8 +175,21 @@ class SABnzbdClient:
                 error = result.get('error', 'Unknown error')
                 return False, error
 
-        except Exception as e:
-            return False, str(e)
+        except (SABnzbdClientError, TypeError, ValueError, AttributeError) as add_url_err:
+            log.warning(
+                "SABnzbd add_nzb_url failed",
+                extra={
+                    "component": "sabnzbd_client",
+                    "operation": "add_nzb_url",
+                    "host": self.host,
+                    "port": self.port,
+                    "url": nzb_url,
+                    "category": category,
+                    "priority": priority,
+                    "error_type": type(add_url_err).__name__,
+                },
+            )
+            return False, str(add_url_err)
 
     def get_queue(self) -> Dict:
         """
@@ -211,7 +261,18 @@ class SABnzbdClient:
         try:
             self._request({'mode': 'queue', 'name': 'pause', 'value': nzo_id})
             return True
-        except:
+        except SABnzbdClientError as pause_err:
+            log.warning(
+                "SABnzbd pause_download failed",
+                extra={
+                    "component": "sabnzbd_client",
+                    "operation": "pause_download",
+                    "host": self.host,
+                    "port": self.port,
+                    "nzo_id": nzo_id,
+                    "error_type": type(pause_err).__name__,
+                },
+            )
             return False
 
     def resume_download(self, nzo_id: str) -> bool:
@@ -219,7 +280,18 @@ class SABnzbdClient:
         try:
             self._request({'mode': 'queue', 'name': 'resume', 'value': nzo_id})
             return True
-        except:
+        except SABnzbdClientError as resume_err:
+            log.warning(
+                "SABnzbd resume_download failed",
+                extra={
+                    "component": "sabnzbd_client",
+                    "operation": "resume_download",
+                    "host": self.host,
+                    "port": self.port,
+                    "nzo_id": nzo_id,
+                    "error_type": type(resume_err).__name__,
+                },
+            )
             return False
 
     def delete_download(self, nzo_id: str, delete_files: bool = False) -> bool:
@@ -242,7 +314,19 @@ class SABnzbdClient:
                 'del_files': '1' if delete_files else '0'
             })
             return True
-        except:
+        except SABnzbdClientError as delete_err:
+            log.warning(
+                "SABnzbd delete_download failed",
+                extra={
+                    "component": "sabnzbd_client",
+                    "operation": "delete_download",
+                    "host": self.host,
+                    "port": self.port,
+                    "nzo_id": nzo_id,
+                    "delete_files": delete_files,
+                    "error_type": type(delete_err).__name__,
+                },
+            )
             return False
 
     def get_queue_stats(self) -> Dict:

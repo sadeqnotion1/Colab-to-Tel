@@ -3,8 +3,7 @@ Enhanced Telegram Bot UI Components
 Provides modern, beautiful message templates and formatting utilities
 """
 
-from typing import Optional, List, Dict, Any
-from datetime import datetime
+from typing import List, Dict, Any
 
 
 class Emoji:

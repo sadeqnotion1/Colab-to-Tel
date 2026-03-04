@@ -1,0 +1,144 @@
+{
+  "generated_at_utc": "2026-02-27T14:52:02.083179+00:00",
+  "target": "colab_leecher",
+  "entries": [
+    {
+      "file": "colab_leecher/__main__.py",
+      "type": "function",
+      "name": "extract_archive",
+      "max_complexity": 49
+    },
+    {
+      "file": "colab_leecher/__main__.py",
+      "type": "function",
+      "name": "handle_options",
+      "max_complexity": 104
+    },
+    {
+      "file": "colab_leecher/__main__.py",
+      "type": "function",
+      "name": "handle_reply",
+      "max_complexity": 65
+    },
+    {
+      "file": "colab_leecher/__main__.py",
+      "type": "function",
+      "name": "handle_text_input",
+      "max_complexity": 72
+    },
+    {
+      "file": "colab_leecher/__main__.py",
+      "type": "function",
+      "name": "handle_url",
+      "max_complexity": 121
+    },
+    {
+      "file": "colab_leecher/downlader/aria2.py",
+      "type": "function",
+      "name": "aria2_Download",
+      "max_complexity": 74
+    },
+    {
+      "file": "colab_leecher/downlader/aria2.py",
+      "type": "function",
+      "name": "on_output",
+      "max_complexity": 41
+    },
+    {
+      "file": "colab_leecher/downlader/manager.py",
+      "type": "function",
+      "name": "downloadManager",
+      "max_complexity": 45
+    },
+    {
+      "file": "colab_leecher/downlader/mega.py",
+      "type": "function",
+      "name": "megadl",
+      "max_complexity": 70
+    },
+    {
+      "file": "colab_leecher/uploader/telegram.py",
+      "type": "function",
+      "name": "upload_file",
+      "max_complexity": 51
+    },
+    {
+      "file": "colab_leecher/utility/converters.py",
+      "type": "function",
+      "name": "archive",
+      "max_complexity": 58
+    },
+    {
+      "file": "colab_leecher/utility/converters.py",
+      "type": "function",
+      "name": "extract",
+      "max_complexity": 42
+    },
+    {
+      "file": "colab_leecher/utility/converters.py",
+      "type": "function",
+      "name": "extract_and_upload_streaming",
+      "max_complexity": 41
+    },
+    {
+      "file": "colab_leecher/utility/converters.py",
+      "type": "function",
+      "name": "extract_rar_streaming",
+      "max_complexity": 52
+    },
+    {
+      "file": "colab_leecher/utility/converters.py",
+      "type": "function",
+      "name": "splitVideo",
+      "max_complexity": 62
+    },
+    {
+      "file": "colab_leecher/utility/handler.py",
+      "type": "function",
+      "name": "SendLogs",
+      "max_complexity": 45
+    },
+    {
+      "file": "colab_leecher/utility/handler.py",
+      "type": "function",
+      "name": "cancelTask",
+      "max_complexity": 54
+    },
+    {
+      "file": "colab_leecher/utility/helper.py",
+      "type": "function",
+      "name": "extract_filename_from_url",
+      "max_complexity": 87
+    },
+    {
+      "file": "colab_leecher/utility/task_dashboard.py",
+      "type": "function",
+      "name": "update_summary_dashboard",
+      "max_complexity": 97
+    },
+    {
+      "file": "colab_leecher/utility/task_manager.py",
+      "type": "function",
+      "name": "Do_GDrive_Upload",
+      "max_complexity": 61
+    },
+    {
+      "file": "colab_leecher/utility/task_manager.py",
+      "type": "function",
+      "name": "Do_Leech",
+      "max_complexity": 96
+    },
+    {
+      "file": "colab_leecher/utility/task_manager.py",
+      "type": "function",
+      "name": "Do_Mirror",
+      "max_complexity": 49
+    },
+    {
+      "file": "colab_leecher/utility/task_manager.py",
+      "type": "function",
+      "name": "taskScheduler",
+      "max_complexity": 88
+    }
+  ]
+}

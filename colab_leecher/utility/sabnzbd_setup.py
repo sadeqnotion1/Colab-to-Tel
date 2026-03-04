@@ -11,6 +11,7 @@ import subprocess
 import time
 import json
 import configparser
+import tempfile
 from pathlib import Path
 from ..utility.variables import Paths, BOT
 
@@ -192,7 +193,8 @@ class SABnzbdManager:
                 timeout=2
             )
             return response.status_code == 200
-        except:
+        except Exception as check_err:
+            print(f"⚠️ SABnzbd health check failed: {check_err}")
             return False
 
     def stop_sabnzbd(self):
@@ -229,16 +231,23 @@ class SABnzbdManager:
         print("🌐 Setting up public tunnel for SABnzbd web UI...")
 
         try:
+            cloudflared_pkg_path = Path(tempfile.gettempdir()) / "cloudflared.deb"
+
             # Install cloudflared
             subprocess.run([
                 "wget", "-q",
                 "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb",
-                "-O", "/tmp/cloudflared.deb"
+                "-O", str(cloudflared_pkg_path)
             ], check=True, timeout=30)
 
             subprocess.run([
-                "dpkg", "-i", "/tmp/cloudflared.deb"
+                "dpkg", "-i", str(cloudflared_pkg_path)
             ], check=True, capture_output=True)
+
+            try:
+                cloudflared_pkg_path.unlink(missing_ok=True)
+            except OSError as cleanup_err:
+                print(f"⚠️ Could not remove temporary cloudflared package: {cleanup_err}")
 
             print("✅ Cloudflared installed")
 

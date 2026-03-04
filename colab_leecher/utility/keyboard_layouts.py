@@ -3,7 +3,7 @@ Enhanced Keyboard Layouts for Telegram Bot
 Provides reusable, beautiful inline keyboard configurations
 """
 
-from typing import List, Optional, Dict, Union
+from typing import List, Dict, Union
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 

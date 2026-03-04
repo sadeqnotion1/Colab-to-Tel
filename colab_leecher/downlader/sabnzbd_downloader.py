@@ -169,8 +169,8 @@ class SABnzbdDownloader:
                             self.total_size = int(float(size_str.split()[0]) * 1024 * 1024)
                         elif 'KB' in size_str:
                             self.total_size = int(float(size_str.split()[0]) * 1024)
-                    except:
-                        pass
+                    except (ValueError, IndexError) as parse_err:
+                        log.debug(f"Could not parse SABnzbd size value '{size_str}': {parse_err}")
 
                     await self.update_progress_bar(
                         percentage,

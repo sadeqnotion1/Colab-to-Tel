@@ -93,8 +93,8 @@ async def instagram_download(link: str, num: int) -> bool:
                     text=Messages.task_msg + Messages.status_head + message + sys_text,
                     reply_markup=keyboard()
                 )
-            except Exception:
-                pass
+            except Exception as status_edit_err:
+                log.debug(f"Failed to edit Instagram status message: {status_edit_err}")
         else:
             try:
                 await status_bar(
@@ -106,8 +106,8 @@ async def instagram_download(link: str, num: int) -> bool:
                     left=_instagram_state.left,
                     engine="Instagram 📸",
                 )
-            except Exception:
-                pass
+            except Exception as status_bar_err:
+                log.debug(f"Failed to render Instagram status bar: {status_bar_err}")
 
         await sleep(2.5)
 
@@ -532,8 +532,8 @@ async def instagram_profile_download(url: str, num: int, max_posts: int = 50) ->
                     text=Messages.task_msg + Messages.status_head + message + sys_text,
                     reply_markup=keyboard()
                 )
-            except Exception:
-                pass
+            except Exception as status_edit_err:
+                log.debug(f"Failed to edit Instagram profile status message: {status_edit_err}")
         else:
             try:
                 await status_bar(
@@ -545,8 +545,8 @@ async def instagram_profile_download(url: str, num: int, max_posts: int = 50) ->
                     left=_instagram_state.left,
                     engine="Instagram 📸",
                 )
-            except Exception:
-                pass
+            except Exception as status_bar_err:
+                log.debug(f"Failed to render Instagram profile status bar: {status_bar_err}")
 
         await sleep(2.5)
 
@@ -696,8 +696,8 @@ def instagram_profile_downloader(url: str, username: str, max_posts: int):
             try:
                 import os
                 os.unlink(ydl_opts["cookiefile"])
-            except:
-                pass
+            except OSError as unlink_err:
+                log.debug(f"Could not remove temporary cookie file: {unlink_err}")
 
     except yt_dlp.utils.DownloadError as e:
         error_msg = str(e)

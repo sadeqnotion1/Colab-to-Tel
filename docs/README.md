@@ -31,6 +31,14 @@ For developers and contributors:
 - [**REORGANIZATION_SUMMARY.md**](development/REORGANIZATION_SUMMARY.md) - Codebase reorganization report
 - [Mirror Function](development/mirror_function.txt) - Mirror mode implementation details
 
+## Operations Runbooks
+
+For release reliability and incident readiness:
+
+- [Release Runbook](operations/RELEASE_RUNBOOK.md) - Standard release process and quality gates
+- [Rollback Runbook](operations/ROLLBACK_RUNBOOK.md) - Recovery procedure for failed releases
+- [Incident Runbook](operations/INCIDENT_RUNBOOK.md) - Incident triage, response, and closure workflow
+
 ## Project Planning
 
 - [ROADMAP.md](ROADMAP.md) - Project roadmap and planned features

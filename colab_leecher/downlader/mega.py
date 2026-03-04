@@ -178,8 +178,17 @@ async def megadl(link: str, num: int, task_ctx=None, _recursion_depth: int = 0) 
                 f for f in os.listdir(_paths.down_path)
                 if os.path.isfile(os.path.join(_paths.down_path, f))
             }
-        except OSError:
-            pass
+        except OSError as list_err:
+            log.debug(
+                "Unable to list existing files before Mega download",
+                extra={
+                    "component": "mega_download",
+                    "operation": "list_existing_files",
+                    "download_path": _paths.down_path,
+                    "tool": tool_name,
+                    "error_type": type(list_err).__name__,
+                },
+            )
 
         # Build command variants based on the tool
         if use_megatools_dl:
@@ -284,10 +293,10 @@ async def megadl(link: str, num: int, task_ctx=None, _recursion_depth: int = 0) 
                 # Only attempt if recursion depth allows and OS is Debian-based
                 if _recursion_depth == 0 and shutil.which("apt-get") is not None:
                     try:
-                        # Check if we have necessary permissions (can write to /tmp as proxy)
+                        # Check if we have necessary permissions by creating a temp file.
                         import tempfile
                         try:
-                            with tempfile.NamedTemporaryFile(dir="/tmp", delete=True):
+                            with tempfile.NamedTemporaryFile(delete=True):
                                 pass
                             has_write_access = True
                         except (OSError, PermissionError):

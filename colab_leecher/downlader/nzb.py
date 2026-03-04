@@ -14,7 +14,7 @@ import time
 import logging
 import nntplib
 import asyncio
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as ET
 from typing import Dict, List, Tuple, Optional
 from pyrogram.types import Message
 
@@ -272,12 +272,15 @@ class NZBDownloader:
             try:
                 connection.group('alt.binaries.test')
                 log.debug(f"NNTP connection ready ({provider_name}) - selected alt.binaries.test")
-            except:
+            except nntplib.NNTPError as primary_group_err:
                 try:
                     connection.group('alt.test')
                     log.debug(f"NNTP connection ready ({provider_name}) - selected alt.test")
-                except:
-                    log.debug(f"NNTP connection ready ({provider_name}) - no default group")
+                except nntplib.NNTPError as fallback_group_err:
+                    log.debug(
+                        f"NNTP connection ready ({provider_name}) - no default group "
+                        f"(primary='{primary_group_err}', fallback='{fallback_group_err}')"
+                    )
 
             return connection
 
@@ -797,7 +800,7 @@ class NZBDownloader:
             for conn in self.nntp_connections:
                 try:
                     conn.quit()
-                except:
-                    pass
+                except Exception as close_err:
+                    log.debug(f"Error closing NNTP connection: {close_err}")
 
             return False, None

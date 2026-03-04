@@ -4,7 +4,6 @@ import logging
 import time
 from contextvars import ContextVar
 from functools import wraps
-from typing import Any
 
 # ContextVar to store request/task ID for log tracing
 # This allows logs from different tasks to be easily filtered

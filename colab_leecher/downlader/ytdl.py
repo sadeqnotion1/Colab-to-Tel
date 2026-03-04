@@ -6,6 +6,7 @@ import yt_dlp
 from asyncio import sleep
 from threading import Thread
 from os import makedirs, path as ospath
+from pyrogram.errors import MessageNotModified, RPCError
 from colab_leecher.utility.handler import cancelTask
 from colab_leecher.utility.variables import YTDL, MSG, Messages, Paths
 from colab_leecher.utility.helper import getTime, keyboard, sizeUnit, status_bar, sysINFO
@@ -43,8 +44,26 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
                     message = YTDL.header
                     try:
                         await MSG.status_msg.edit_text(text=Messages.task_msg + Messages.status_head + message + sys_text, reply_markup=keyboard())
-                    except Exception:
-                        pass
+                    except AttributeError as status_msg_err:
+                        log.debug(
+                            "Skipping YTDL status edit; status message is not available",
+                            extra={
+                                "component": "ytdl_status",
+                                "link_index": num,
+                                "attempt": attempt + 1,
+                                "error_type": type(status_msg_err).__name__,
+                            },
+                        )
+                    except (MessageNotModified, RPCError, TypeError, ValueError) as status_edit_err:
+                        log.debug(
+                            "Skipping YTDL status edit update",
+                            extra={
+                                "component": "ytdl_status",
+                                "link_index": num,
+                                "attempt": attempt + 1,
+                                "error_type": type(status_edit_err).__name__,
+                            },
+                        )
                 else:
                     try:
                         await status_bar(
@@ -56,8 +75,16 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
                             left=YTDL.left,
                             engine="Xr-YtDL 🏮",
                         )
-                    except Exception:
-                        pass
+                    except (MessageNotModified, RPCError, AttributeError, TypeError, ValueError) as status_bar_err:
+                        log.debug(
+                            "Skipping YTDL status_bar update",
+                            extra={
+                                "component": "ytdl_status",
+                                "link_index": num,
+                                "attempt": attempt + 1,
+                                "error_type": type(status_bar_err).__name__,
+                            },
+                        )
 
                 await sleep(2.5)
 

@@ -1,0 +1,134 @@
+{
+  "errors": [],
+  "generated_at": "2026-02-27T08:27:52Z",
+  "metrics": {
+    ".\\colab_leecher/__main__.py": {
+      "CONFIDENCE.HIGH": 5,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 5,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 3000,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    "_totals": {
+      "CONFIDENCE.HIGH": 5,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 5,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 3000,
+      "nosec": 0,
+      "skipped_tests": 0
+    }
+  },
+  "results": [
+    {
+      "code": "2600             try:\n2601                 chosen_url = random.choice(thumbnail_urls)\n2602                 log.info(f\"Downloading thumbnail for extraction: {chosen_url}\")\n",
+      "col_offset": 29,
+      "end_col_offset": 58,
+      "filename": ".\\colab_leecher/__main__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 330,
+        "link": "https://cwe.mitre.org/data/definitions/330.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Standard pseudo-random generators are not suitable for security/cryptographic purposes.",
+      "line_number": 2601,
+      "line_range": [
+        2601
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random",
+      "test_id": "B311",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "2737         try:\n2738             chosen_url = random.choice(thumbnail_urls)\n2739             log.info(f\"Downloading thumbnail for extraction: {chosen_url}\")\n",
+      "col_offset": 25,
+      "end_col_offset": 54,
+      "filename": ".\\colab_leecher/__main__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 330,
+        "link": "https://cwe.mitre.org/data/definitions/330.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Standard pseudo-random generators are not suitable for security/cryptographic purposes.",
+      "line_number": 2738,
+      "line_range": [
+        2738
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random",
+      "test_id": "B311",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "2960         try:\n2961             chosen_url = random.choice(thumbnail_urls)\n2962             log.info(f\"Downloading thumbnail for extraction: {chosen_url}\")\n",
+      "col_offset": 25,
+      "end_col_offset": 54,
+      "filename": ".\\colab_leecher/__main__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 330,
+        "link": "https://cwe.mitre.org/data/definitions/330.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Standard pseudo-random generators are not suitable for security/cryptographic purposes.",
+      "line_number": 2961,
+      "line_range": [
+        2961
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random",
+      "test_id": "B311",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "3371         hero_image_path = task_ctx.hero_image\n3372         chosen_url = random.choice(thumbnail_urls) if thumbnail_urls else Aria2c.pic_dwn_url\n3373 \n",
+      "col_offset": 21,
+      "end_col_offset": 50,
+      "filename": ".\\colab_leecher/__main__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 330,
+        "link": "https://cwe.mitre.org/data/definitions/330.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Standard pseudo-random generators are not suitable for security/cryptographic purposes.",
+      "line_number": 3372,
+      "line_range": [
+        3372
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random",
+      "test_id": "B311",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "3739         hero_image_path = task_ctx.hero_image\n3740         chosen_url = random.choice(thumbnail_urls) if thumbnail_urls else None\n3741 \n",
+      "col_offset": 21,
+      "end_col_offset": 50,
+      "filename": ".\\colab_leecher/__main__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 330,
+        "link": "https://cwe.mitre.org/data/definitions/330.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Standard pseudo-random generators are not suitable for security/cryptographic purposes.",
+      "line_number": 3740,
+      "line_range": [
+        3740
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random",
+      "test_id": "B311",
+      "test_name": "blacklist"
+    }
+  ]
+}

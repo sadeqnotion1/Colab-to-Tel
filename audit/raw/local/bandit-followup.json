@@ -1,0 +1,522 @@
+{
+  "errors": [],
+  "generated_at": "2026-02-26T19:53:03Z",
+  "metrics": {
+    ".\\colab_leecher/__main__.py": {
+      "CONFIDENCE.HIGH": 5,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 5,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 2842,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    ".\\colab_leecher/downlader/instagram.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 787,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    ".\\colab_leecher/downlader/nzb.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 581,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    ".\\colab_leecher/downlader/sabnzbd_downloader.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 178,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    ".\\colab_leecher/utility/helper.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 1449,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    ".\\colab_leecher/utility/sabnzbd_autodetect.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 106,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    ".\\colab_leecher/utility/sabnzbd_setup.py": {
+      "CONFIDENCE.HIGH": 11,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 1,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 12,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 311,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    ".\\colab_leecher/utility/task_manager.py": {
+      "CONFIDENCE.HIGH": 1,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 1,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 1385,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    "_totals": {
+      "CONFIDENCE.HIGH": 17,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 1,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 18,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 7639,
+      "nosec": 0,
+      "skipped_tests": 0
+    }
+  },
+  "results": [
+    {
+      "code": "2452             try:\n2453                 chosen_url = random.choice(thumbnail_urls)\n2454                 log.info(f\"Downloading thumbnail for extraction: {chosen_url}\")\n",
+      "col_offset": 29,
+      "end_col_offset": 58,
+      "filename": ".\\colab_leecher/__main__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 330,
+        "link": "https://cwe.mitre.org/data/definitions/330.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Standard pseudo-random generators are not suitable for security/cryptographic purposes.",
+      "line_number": 2453,
+      "line_range": [
+        2453
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random",
+      "test_id": "B311",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "2589         try:\n2590             chosen_url = random.choice(thumbnail_urls)\n2591             log.info(f\"Downloading thumbnail for extraction: {chosen_url}\")\n",
+      "col_offset": 25,
+      "end_col_offset": 54,
+      "filename": ".\\colab_leecher/__main__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 330,
+        "link": "https://cwe.mitre.org/data/definitions/330.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Standard pseudo-random generators are not suitable for security/cryptographic purposes.",
+      "line_number": 2590,
+      "line_range": [
+        2590
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random",
+      "test_id": "B311",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "2812         try:\n2813             chosen_url = random.choice(thumbnail_urls)\n2814             log.info(f\"Downloading thumbnail for extraction: {chosen_url}\")\n",
+      "col_offset": 25,
+      "end_col_offset": 54,
+      "filename": ".\\colab_leecher/__main__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 330,
+        "link": "https://cwe.mitre.org/data/definitions/330.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Standard pseudo-random generators are not suitable for security/cryptographic purposes.",
+      "line_number": 2813,
+      "line_range": [
+        2813
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random",
+      "test_id": "B311",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "3227         hero_image_path = task_ctx.hero_image\n3228         chosen_url = random.choice(thumbnail_urls) if thumbnail_urls else Aria2c.pic_dwn_url\n3229 \n",
+      "col_offset": 21,
+      "end_col_offset": 50,
+      "filename": ".\\colab_leecher/__main__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 330,
+        "link": "https://cwe.mitre.org/data/definitions/330.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Standard pseudo-random generators are not suitable for security/cryptographic purposes.",
+      "line_number": 3228,
+      "line_range": [
+        3228
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random",
+      "test_id": "B311",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "3596         hero_image_path = task_ctx.hero_image\n3597         chosen_url = random.choice(thumbnail_urls) if thumbnail_urls else None\n3598 \n",
+      "col_offset": 21,
+      "end_col_offset": 50,
+      "filename": ".\\colab_leecher/__main__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 330,
+        "link": "https://cwe.mitre.org/data/definitions/330.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Standard pseudo-random generators are not suitable for security/cryptographic purposes.",
+      "line_number": 3597,
+      "line_range": [
+        3597
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random",
+      "test_id": "B311",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "9 import sys\n10 import subprocess\n11 import time\n",
+      "col_offset": 0,
+      "end_col_offset": 17,
+      "filename": ".\\colab_leecher/utility/sabnzbd_setup.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Consider possible security implications associated with the subprocess module.",
+      "line_number": 10,
+      "line_range": [
+        10
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_imports.html#b404-import-subprocess",
+      "test_id": "B404",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "39             # Update package list\n40             subprocess.run([\"apt-get\", \"update\", \"-qq\"], check=True)\n41 \n",
+      "col_offset": 12,
+      "end_col_offset": 68,
+      "filename": ".\\colab_leecher/utility/sabnzbd_setup.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Starting a process with a partial executable path",
+      "line_number": 40,
+      "line_range": [
+        40
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b607_start_process_with_partial_path.html",
+      "test_id": "B607",
+      "test_name": "start_process_with_partial_path"
+    },
+    {
+      "code": "39             # Update package list\n40             subprocess.run([\"apt-get\", \"update\", \"-qq\"], check=True)\n41 \n",
+      "col_offset": 12,
+      "end_col_offset": 68,
+      "filename": ".\\colab_leecher/utility/sabnzbd_setup.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "subprocess call - check for execution of untrusted input.",
+      "line_number": 40,
+      "line_range": [
+        40
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html",
+      "test_id": "B603",
+      "test_name": "subprocess_without_shell_equals_true"
+    },
+    {
+      "code": "51 \n52             subprocess.run([\"apt-get\", \"install\", \"-y\", \"-qq\"] + deps, check=True)\n53 \n",
+      "col_offset": 12,
+      "end_col_offset": 82,
+      "filename": ".\\colab_leecher/utility/sabnzbd_setup.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "subprocess call - check for execution of untrusted input.",
+      "line_number": 52,
+      "line_range": [
+        52
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html",
+      "test_id": "B603",
+      "test_name": "subprocess_without_shell_equals_true"
+    },
+    {
+      "code": "54             # Install SABnzbd via pip\n55             subprocess.run([\n56                 sys.executable, \"-m\", \"pip\", \"install\",\n57                 \"sabnzbd\", \"--quiet\"\n58             ], check=True)\n59 \n",
+      "col_offset": 12,
+      "end_col_offset": 26,
+      "filename": ".\\colab_leecher/utility/sabnzbd_setup.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "subprocess call - check for execution of untrusted input.",
+      "line_number": 55,
+      "line_range": [
+        55,
+        56,
+        57,
+        58
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html",
+      "test_id": "B603",
+      "test_name": "subprocess_without_shell_equals_true"
+    },
+    {
+      "code": "88             'username': '',  # No web auth needed in Colab\n89             'password': '',\n90             'download_dir': str(self.download_dir),\n91             'complete_dir': str(self.download_dir),\n92             'download_free': '20G',  # Reserve 20GB for Colab\n93             'auto_browser': '0',\n94             'check_new_rel': '0',\n95             'auto_disconnect': '1',\n96             'pre_script': '',\n97             'post_script': '',\n98         }\n99 \n100         # Add Usenet servers from bot credentials\n101         server_count = 0\n102 \n103         if hasattr(BOT.Setting, 'nzb_providers') and BOT.Setting.nzb_providers:\n104             for name, provider_config in BOT.Setting.nzb_providers.items():\n",
+      "col_offset": 12,
+      "end_col_offset": 22,
+      "filename": ".\\colab_leecher/utility/sabnzbd_setup.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 259,
+        "link": "https://cwe.mitre.org/data/definitions/259.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Possible hardcoded password: ''",
+      "line_number": 89,
+      "line_range": [
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96,
+        97,
+        98
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html",
+      "test_id": "B105",
+      "test_name": "hardcoded_password_string"
+    },
+    {
+      "code": "163 \n164             self.process = subprocess.Popen(\n165                 cmd,\n166                 stdout=subprocess.PIPE,\n167                 stderr=subprocess.PIPE\n168             )\n169 \n",
+      "col_offset": 27,
+      "end_col_offset": 13,
+      "filename": ".\\colab_leecher/utility/sabnzbd_setup.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "subprocess call - check for execution of untrusted input.",
+      "line_number": 164,
+      "line_range": [
+        164,
+        165,
+        166,
+        167,
+        168
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html",
+      "test_id": "B603",
+      "test_name": "subprocess_without_shell_equals_true"
+    },
+    {
+      "code": "236             # Install cloudflared\n237             subprocess.run([\n238                 \"wget\", \"-q\",\n239                 \"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb\",\n240                 \"-O\", str(cloudflared_pkg_path)\n241             ], check=True, timeout=30)\n242 \n",
+      "col_offset": 12,
+      "end_col_offset": 38,
+      "filename": ".\\colab_leecher/utility/sabnzbd_setup.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Starting a process with a partial executable path",
+      "line_number": 237,
+      "line_range": [
+        237,
+        238,
+        239,
+        240,
+        241
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b607_start_process_with_partial_path.html",
+      "test_id": "B607",
+      "test_name": "start_process_with_partial_path"
+    },
+    {
+      "code": "236             # Install cloudflared\n237             subprocess.run([\n238                 \"wget\", \"-q\",\n239                 \"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb\",\n240                 \"-O\", str(cloudflared_pkg_path)\n241             ], check=True, timeout=30)\n242 \n",
+      "col_offset": 12,
+      "end_col_offset": 38,
+      "filename": ".\\colab_leecher/utility/sabnzbd_setup.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "subprocess call - check for execution of untrusted input.",
+      "line_number": 237,
+      "line_range": [
+        237,
+        238,
+        239,
+        240,
+        241
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html",
+      "test_id": "B603",
+      "test_name": "subprocess_without_shell_equals_true"
+    },
+    {
+      "code": "242 \n243             subprocess.run([\n244                 \"dpkg\", \"-i\", str(cloudflared_pkg_path)\n245             ], check=True, capture_output=True)\n246 \n",
+      "col_offset": 12,
+      "end_col_offset": 47,
+      "filename": ".\\colab_leecher/utility/sabnzbd_setup.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Starting a process with a partial executable path",
+      "line_number": 243,
+      "line_range": [
+        243,
+        244,
+        245
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b607_start_process_with_partial_path.html",
+      "test_id": "B607",
+      "test_name": "start_process_with_partial_path"
+    },
+    {
+      "code": "242 \n243             subprocess.run([\n244                 \"dpkg\", \"-i\", str(cloudflared_pkg_path)\n245             ], check=True, capture_output=True)\n246 \n",
+      "col_offset": 12,
+      "end_col_offset": 47,
+      "filename": ".\\colab_leecher/utility/sabnzbd_setup.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "subprocess call - check for execution of untrusted input.",
+      "line_number": 243,
+      "line_range": [
+        243,
+        244,
+        245
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html",
+      "test_id": "B603",
+      "test_name": "subprocess_without_shell_equals_true"
+    },
+    {
+      "code": "261 \n262             self.tunnel_process = subprocess.Popen(\n263                 tunnel_cmd,\n264                 stdout=subprocess.PIPE,\n265                 stderr=subprocess.PIPE\n266             )\n267 \n",
+      "col_offset": 34,
+      "end_col_offset": 13,
+      "filename": ".\\colab_leecher/utility/sabnzbd_setup.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "subprocess call - check for execution of untrusted input.",
+      "line_number": 262,
+      "line_range": [
+        262,
+        263,
+        264,
+        265,
+        266
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b603_subprocess_without_shell_equals_true.html",
+      "test_id": "B603",
+      "test_name": "subprocess_without_shell_equals_true"
+    },
+    {
+      "code": "672             log.info(\"Choosing random thumbnail from list.\")\n673             chosen_url = random.choice(thumbnail_urls)\n674             log.info(f\"Randomly selected thumbnail URL: {chosen_url}\")\n",
+      "col_offset": 25,
+      "end_col_offset": 54,
+      "filename": ".\\colab_leecher/utility/task_manager.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 330,
+        "link": "https://cwe.mitre.org/data/definitions/330.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Standard pseudo-random generators are not suitable for security/cryptographic purposes.",
+      "line_number": 673,
+      "line_range": [
+        673
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random",
+      "test_id": "B311",
+      "test_name": "blacklist"
+    }
+  ]
+}

@@ -335,6 +335,9 @@ pytest -q tests/integration -m integration --runintegration
 # Security guardrails
 python scripts/security/block_sensitive_files.py
 pre-commit run --all-files
+
+# Dependency audit (local)
+python scripts/security/run_dependency_audit.py --requirements requirements.txt --report-dir audit/raw/local
 ```
 
 ## Credits

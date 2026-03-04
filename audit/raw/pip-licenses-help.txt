@@ -1,0 +1,66 @@
+usage: pip-licenses [-h] [-v] [--python PYTHON_EXEC] [--from SOURCE] [-o COL]
+                    [-f STYLE] [--summary] [--output-file OUTPUT_FILE]
+                    [-i PKG [PKG ...]] [-p PKG [PKG ...]] [-s] [-a]
+                    [--with-maintainers] [-u] [-d] [-nv] [-l]
+                    [--no-license-path] [--with-notice-file]
+                    [--filter-strings] [--filter-code-page CODE]
+                    [--fail-on FAIL_ON] [--allow-only ALLOW_ONLY]
+                    [--partial-match]
+
+Dump the software license list of Python packages installed with pip.
+
+options:
+  -h, --help                  show this help message and exit
+  -v, --version               show program's version number and exit
+
+Common options:
+  --python PYTHON_EXEC         path to python executable to search distributions from
+                              Package will be searched in the selected python's sys.path
+                              By default, will search packages for current env executable
+                              (default: sys.executable)
+  --from SOURCE               where to find license information
+                              "meta", "classifier, "mixed", "all"
+                              (default: mixed)
+  -o COL, --order COL         order by column
+                              "name", "license", "author", "url"
+                              (default: name)
+  -f STYLE, --format STYLE    dump as set format style
+                              "plain", "plain-vertical" "markdown", "rst", 
+                              "confluence", "html", "json", 
+                              "json-license-finder",  "csv"
+                              (default: plain)
+  --summary                   dump summary of each license
+  --output-file OUTPUT_FILE   save license list to file
+  -i PKG [PKG ...], --ignore-packages PKG [PKG ...]
+                              ignore package name in dumped list
+  -p PKG [PKG ...], --packages PKG [PKG ...]
+                              only include selected packages in output
+
+Format options:
+  -s, --with-system           dump with system packages
+  -a, --with-authors          dump with package authors
+  --with-maintainers          dump with package maintainers
+  -u, --with-urls             dump with package urls
+  -d, --with-description      dump with short package description
+  -nv, --no-version           dump without package version
+  -l, --with-license-file     dump with location of license file and contents,
+                              most useful with JSON output. For structured
+                              formats (CSV, Markdown, reST), see README for
+                              workflow examples.
+    --no-license-path         when specified together with option -l, suppress
+                              location of license file output
+    --with-notice-file        when specified together with option -l, dump
+                              with location of license file and contents
+  --filter-strings            filter input according to code page
+    --filter-code-page CODE   specify code page for filtering (default:
+                              latin1)
+
+Verify options:
+  --fail-on FAIL_ON           fail (exit with code 1) on the first occurrence
+                              of the licenses of the semicolon-separated list
+  --allow-only ALLOW_ONLY     fail (exit with code 1) on the first occurrence
+                              of the licenses not in the semicolon-separated
+                              list
+  --partial-match             enables partial matching for --allow-
+                              only/--fail-on
+

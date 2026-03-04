@@ -1,6 +1,6 @@
-#================================================
-#FILE: colab_leecher/utility/variables.py
-#================================================
+# ================================================
+# FILE: colab_leecher/utility/variables.py
+# ================================================
 # /content/Telegram-Leecher/colab_leecher/utility/variables.py
 # Defines global state objects and paths
 # Includes fix for TaskError instantiation
@@ -13,7 +13,7 @@ from datetime import datetime
 try:
     from pyrogram.types import Message
 except ImportError:
-    Message = None # Define as None if pyrogram types are not available at definition time
+    Message = None  # Define as None if pyrogram types are not available at definition time
 
 # Import the Transfer class definition (ensure relative path is correct)
 try:
@@ -25,43 +25,23 @@ except ImportError:
     print("WARNING: Could not import Transfer class from transfer_state.py")
 
 """
-⚠️ CRITICAL LIMITATION - Multi-User Collision Risk:
+Legacy BOT container used by taskScheduler/task_manager.
 
-The BOT class below uses GLOBAL STATE shared across ALL users. This creates race conditions
-when multiple users interact with the bot simultaneously during task setup:
-
-AFFECTED VARIABLES:
-  - BOT.SOURCE: Stores URLs/paths for current task setup
-  - BOT.State.expecting_*_filenames: Flags for filename selection state
-  - BOT.Options.filenames: Selected filenames
-  - BOT.State.reply_prompt_msg_id: Message ID for reply tracking
-
-COLLISION SCENARIO:
-  1. User A sends NZB link → sets BOT.SOURCE = [userA_urls], BOT.State.expecting_nzb_filenames = True
-  2. User B sends NZB link → overwrites BOT.SOURCE = [userB_urls], BOT.State.expecting_nzb_filenames = True
-  3. User A replies with filenames → bot validates against userB_urls (wrong source!)
-  4. Result: Task fails, wrong files downloaded, or User A gets User B's content
-
-IMPACT:
-  - Task SETUP phase is NOT multi-user safe
-  - Task EXECUTION phase IS multi-user safe (uses TaskContext, TASK_QUEUE)
-
-MITIGATION:
-  - Acceptable for single-user bots or low concurrent usage
-  - Once tasks are created, they are properly isolated in TASK_QUEUE
-
-TODO (Future Refactor):
-  Replace global BOT state with per-user state dict:
-    user_states = {user_id: {source: [], expecting_filenames: False, ...}}
-  This requires refactoring all handlers to track user_id → state instead of global BOT.
+Active setup/reply flows are migrating to per-user state maps in `__main__.py` and
+`utility/reply_state.py`. Global fields such as `BOT.SOURCE` and
+`BOT.Options.filenames/service_type` are now treated as task-launch compatibility
+bridges and should only be hydrated immediately before starting a legacy task.
 """
 # Define BOT class structure for settings, options, mode, and state
+
+
 class BOT:
-    SOURCE = []  # ⚠️ GLOBAL STATE - See warning above
+    SOURCE = []  # Legacy compatibility bridge; avoid setup-phase writes.
     TASK = None
+
     class Setting:
         stream_upload = "Media"
-        convert_video = "No" # Default conversion is OFF
+        convert_video = "No"  # Default conversion is OFF
         convert_quality = "Low"
         caption = "Monospace"
         split_video = "Split Videos"
@@ -75,46 +55,57 @@ class BOT:
         instagram_username = ""
         instagram_password = ""
         instagram_sessionid = ""  # Alternative: use session cookie instead
-        instagram_cookies_file = ""  # Path to cookies.txt file (Netscape format)
+        # Path to cookies.txt file (Netscape format)
+        instagram_cookies_file = ""
         # NZB/Usenet Settings (Multi-Provider Support)
         nzb_providers = {}  # Dict of provider configs
         nzb_active_provider = "default"  # Currently selected provider
 
     class Options:
-        stream_upload = True # Keep this consistent with Setting unless logic changes it
-        convert_video = False # Default conversion OFF internally
-        convert_quality = False # False for Low
+        stream_upload = True  # Keep this consistent with Setting unless logic changes it
+        convert_video = False  # Default conversion OFF internally
+        convert_quality = False  # False for Low
         is_split = True
         caption = "code"
         video_out = "mp4"
         custom_name = ""
         zip_pswd = ""
         unzip_pswd = ""
-        archive_format = "7z"  # Options: "zip", "rar", "7z" (default: 7z - best compression, works on all platforms, less corruption)
+        # Options: "zip", "rar", "7z" (default: 7z - best compression, works on
+        # all platforms, less corruption)
+        archive_format = "7z"
         delta_extract_filenames = True
         bitso_extract_filenames = True
         filenames = []
         # --- Includes service_type from earlier modification ---
-        service_type = None # e.g., 'direct', 'delta', 'nzbcloud', 'bitso', 'ytdl', 'local', 'gdrive', 'mega'
+        # e.g., 'direct', 'delta', 'nzbcloud', 'bitso', 'ytdl', 'local',
+        # 'gdrive', 'mega'
+        service_type = None
         # --- END ---
+
     class Mode:
-        mode = "leech"  # Possible values: "leech" (Telegram upload), "mirror" (local copy), "gdrive" (Google Drive upload)
+        # Possible values: "leech" (Telegram upload), "mirror" (local copy),
+        # "gdrive" (Google Drive upload)
+        mode = "leech"
         type = "normal"
         ytdl = False
+
     class State:
         started = False
         task_going = False
         prefix = False
         suffix = False
+        # Legacy compatibility flags retained to avoid breaking external
+        # callers.
         expecting_nzb_filenames = False
         expecting_Debrid_filenames = False
         expecting_bitso_filenames = False
         mindvalley_waiting = False
-        extract_waiting = False  # Waiting for extract path input
-        nzb_waiting = False  # Waiting for NZB file/URL
-        password_waiting = False  # Waiting for archive password input
-        password_retry_context = None  # Stores context for password retry (filepath, extract_to, etc.)
-        reply_prompt_msg_id = None  # Shared message ID for reply tracking
+        extract_waiting = False
+        nzb_waiting = False
+        password_waiting = False
+        password_retry_context = None
+        reply_prompt_msg_id = None
 
 
 # --- Original YTDL State Class (Restored as requested) ---
@@ -134,13 +125,14 @@ class _TaskErrorState:
     """Holds error state for the current task."""
     state = False
     text = ""
-    failed_links = [] # Keep the list for failed links
+    failed_links = []  # Keep the list for failed links
 
     def reset(self):
         """Resets the error state for a new task."""
         self.state = False
         self.text = ""
         self.failed_links = []
+
 
 # Create the single global instance of the error state
 TaskError = _TaskErrorState()
@@ -169,15 +161,27 @@ class Paths:
     VIDEO_FRAME = _os.path.join(_BASE_PATH, "video_frame.jpg")
     HERO_IMAGE = _os.path.join(_BASE_PATH, "Hero.jpg")
     DEFAULT_HERO = _os.path.join(_ROOT_PATH, "custom_thmb.jpg")
-    MOUNTED_DRIVE = _os.path.join("/content", "drive") if _os.name != 'nt' else _os.path.join(_ROOT_PATH, "drive")
+    MOUNTED_DRIVE = _os.path.join(
+        "/content",
+        "drive") if _os.name != 'nt' else _os.path.join(
+        _ROOT_PATH,
+        "drive")
     down_path = _os.path.join(_BASE_PATH, "Downloads")
     temp_dirleech_path = _os.path.join(_BASE_PATH, "dir_leech_temp")
-    mirror_dir = _os.path.join("/content", "Mirrored_Files") if _os.name != 'nt' else _os.path.join(_ROOT_PATH, "Mirrored_Files")
+    mirror_dir = _os.path.join(
+        "/content",
+        "Mirrored_Files") if _os.name != 'nt' else _os.path.join(
+        _ROOT_PATH,
+        "Mirrored_Files")
     temp_zpath = _os.path.join(_BASE_PATH, "Leeched_Files")
     temp_unzip_path = _os.path.join(_BASE_PATH, "Unzipped_Files")
     temp_files_dir = _os.path.join(_BASE_PATH, "leech_temp")
     thumbnail_ytdl = _os.path.join(_BASE_PATH, "ytdl_thumbnails")
-    access_token = _os.path.join("/content", "token.pickle") if _os.name != 'nt' else _os.path.join(_ROOT_PATH, "token.pickle")
+    access_token = _os.path.join(
+        "/content",
+        "token.pickle") if _os.name != 'nt' else _os.path.join(
+        _ROOT_PATH,
+        "token.pickle")
 
 
 # Define Messages class for storing message content fragments
@@ -186,8 +190,8 @@ class Messages:
     caution_msg = "\n\n<i>💖✨ ¡Hala Madrid!...y nada más ✨💖</b></i>"
     download_name = ""
     task_msg = ""
-    status_head = f"<b>📥 DOWNLOADING » </b>\n" # Default status head
-    extract_head = f"<b>📂 EXTRACTING »</b>\n" # Extraction status head
+    status_head = f"<b>📥 DOWNLOADING » </b>\n"  # Default status head
+    extract_head = f"<b>📂 EXTRACTING »</b>\n"  # Extraction status head
     dump_task = ""
     src_link = ""
     link_p = ""
@@ -213,15 +217,19 @@ class Gdrive:
     service = None
 
 
-# Create a global instance of the Transfer class (imported from transfer_state.py)
+# Create a global instance of the Transfer class (imported from
+# transfer_state.py)
 try:
     TRANSFER = Transfer()
 except NameError:
     # Handle case where Transfer class import failed
     print("ERROR: Transfer class not defined. Transfer statistics will not work.")
+
     class _DummyTransfer:
-        down_bytes = [0]; up_bytes = [0]; total_down_size = 0
-        sent_file = []; sent_file_names = []
+        down_bytes = [0]
+        up_bytes = [0]
+        total_down_size = 0
+        sent_file = []
+        sent_file_names = []
         def reset(self): pass
     TRANSFER = _DummyTransfer()
-

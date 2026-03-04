@@ -62,7 +62,7 @@ def download_log():
         from google.colab import files
         files.download(str(log_file))
         print(f"✅ Downloading: {log_file.name}")
-    except:
+    except ImportError:
         print(f"📁 Log saved at: {log_file}")
 
 def show_errors():

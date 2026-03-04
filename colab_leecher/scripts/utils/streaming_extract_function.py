@@ -34,6 +34,8 @@ async def extract_and_upload_streaming(
     import rarfile
     import os
     import time
+    import tempfile
+    import shutil
     import logging
     from datetime import datetime
     from .helper import status_bar, getTime, sizeUnit
@@ -61,9 +63,25 @@ async def extract_and_upload_streaming(
             _task_error.text = f"Archive not found: {rar_filepath}"
         return False
 
-    # Create temp directory for single-file extraction
-    temp_extract_dir = "/tmp/streaming_extract"
-    os.makedirs(temp_extract_dir, exist_ok=True)
+    from ...utility.converters import prompt_for_password
+
+    async def _request_password(error_type: str) -> None:
+        retry_context = {
+            'rar_filepath': rar_filepath,
+            'password': password,
+            'file_filter': file_filter,
+            'task_ctx': task_ctx,
+            'function': 'extract_and_upload_streaming'
+        }
+        await prompt_for_password(
+            os.path.basename(rar_filepath),
+            retry_context=retry_context,
+            error_type=error_type,
+            task_ctx=task_ctx,
+        )
+
+    # Create an isolated temp directory for single-file extraction.
+    temp_extract_dir = tempfile.mkdtemp(prefix="streaming_extract_")
 
     # Open RAR archive
     try:
@@ -81,44 +99,14 @@ async def extract_and_upload_streaming(
         return False
     except rarfile.PasswordRequired:
         log.warning(f"RAR requires password but none provided. Prompting user...")
-
-        # Import necessary modules for password handling
-        from ...utility.variables import BOT
-        from ...utility.converters import prompt_for_password
-
-        # Store context for password retry
-        BOT.State.password_retry_context = {
-            'rar_filepath': rar_filepath,
-            'password': password,
-            'file_filter': file_filter,
-            'task_ctx': task_ctx,
-            'function': 'extract_and_upload_streaming'
-        }
-
-        # Prompt user for password
-        await prompt_for_password(os.path.basename(rar_filepath), error_type="required")
+        await _request_password("required")
 
         # Return False but don't set task error yet - we're waiting for password
         log.info("Waiting for user to provide password via Telegram...")
         return False
     except rarfile.RarWrongPassword:
         log.warning(f"Incorrect password for RAR. Prompting user for correct password...")
-
-        # Import necessary modules for password handling
-        from ...utility.variables import BOT
-        from ...utility.converters import prompt_for_password
-
-        # Store context for password retry
-        BOT.State.password_retry_context = {
-            'rar_filepath': rar_filepath,
-            'password': password,
-            'file_filter': file_filter,
-            'task_ctx': task_ctx,
-            'function': 'extract_and_upload_streaming'
-        }
-
-        # Prompt user for correct password
-        await prompt_for_password(os.path.basename(rar_filepath), error_type="incorrect")
+        await _request_password("incorrect")
 
         # Return False but don't set task error yet - we're waiting for password
         log.info("Waiting for user to provide correct password via Telegram...")
@@ -129,44 +117,14 @@ async def extract_and_upload_streaming(
         members = rar_ref.infolist()
     except rarfile.PasswordRequired:
         log.warning(f"RAR requires password (deferred check during infolist). Prompting user...")
-
-        # Import necessary modules for password handling
-        from ...utility.variables import BOT
-        from ...utility.converters import prompt_for_password
-
-        # Store context for password retry
-        BOT.State.password_retry_context = {
-            'rar_filepath': rar_filepath,
-            'password': password,
-            'file_filter': file_filter,
-            'task_ctx': task_ctx,
-            'function': 'extract_and_upload_streaming'
-        }
-
-        # Prompt user for password
-        await prompt_for_password(os.path.basename(rar_filepath), error_type="required")
+        await _request_password("required")
 
         # Return False but don't set task error yet - we're waiting for password
         log.info("Waiting for user to provide password via Telegram...")
         return False
     except rarfile.RarWrongPassword:
         log.warning(f"Incorrect password for RAR (deferred check during infolist). Prompting user...")
-
-        # Import necessary modules for password handling
-        from ...utility.variables import BOT
-        from ...utility.converters import prompt_for_password
-
-        # Store context for password retry
-        BOT.State.password_retry_context = {
-            'rar_filepath': rar_filepath,
-            'password': password,
-            'file_filter': file_filter,
-            'task_ctx': task_ctx,
-            'function': 'extract_and_upload_streaming'
-        }
-
-        # Prompt user for correct password
-        await prompt_for_password(os.path.basename(rar_filepath), error_type="incorrect")
+        await _request_password("incorrect")
 
         # Return False but don't set task error yet - we're waiting for password
         log.info("Waiting for user to provide correct password via Telegram...")
@@ -257,43 +215,13 @@ async def extract_and_upload_streaming(
             except rarfile.PasswordRequired:
                 log.warning(f"RAR requires password (deferred check during extraction). Prompting user...")
                 rar_ref.close()
-
-                # Import necessary modules for password handling
-                from ...utility.variables import BOT
-                from ...utility.converters import prompt_for_password
-
-                # Store context for password retry
-                BOT.State.password_retry_context = {
-                    'rar_filepath': rar_filepath,
-                    'password': password,
-                    'file_filter': file_filter,
-                    'task_ctx': task_ctx,
-                    'function': 'extract_and_upload_streaming'
-                }
-
-                # Prompt user for password
-                await prompt_for_password(os.path.basename(rar_filepath), error_type="required")
+                await _request_password("required")
                 log.info("Waiting for user to provide password via Telegram...")
                 return False
             except rarfile.RarWrongPassword:
                 log.warning(f"Incorrect password for RAR (deferred check during extraction). Prompting user...")
                 rar_ref.close()
-
-                # Import necessary modules for password handling
-                from ...utility.variables import BOT
-                from ...utility.converters import prompt_for_password
-
-                # Store context for password retry
-                BOT.State.password_retry_context = {
-                    'rar_filepath': rar_filepath,
-                    'password': password,
-                    'file_filter': file_filter,
-                    'task_ctx': task_ctx,
-                    'function': 'extract_and_upload_streaming'
-                }
-
-                # Prompt user for correct password
-                await prompt_for_password(os.path.basename(rar_filepath), error_type="incorrect")
+                await _request_password("incorrect")
                 log.info("Waiting for user to provide correct password via Telegram...")
                 return False
 
@@ -351,7 +279,6 @@ async def extract_and_upload_streaming(
 
     # Cleanup temp directory
     try:
-        import shutil
         shutil.rmtree(temp_extract_dir)
         log.info(f"Cleaned up temp directory: {temp_extract_dir}")
     except Exception as e:

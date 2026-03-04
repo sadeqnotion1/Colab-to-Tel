@@ -1,0 +1,10 @@
+{
+  "requirements_path": "D:\\Projects\\Colab_Telegram_Leecher\\requirements.txt",
+  "mode": "direct",
+  "direct_returncode": 0,
+  "fallback_returncode": null,
+  "vulnerability_total": 0,
+  "packages_with_vulns": 0,
+  "missing_from_env": [],
+  "execution_error": null
+}

@@ -3,7 +3,7 @@ Enhanced Status and Progress Display
 Beautiful, modern progress tracking for downloads/uploads
 """
 
-from typing import Optional, Dict, Any
+from typing import Dict, Any, List
 from datetime import datetime
 from .ui_components import (
     Box, Emoji, ProgressBar, TimeFormatter, SizeFormatter, MessageTemplate
@@ -42,12 +42,24 @@ class StatusDisplay:
             )
         elif style == "compact":
             return self._compact_status(
-                "DOWNLOADING", filename, progress, speed, downloaded, total_size, eta, engine
-            )
+                "DOWNLOADING",
+                filename,
+                progress,
+                speed,
+                downloaded,
+                total_size,
+                eta,
+                engine)
         else:
             return self._classic_status(
-                "📥 DOWNLOADING", filename, progress, speed, downloaded, total_size, eta, engine
-            )
+                "📥 DOWNLOADING",
+                filename,
+                progress,
+                speed,
+                downloaded,
+                total_size,
+                eta,
+                engine)
 
     def upload_status(
         self,
@@ -79,7 +91,8 @@ class StatusDisplay:
         lines = [f"<b>{Emoji.PROCESS} {operation.upper()}</b>\n"]
 
         # Filename
-        lines.append(f"{Box.TOP_LEFT}{Emoji.TAG} <b>Name:</b> <code>{filename}</code>")
+        lines.append(
+            f"{Box.TOP_LEFT}{Emoji.TAG} <b>Name:</b> <code>{filename}</code>")
 
         # Progress bar if available
         if progress is not None:
@@ -88,15 +101,18 @@ class StatusDisplay:
 
         # Current file
         if current_file:
-            lines.append(f"{Box.MIDDLE_LEFT}{Emoji.DOCUMENT} <b>Current:</b> <code>{current_file}</code>")
+            lines.append(
+                f"{Box.MIDDLE_LEFT}{Emoji.DOCUMENT} <b>Current:</b> <code>{current_file}</code>")
 
         # Files progress
         if files_done is not None and total_files is not None:
-            lines.append(f"{Box.MIDDLE_LEFT}{Emoji.ARCHIVE} <b>Files:</b> {files_done}/{total_files}")
+            lines.append(
+                f"{Box.MIDDLE_LEFT}{Emoji.ARCHIVE} <b>Files:</b> {files_done}/{total_files}")
 
         # Elapsed time
         elapsed_str = TimeFormatter.format_seconds(elapsed)
-        lines.append(f"{Box.BOTTOM_LEFT}{Emoji.TIME} <b>Elapsed:</b> {elapsed_str}")
+        lines.append(
+            f"{Box.BOTTOM_LEFT}{Emoji.TIME} <b>Elapsed:</b> {elapsed_str}")
 
         message = "\n".join(lines)
         keyboard = ProgressKeyboards.processing(self.task_id, operation)
@@ -129,12 +145,14 @@ class StatusDisplay:
         # Speed
         if speed > 0:
             speed_str = SizeFormatter.format_speed(speed)
-            lines.append(f"{Box.MIDDLE_LEFT}{Emoji.SPEED} <b>Speed:</b> {speed_str}")
+            lines.append(
+                f"{Box.MIDDLE_LEFT}{Emoji.SPEED} <b>Speed:</b> {speed_str}")
 
         # Downloaded / Total
         downloaded_str = SizeFormatter.format_bytes(downloaded)
         total_str = SizeFormatter.format_bytes(total_size)
-        lines.append(f"{Box.MIDDLE_LEFT}{Emoji.SIZE} <b>Progress:</b> {downloaded_str} / {total_str}")
+        lines.append(
+            f"{Box.MIDDLE_LEFT}{Emoji.SIZE} <b>Progress:</b> {downloaded_str} / {total_str}")
 
         # ETA
         if eta is not None and eta > 0:
@@ -143,11 +161,13 @@ class StatusDisplay:
 
         # Elapsed
         elapsed_str = TimeFormatter.format_seconds(elapsed)
-        lines.append(f"{Box.MIDDLE_LEFT}{Emoji.TIME} <b>Elapsed:</b> {elapsed_str}")
+        lines.append(
+            f"{Box.MIDDLE_LEFT}{Emoji.TIME} <b>Elapsed:</b> {elapsed_str}")
 
         # Engine
         if engine:
-            lines.append(f"{Box.BOTTOM_LEFT}{Emoji.PROCESS} <b>Engine:</b> {engine}")
+            lines.append(
+                f"{Box.BOTTOM_LEFT}{Emoji.PROCESS} <b>Engine:</b> {engine}")
         else:
             # Update last line to use BOTTOM_LEFT
             lines[-1] = lines[-1].replace(Box.MIDDLE_LEFT, Box.BOTTOM_LEFT, 1)
@@ -182,12 +202,14 @@ class StatusDisplay:
         # Speed
         if speed > 0:
             speed_str = SizeFormatter.format_speed(speed)
-            lines.append(f"{Box.MIDDLE_LEFT}{Emoji.SPEED} <b>Speed:</b> {speed_str}")
+            lines.append(
+                f"{Box.MIDDLE_LEFT}{Emoji.SPEED} <b>Speed:</b> {speed_str}")
 
         # Uploaded / Total
         uploaded_str = SizeFormatter.format_bytes(uploaded)
         total_str = SizeFormatter.format_bytes(total_size)
-        lines.append(f"{Box.MIDDLE_LEFT}{Emoji.SIZE} <b>Progress:</b> {uploaded_str} / {total_str}")
+        lines.append(
+            f"{Box.MIDDLE_LEFT}{Emoji.SIZE} <b>Progress:</b> {uploaded_str} / {total_str}")
 
         # ETA
         if eta is not None and eta > 0:
@@ -196,7 +218,8 @@ class StatusDisplay:
 
         # Elapsed
         elapsed_str = TimeFormatter.format_seconds(elapsed)
-        lines.append(f"{Box.BOTTOM_LEFT}{Emoji.TIME} <b>Elapsed:</b> {elapsed_str}")
+        lines.append(
+            f"{Box.BOTTOM_LEFT}{Emoji.TIME} <b>Elapsed:</b> {elapsed_str}")
 
         message = "\n".join(lines)
         keyboard = ProgressKeyboards.uploading(self.task_id)
@@ -258,17 +281,26 @@ class StatusDisplay:
         message += f"╭「{bar}」 <b>»</b> __{progress:.1f}%__\n"
 
         if speed > 0:
-            message += f"├{Emoji.SPEED} <b>Speed »</b> <b>{SizeFormatter.format_speed(speed)}</b>\n"
+            message += f"├{
+                Emoji.SPEED} <b>Speed »</b> <b>{
+                SizeFormatter.format_speed(speed)}</b>\n"
 
         if engine:
             message += f"├{Emoji.PROCESS} <b>Engine »</b> <b>{engine}</b>\n"
 
         if eta:
-            message += f"├{Emoji.ETA} <b>ETA »</b> __{TimeFormatter.format_eta(eta)}__\n"
+            message += f"├{
+                Emoji.ETA} <b>ETA »</b> __{
+                TimeFormatter.format_eta(eta)}__\n"
 
-        message += f"├{Emoji.TIME} <b>Elapsed »</b> __{TimeFormatter.format_seconds(elapsed)}__\n"
-        message += f"├✅ <b>Done »</b> <b>{SizeFormatter.format_bytes(done)}</b>\n"
-        message += f"╰{Emoji.ARCHIVE} <b>Total »</b> <b>{SizeFormatter.format_bytes(total)}</b>"
+        message += f"├{
+            Emoji.TIME} <b>Elapsed »</b> __{
+            TimeFormatter.format_seconds(elapsed)}__\n"
+        message += f"├✅ <b>Done »</b> <b>{
+            SizeFormatter.format_bytes(done)}</b>\n"
+        message += f"╰{
+            Emoji.ARCHIVE} <b>Total »</b> <b>{
+            SizeFormatter.format_bytes(total)}</b>"
 
         keyboard = ProgressKeyboards.downloading(self.task_id)
         return message, keyboard
@@ -316,7 +348,8 @@ class CompletionMessage:
         file_count = len(files)
 
         summary = {
-            "Files Uploaded": f"{file_count} file{'s' if file_count != 1 else ''}",
+            "Files Uploaded": f"{file_count} file{
+                's' if file_count != 1 else ''}",
             "Total Size": SizeFormatter.format_bytes(total_size),
             "Destination": destination,
             "Time Taken": TimeFormatter.format_seconds(duration),
