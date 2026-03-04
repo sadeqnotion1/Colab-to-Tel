@@ -9,74 +9,75 @@ from typing import List, Dict, Any
 class Emoji:
     """Emoji constants for consistent usage"""
     # Status
-    SUCCESS = "✅"
-    ERROR = "❌"
-    WARNING = "⚠️"
-    INFO = "ℹ️"
-    LOADING = "⏳"
+    SUCCESS = "\u2705"
+    ERROR = "\u274c"
+    WARNING = "\u26a0\ufe0f"
+    INFO = "\u2139\ufe0f"
+    LOADING = "\u23f3"
 
     # Actions
-    DOWNLOAD = "📥"
-    UPLOAD = "📤"
-    PROCESS = "⚙️"
-    EXTRACT = "📂"
-    COMPRESS = "🗜️"
+    DOWNLOAD = "\U0001f4e5"
+    UPLOAD = "\U0001f4e4"
+    PROCESS = "\u2699\ufe0f"
+    EXTRACT = "\U0001f4c2"
+    COMPRESS = "\U0001f5dc\ufe0f"
 
     # File types
-    VIDEO = "🎥"
-    AUDIO = "🎵"
-    DOCUMENT = "📄"
-    PHOTO = "🖼️"
-    ARCHIVE = "📦"
-    FOLDER = "📁"
+    VIDEO = "\U0001f3a5"
+    AUDIO = "\U0001f3b5"
+    DOCUMENT = "\U0001f4c4"
+    PHOTO = "\U0001f5bc\ufe0f"
+    ARCHIVE = "\U0001f4e6"
+    FOLDER = "\U0001f4c1"
+    FILE = "\U0001f4c4"   # alias for DOCUMENT — fixes AttributeError in success_message()
 
     # Progress
-    SPEED = "⚡"
-    TIME = "⏱️"
-    ETA = "⏳"
-    SIZE = "💾"
+    SPEED = "\u26a1"
+    TIME = "\u23f1\ufe0f"
+    ETA = "\u23f3"
+    SIZE = "\U0001f4be"
 
     # UI
-    ARROW_RIGHT = "▶️"
-    ARROW_LEFT = "◀️"
-    BULLET = "•"
-    DASH = "—"
-    CHECK = "✓"
-    CROSS = "✗"
+    ARROW_RIGHT = "\u25b6\ufe0f"
+    ARROW_LEFT = "\u25c0\ufe0f"
+    BULLET = "\u2022"
+    DASH = "\u2014"
+    CHECK = "\u2713"
+    CROSS = "\u2717"
 
     # Misc
-    FIRE = "🔥"
-    ROCKET = "🚀"
-    STAR = "⭐"
-    SPARKLE = "✨"
-    LINK = "🔗"
-    TAG = "🏷️"
-    BRAIN = "🧠"
+    FIRE = "\U0001f525"
+    ROCKET = "\U0001f680"
+    STAR = "\u2b50"
+    SPARKLE = "\u2728"
+    LINK = "\U0001f517"
+    TAG = "\U0001f3f7\ufe0f"
+    BRAIN = "\U0001f9e0"
 
 
 class Box:
     """Box drawing characters for beautiful layouts"""
     # Single line
-    TOP_LEFT = "╭"
-    TOP_RIGHT = "╮"
-    BOTTOM_LEFT = "╰"
-    BOTTOM_RIGHT = "╯"
-    HORIZONTAL = "─"
-    VERTICAL = "│"
-    MIDDLE_LEFT = "├"
-    MIDDLE_RIGHT = "┤"
+    TOP_LEFT = "\u256d"
+    TOP_RIGHT = "\u256e"
+    BOTTOM_LEFT = "\u2570"
+    BOTTOM_RIGHT = "\u256f"
+    HORIZONTAL = "\u2500"
+    VERTICAL = "\u2502"
+    MIDDLE_LEFT = "\u251c"
+    MIDDLE_RIGHT = "\u2524"
 
     # Double line
-    D_TOP_LEFT = "╔"
-    D_TOP_RIGHT = "╗"
-    D_BOTTOM_LEFT = "╚"
-    D_BOTTOM_RIGHT = "╝"
-    D_HORIZONTAL = "═"
-    D_VERTICAL = "║"
+    D_TOP_LEFT = "\u2554"
+    D_TOP_RIGHT = "\u2557"
+    D_BOTTOM_LEFT = "\u255a"
+    D_BOTTOM_RIGHT = "\u255d"
+    D_HORIZONTAL = "\u2550"
+    D_VERTICAL = "\u2551"
 
     # Heavy
-    H_HORIZONTAL = "━"
-    H_VERTICAL = "┃"
+    H_HORIZONTAL = "\u2501"
+    H_VERTICAL = "\u2503"
 
 
 class ProgressBar:
@@ -85,33 +86,32 @@ class ProgressBar:
     @staticmethod
     def generate(percentage: float, length: int = 12, style: str = "blocks") -> str:
         """
-        Generate a progress bar
+        Generate a progress bar.
 
         Args:
             percentage: Completion percentage (0-100)
             length: Bar length in characters
-            style: bar style - 'blocks', 'circles', 'squares', 'dots', 'arrows'
+            style: 'blocks', 'circles', 'squares', 'dots', 'arrows', 'gradient'
 
         Returns:
-            Formatted progress bar string
+            Formatted progress bar string (no surrounding brackets)
         """
         percentage = max(0, min(100, percentage))
         filled = int((percentage / 100) * length)
 
         styles = {
-            'blocks': ('█', '░'),
-            'circles': ('●', '○'),
-            'squares': ('■', '□'),
-            'dots': ('⬤', '◯'),
-            'arrows': ('▰', '▱'),
-            'gradient': ('█', '▓', '▒', '░'),  # For smooth gradients
+            'blocks': ('\u2588', '\u2591'),
+            'circles': ('\u25cf', '\u25cb'),
+            'squares': ('\u25a0', '\u25a1'),
+            'dots': ('\u2b24', '\u25ef'),
+            'arrows': ('\u25b0', '\u25b1'),
+            'gradient': ('\u2588', '\u2593', '\u2592', '\u2591'),
         }
 
         if style == 'gradient' and length >= 4:
-            # Smooth gradient effect
             chars = styles['gradient']
             full_blocks = filled
-            partial = int(((percentage / 100) * length - filled) * len(chars))
+            partial = int(((percentage / 100) * length - filled) * (len(chars) - 1))
 
             bar = chars[0] * full_blocks
             if partial > 0 and filled < length:
@@ -154,21 +154,18 @@ class MessageTemplate:
         return f"{emoji_str}<b>{label}:</b> {value_formatted}"
 
     @staticmethod
-    def divider(char: str = "─", length: int = 25) -> str:
+    def divider(char: str = "\u2500", length: int = 25) -> str:
         """Create a divider line"""
         return char * length
 
     @staticmethod
     def box_list(items: List[tuple], title: str = None) -> str:
         """
-        Create a boxed list
+        Create a boxed list.
 
         Args:
-            items: List of (emoji, label, value) tuples
+            items: List of (emoji, label, value) or (emoji, value) tuples
             title: Optional title for the box
-
-        Returns:
-            Formatted box string
         """
         lines = []
 
@@ -182,9 +179,14 @@ class MessageTemplate:
             else:
                 emoji, label, value = item
 
-            if i == 0:
+            is_first = (i == 0)
+            is_last = (i == len(items) - 1)
+
+            if is_first and is_last:
+                prefix = Box.BOTTOM_LEFT
+            elif is_first:
                 prefix = Box.TOP_LEFT
-            elif i == len(items) - 1:
+            elif is_last:
                 prefix = Box.BOTTOM_LEFT
             else:
                 prefix = Box.MIDDLE_LEFT
@@ -197,7 +199,7 @@ class MessageTemplate:
     @staticmethod
     def card(title: str, items: Dict[str, Any], emoji_map: Dict[str, str] = None) -> str:
         """
-        Create a card-style message
+        Create a card-style message.
 
         Args:
             title: Card title
@@ -207,12 +209,17 @@ class MessageTemplate:
         emoji_map = emoji_map or {}
         lines = [f"<b>{Emoji.SPARKLE} {title}</b>\n"]
 
-        for i, (label, value) in enumerate(items.items()):
+        item_list = list(items.items())
+        for i, (label, value) in enumerate(item_list):
             emoji = emoji_map.get(label, Emoji.BULLET)
+            is_first = (i == 0)
+            is_last = (i == len(item_list) - 1)
 
-            if i == 0:
+            if is_first and is_last:
+                prefix = Box.BOTTOM_LEFT
+            elif is_first:
                 prefix = Box.TOP_LEFT
-            elif i == len(items) - 1:
+            elif is_last:
                 prefix = Box.BOTTOM_LEFT
             else:
                 prefix = Box.MIDDLE_LEFT
@@ -230,7 +237,7 @@ class MessageTemplate:
         show_progress_bar: bool = True
     ) -> str:
         """
-        Create a comprehensive status message
+        Create a comprehensive status message.
 
         Args:
             title: Main title
@@ -241,21 +248,29 @@ class MessageTemplate:
         """
         lines = [f"<b>{Emoji.ROCKET} {title}</b>\n"]
 
-        # Status line
-        lines.append(f"{Box.TOP_LEFT}{Emoji.INFO} <b>Status:</b> <i>{status}</i>")
+        # Build field list
+        fields = [f"{Emoji.INFO} <b>Status:</b> <i>{status}</i>"]
 
-        # Progress bar
         if progress is not None and show_progress_bar:
-            bar = ProgressBar.generate(progress, 12, 'blocks')
-            lines.append(f"{Box.MIDDLE_LEFT}「{bar}」 <b>{progress:.1f}%</b>")
+            bar = ProgressBar.generate(progress, 12, 'gradient')
+            fields.append(f"[{bar}] <b>{progress:.1f}%</b>")
 
-        # Details
         if details:
-            detail_items = list(details.items())
-            for i, (key, value) in enumerate(detail_items):
-                is_last = (i == len(detail_items) - 1)
-                prefix = Box.BOTTOM_LEFT if is_last else Box.MIDDLE_LEFT
-                lines.append(f"{prefix}{Emoji.BULLET} <b>{key}:</b> {value}")
+            for key, value in details.items():
+                fields.append(f"{Emoji.BULLET} <b>{key}:</b> {value}")
+
+        for i, content in enumerate(fields):
+            is_first = (i == 0)
+            is_last = (i == len(fields) - 1)
+            if is_first and is_last:
+                prefix = Box.BOTTOM_LEFT
+            elif is_first:
+                prefix = Box.TOP_LEFT
+            elif is_last:
+                prefix = Box.BOTTOM_LEFT
+            else:
+                prefix = Box.MIDDLE_LEFT
+            lines.append(f"{prefix}{content}")
 
         return "\n".join(lines)
 
@@ -266,20 +281,32 @@ class MessageTemplate:
         details: str = None,
         solution: str = None
     ) -> str:
-        """Create a formatted error message"""
+        """Create a formatted error message.
+
+        FIX: replaced brittle lines[-1].replace(MIDDLE_LEFT, BOTTOM_LEFT)
+        with index-aware prefix assignment.
+        """
         lines = [f"<b>{Emoji.ERROR} {title}</b>\n"]
 
-        lines.append(f"{Box.TOP_LEFT}{Emoji.WARNING} <b>Error:</b> <code>{error}</code>")
-
+        # Collect all field contents first so we know count
+        fields = [f"{Emoji.WARNING} <b>Error:</b> <code>{error}</code>"]
         if details:
-            lines.append(f"{Box.MIDDLE_LEFT}{Emoji.INFO} <b>Details:</b> {details}")
-
+            fields.append(f"{Emoji.INFO} <b>Details:</b> {details}")
         if solution:
-            lines.append(f"{Box.BOTTOM_LEFT}{Emoji.BRAIN} <b>Solution:</b> <i>{solution}</i>")
-        else:
-            # Update the last line to use BOTTOM_LEFT
-            if len(lines) > 1:
-                lines[-1] = lines[-1].replace(Box.MIDDLE_LEFT, Box.BOTTOM_LEFT, 1)
+            fields.append(f"{Emoji.BRAIN} <b>Solution:</b> <i>{solution}</i>")
+
+        for i, content in enumerate(fields):
+            is_first = (i == 0)
+            is_last = (i == len(fields) - 1)
+            if is_first and is_last:
+                prefix = Box.BOTTOM_LEFT
+            elif is_first:
+                prefix = Box.TOP_LEFT
+            elif is_last:
+                prefix = Box.BOTTOM_LEFT
+            else:
+                prefix = Box.MIDDLE_LEFT
+            lines.append(f"{prefix}{content}")
 
         return "\n".join(lines)
 
@@ -290,7 +317,10 @@ class MessageTemplate:
         files: List[str] = None,
         show_hashtag: bool = True
     ) -> str:
-        """Create a success/completion message"""
+        """Create a success/completion message.
+
+        FIX: replaced Emoji.FILE (undefined) with Emoji.DOCUMENT.
+        """
         lines = []
 
         if show_hashtag:
@@ -299,21 +329,27 @@ class MessageTemplate:
 
         lines.append(f"<b>{Emoji.SUCCESS} {title}</b>\n")
 
-        # Summary items
-        summary_items = list(summary.items())
-        for i, (key, value) in enumerate(summary_items):
-            if i == 0:
-                prefix = Box.TOP_LEFT
-            elif files or i < len(summary_items) - 1:
-                prefix = Box.MIDDLE_LEFT
-            else:
-                prefix = Box.BOTTOM_LEFT
-
-            lines.append(f"{prefix}{Emoji.BULLET} <b>{key}:</b> {value}")
-
-        # Files list
+        # Build all row content first for correct prefix assignment
+        rows = []
+        for key, value in summary.items():
+            rows.append(f"{Emoji.BULLET} <b>{key}:</b> {value}")
         if files:
-            lines.append(f"{Box.MIDDLE_LEFT}{Emoji.FILE} <b>Files:</b>")
+            rows.append(f"{Emoji.DOCUMENT} <b>Files:</b>")   # was Emoji.FILE
+
+        for i, content in enumerate(rows):
+            is_first = (i == 0)
+            is_last = (i == len(rows) - 1) and not files
+            if is_first and is_last:
+                prefix = Box.BOTTOM_LEFT
+            elif is_first:
+                prefix = Box.TOP_LEFT
+            elif is_last:
+                prefix = Box.BOTTOM_LEFT
+            else:
+                prefix = Box.MIDDLE_LEFT
+            lines.append(f"{prefix}{content}")
+
+        if files:
             for i, file in enumerate(files):
                 is_last = (i == len(files) - 1)
                 prefix = Box.BOTTOM_LEFT if is_last else Box.MIDDLE_LEFT
@@ -322,8 +358,9 @@ class MessageTemplate:
         return "\n".join(lines)
 
     @staticmethod
-    def menu_header(title: str, description: str = None, emoji: str = Emoji.ROCKET) -> str:
+    def menu_header(title: str, description: str = None, emoji: str = None) -> str:
         """Create a menu header"""
+        emoji = emoji or Emoji.ROCKET
         lines = [f"<b>{emoji} {title}</b>"]
 
         if description:
@@ -335,7 +372,7 @@ class MessageTemplate:
     @staticmethod
     def option_list(options: List[tuple], numbered: bool = True) -> str:
         """
-        Create a numbered/bulleted option list
+        Create a numbered/bulleted option list.
 
         Args:
             options: List of (title, description) tuples
@@ -344,7 +381,7 @@ class MessageTemplate:
         lines = []
 
         for i, (title, description) in enumerate(options, 1):
-            prefix = f"<b>{i}.</b>" if numbered else f"{Emoji.BULLET}"
+            prefix = f"<b>{i}.</b>" if numbered else Emoji.BULLET
             lines.append(f"{prefix} <b>{title}</b>")
             if description:
                 lines.append(f"   <i>{description}</i>")
@@ -396,5 +433,5 @@ class SizeFormatter:
         return f"{SizeFormatter.format_bytes(bytes_per_second)}/s"
 
 
-# Quick access file type emojis
+# Module-level alias (kept for any existing imports)
 FILE = Emoji.DOCUMENT
