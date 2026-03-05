@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from tests.unit._module_loader import load_module
@@ -52,3 +53,50 @@ def test_final_summary_card_no_longer_uses_legacy_complete_hashtag() -> None:
     assert "_COMPLETE</b>" not in source
     assert "Name »" not in source
     assert "Time Taken »" not in source
+
+
+def test_alias_prompts_use_shared_ui_copy_builders() -> None:
+    source = _read("colab_leecher/aliases.py")
+
+    assert "build_link_prompt(" in source
+    assert "build_ytdl_prompt(" in source
+    assert "build_instagram_prompt(" in source
+    assert "build_nzbcloud_prompt(" in source
+    assert "Send Me THEM LINK(s)" not in source
+    assert "Send Me LINK(s)" not in source
+
+
+def test_primary_runtime_copy_is_html_only_in_targeted_modules() -> None:
+    targeted_files = [
+        "colab_leecher/__main__.py",
+        "colab_leecher/aliases.py",
+        "colab_leecher/utility/task_manager.py",
+        "colab_leecher/utility/converters.py",
+        "colab_leecher/utility/helper.py",
+        "colab_leecher/utility/task_context.py",
+    ]
+
+    for relative_path in targeted_files:
+        source = _read(relative_path)
+        assert re.search(r"\*\*[^*\n]+\*\*", source) is None
+        assert re.search(r"`[^`\n]+`", source) is None
+
+
+def test_primary_runtime_copy_uses_explicit_html_parse_mode() -> None:
+    main_source = _read("colab_leecher/__main__.py")
+    task_manager_source = _read("colab_leecher/utility/task_manager.py")
+
+    assert "parse_mode=enums.ParseMode.HTML" in main_source
+    assert "parse_mode=enums.ParseMode.HTML" in task_manager_source
+
+
+def test_status_and_health_text_use_shared_ui_copy_templates() -> None:
+    converters_source = _read("colab_leecher/utility/converters.py")
+    helper_source = _read("colab_leecher/utility/helper.py")
+    task_context_source = _read("colab_leecher/utility/task_context.py")
+
+    assert "build_archiver_progress_text(" in converters_source
+    assert "build_archiver_verification_text(" in converters_source
+    assert "build_converter_progress_text(" in converters_source
+    assert "build_settings_text(" in helper_source
+    assert "build_health_summary_text(" in task_context_source

@@ -10,6 +10,8 @@ import subprocess
 import asyncio
 from datetime import datetime
 from os import makedirs, path as ospath
+from html import escape
+from pyrogram import enums
 try:
     from moviepy.editor import VideoFileClip as VideoClip
 except ImportError:
@@ -28,6 +30,11 @@ from .helper import (
     clean_filename)
 from .task_context import TaskContext
 from .reply_state import set_password_reply_waiting
+from .ui_copy import (
+    build_archiver_progress_text,
+    build_archiver_verification_text,
+    build_converter_progress_text,
+)
 # Import bot client and owner ID for password prompts
 from .. import colab_bot, OWNER
 
@@ -50,22 +57,23 @@ async def prompt_for_password(
 
         if error_type == "incorrect":
             message_text = (
-                "Password Required\n\n"
+                "<b>Password Required</b>\n\n"
                 "The password you provided is incorrect for:\n"
-                f"`{archive_filename}`\n\n"
-                "Please reply to this message with the correct password."
+                f"<code>{escape(archive_filename)}</code>\n\n"
+                "Reply to this message with the correct password."
             )
         else:
             message_text = (
-                "Password Required\n\n"
-                "The archive file requires a password:\n"
-                f"`{archive_filename}`\n\n"
-                "Please reply to this message with the password."
+                "<b>Password Required</b>\n\n"
+                "The archive requires a password:\n"
+                f"<code>{escape(archive_filename)}</code>\n\n"
+                "Reply to this message with the password."
             )
 
         prompt_msg = await colab_bot.send_message(
             chat_id=target_chat_id,
             text=message_text,
+            parse_mode=enums.ParseMode.HTML,
         )
 
         await set_password_reply_waiting(
@@ -324,10 +332,13 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                                         (bar_length - filled_length)
                                     elapsed_time_str = getTime(
                                         (current_time - _task_start).total_seconds())
-                                    status_text = (f"{_messages.status_head}\n"
-                                                   f"╭「{bar}」 **»** __{percentage:.0f}%__\n"
-                                                   f"├⏱️ **Elapsed »** __{elapsed_time_str}__\n"
-                                                   f"╰📦 **Source Size »** __{total_in_unit}__")
+                                    status_text = build_archiver_progress_text(
+                                        _messages.status_head,
+                                        bar=bar,
+                                        percentage=percentage,
+                                        elapsed_time_text=elapsed_time_str,
+                                        source_size_text=total_in_unit,
+                                    )
                                     await status_bar(status_text, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
                             except ValueError:
                                 log.warning(
@@ -387,11 +398,13 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
 
                     # Update status message to show verification is in progress
                     try:
-                        verify_msg = (f"{_messages.status_head}\n"
-                                      f"╭「🔍 VERIFYING ARCHIVE」\n"
-                                      f"├📦 **File »** __{archive_out_final_name}__\n"
-                                      f"├💾 **Size »** __{sizeUnit(final_archive_size)}__\n"
-                                      f"╰⚙️ **Status »** __Testing archive integrity...__")
+                        verify_msg = build_archiver_verification_text(
+                            _messages.status_head,
+                            title="Verifying Archive",
+                            file_name=archive_out_final_name,
+                            file_size_text=sizeUnit(final_archive_size),
+                            status_text="Testing archive integrity...",
+                        )
                         await status_bar(verify_msg, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
                     except Exception as status_err:
                         log.debug(
@@ -419,11 +432,13 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
 
                             # Update status to show verification passed
                             try:
-                                verify_success_msg = (f"{_messages.status_head}\n"
-                                                      f"╭「✅ ARCHIVE VERIFIED」\n"
-                                                      f"├📦 **File »** __{archive_out_final_name}__\n"
-                                                      f"├💾 **Size »** __{sizeUnit(final_archive_size)}__\n"
-                                                      f"╰✅ **Status »** __Integrity check passed! Ready to upload.__")
+                                verify_success_msg = build_archiver_verification_text(
+                                    _messages.status_head,
+                                    title="Archive Verified",
+                                    file_name=archive_out_final_name,
+                                    file_size_text=sizeUnit(final_archive_size),
+                                    status_text="Integrity check passed. Ready to upload.",
+                                )
                                 await status_bar(verify_success_msg, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
                             except Exception as status_err:
                                 log.debug(
@@ -439,11 +454,13 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
 
                             # Update status to show verification failed
                             try:
-                                verify_fail_msg = (f"{_messages.status_head}\n"
-                                                   f"╭「❌ VERIFICATION FAILED」\n"
-                                                   f"├📦 **File »** __{archive_out_final_name}__\n"
-                                                   f"├💾 **Size »** __{sizeUnit(final_archive_size)}__\n"
-                                                   f"╰❌ **Status »** __Archive is corrupted! Removing file...__")
+                                verify_fail_msg = build_archiver_verification_text(
+                                    _messages.status_head,
+                                    title="Verification Failed",
+                                    file_name=archive_out_final_name,
+                                    file_size_text=sizeUnit(final_archive_size),
+                                    status_text="Archive is corrupted. Removing file...",
+                                )
                                 await status_bar(verify_fail_msg, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
                             except Exception as status_err:
                                 log.debug(
@@ -600,15 +617,23 @@ async def videoConverter(file: str):
 
     async def msg_updater(c: int, tr, engine: str, core: str):
         # Ensure Messages is accessible (global or passed as argument)
-        messg = "╭「" + "░" * c + "█" + "░" * (11 - c) + "」"
-        messg += f"\n├⏳ **Status »** __Converting 🔄__\n├🕹 **Attempt »** __{tr}__"
-        messg += f"\n├⚙️ **Engine »** __{engine}__\n├💪🏼 **Handler »** __{core}__"
-        messg += f"\n╰🍃 **Time Spent »** __{getTime( (datetime.now() - BotTimes.start_time).seconds)}__"
+        bar = "░" * c + "█" + "░" * (11 - c)
+        messg = build_converter_progress_text(
+            bar=bar,
+            attempt=str(tr),
+            engine=engine,
+            handler_name=core,
+            elapsed_time_text=getTime((datetime.now() - BotTimes.start_time).seconds),
+        )
         full_message = Messages.task_msg + mtext + messg + \
             sysINFO()  # Ensure mtext is defined in outer scope
         try:
             if MSG.status_msg:
-                await MSG.status_msg.edit_text(text=full_message, reply_markup=keyboard())
+                await MSG.status_msg.edit_text(
+                    text=full_message,
+                    reply_markup=keyboard(),
+                    parse_mode=enums.ParseMode.HTML,
+                )
         except Exception as e:
             if "Message is not modified" not in str(e):
                 log.warning(f"Status update failed during conversion: {e}")

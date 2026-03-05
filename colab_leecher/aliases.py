@@ -21,6 +21,12 @@ from . import colab_bot
 from .utility.variables import BOT
 from .utility.task_manager import task_starter
 from .utility.helper import sizeUnit
+from .utility.ui_copy import (
+    build_instagram_prompt,
+    build_link_prompt,
+    build_nzbcloud_prompt,
+    build_ytdl_prompt,
+)
 from .gdrive_utils import count_link, delete_link
 
 log = logging.getLogger(__name__)
@@ -34,11 +40,7 @@ async def mirror_cmd(client, message):
     BOT.Mode.mode = "mirror"
     BOT.Mode.ytdl = False
     BOT.Options.service_type = None
-    text = (
-        "<b>♻️ Mirror Task » Send Me THEM LINK(s) 🔗</b>\n\n"
-        "(Direct, Magnet, TG, Mega, GDrive, Debrid, NZB, bitso)\n\n"
-        "<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
-    )
+    text = build_link_prompt("♻️ Mirror Task » Send link(s)")
     await task_starter(message, text)
 
 
@@ -48,11 +50,7 @@ async def leech_cmd(client, message):
     BOT.Mode.mode = "leech"
     BOT.Mode.ytdl = False
     BOT.Options.service_type = None
-    text = (
-        "<b>⚡ Leech Task » Send Me THEM LINK(s) 🔗</b>\n\n"
-        "(Direct, Magnet, TG, Mega, GDrive, Debrid, NZB, bitso)\n\n"
-        "<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
-    )
+    text = build_link_prompt("⚡ Leech Task » Send link(s)")
     await task_starter(message, text)
 
 
@@ -62,10 +60,7 @@ async def ytdl_cmd(client, message):
     BOT.Mode.mode = "leech"
     BOT.Mode.ytdl = True
     BOT.Options.service_type = "ytdl"
-    text = (
-        "<b>🏮 YTDL Leech » Send Me LINK(s) 🔗</b>\n\n"
-        "<code>https//link1.mp4</code>"
-    )
+    text = build_ytdl_prompt()
     await task_starter(message, text)
 
 
@@ -83,16 +78,7 @@ async def instagram_cmd(client, message):
         BOT.Options.service_type = "direct"  # Use 'direct' to trigger auto-detect (which detects Instagram)
 
         log.info("  - Preparing message text")
-        text = (
-            "<b>📸 Instagram Leech » Send Me LINK(s) 🔗</b>\n\n"
-            "**Supported:**\n"
-            "• Individual Posts/Reels/IGTV\n"
-            "• **ENTIRE PROFILES** (batch download)\n\n"
-            "**Examples:**\n"
-            "<code>https://instagram.com/username/</code> (all posts)\n"
-            "<code>https://instagram.com/p/xyz</code> (single post)\n"
-            "<code>https://instagram.com/reel/abc</code> (reel)"
-        )
+        text = build_instagram_prompt()
 
         log.info("  - Calling task_starter()")
         await task_starter(message, text)
@@ -114,18 +100,7 @@ async def nzbcloud_cmd(client, message):
         BOT.Options.service_type = "nzbcloud"  # Set service type directly
 
         log.info("  - Preparing message text")
-        text = (
-            "<b>☁️ NZBcloud Leech » Send Gist/Pastebin URL 🔗</b>\n\n"
-            "**Required Format:**\n"
-            "<code>TITLE=filename.mkv\nhttps://files.nzbcloud.com/.../play?token=...</code>\n\n"
-            "**✅ Browser Extension:**\n"
-            "• Click \"Create Gist\" button (auto-copied to clipboard!)\n"
-            "• Paste the gist URL here\n\n"
-            "**Supported Sources:**\n"
-            "• GitHub Gist raw URLs\n"
-            "• Pastebin raw URLs\n"
-            "• Rentry raw URLs"
-        )
+        text = build_nzbcloud_prompt()
 
         log.info("  - Calling task_starter()")
         await task_starter(message, text)

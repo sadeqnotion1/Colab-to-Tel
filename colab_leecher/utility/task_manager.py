@@ -11,6 +11,7 @@ from time import time
 from datetime import datetime
 from asyncio import sleep
 from os import makedirs, path as ospath
+from pyrogram import enums
 from .. import OWNER, colab_bot, DUMP_ID
 from ..downlader.manager import calDownSize, get_d_name, downloadManager
 from .helper import (
@@ -19,6 +20,7 @@ from .helper import (
     clean_filename, sizeUnit
 )
 from .message_safety import user_error
+from .ui_copy import build_task_in_progress_notice
 from .handler import (
     Leech, Unzip_Handler, Zip_Handler, SendLogs, cancelTask,
 )
@@ -516,9 +518,8 @@ async def task_starter(message, text):
     """Handles the initial command, replies, and sets started state."""
     global BOT
     log.info(
-        f"task_starter called by user {
-            message.from_user.id} for mode '{
-            BOT.Mode.mode}'")
+        f"task_starter called by user {message.from_user.id} for mode '{BOT.Mode.mode}'"
+    )
     try:
         await message.delete()
         log.debug("User command message deleted.")
@@ -528,11 +529,14 @@ async def task_starter(message, text):
     if not BOT.State.task_going:
         BOT.State.started = True
         log.debug(
-            f"BOT.State.started=True. BOT.State.task_going={
-                BOT.State.task_going}")
+            f"BOT.State.started=True. BOT.State.task_going={BOT.State.task_going}"
+        )
         log.info("Task not going. Replying to user to send links/path.")
         try:
-            src_request_msg = await message.reply_text(text)
+            src_request_msg = await message.reply_text(
+                text,
+                parse_mode=enums.ParseMode.HTML,
+            )
             log.info("Reply prompt sent.")
             return src_request_msg
         except Exception as e:
@@ -548,7 +552,7 @@ async def task_starter(message, text):
 
         log.warning("Task already going. Informing user.")
         try:
-            msg = await message.reply_text("**I’m already on it! Wait up! 💯🔥**")
+            msg = await message.reply_text(build_task_in_progress_notice())
             await sleep(15)
             await msg.delete()
         except Exception as e:
@@ -574,14 +578,13 @@ async def taskScheduler(task_ctx: TaskContext):
     _transfer = task_ctx.transfer
     _task_error = task_ctx.error
     log.info(
-        f"taskScheduler using TaskContext for task_id: {
-            task_ctx.task_id}")
+        f"taskScheduler using TaskContext for task_id: {task_ctx.task_id}"
+    )
 
     selected_service = _bot.Options.service_type
     log.info(
-        f"taskScheduler entered. Mode: {
-            _bot.Mode.mode}, Type: {
-            _bot.Mode.type}, Service: {selected_service}")
+        f"taskScheduler entered. Mode: {_bot.Mode.mode}, Type: {_bot.Mode.type}, Service: {selected_service}"
+    )
     src_text = []
     is_dualzip = (_bot.Mode.type == "undzip")
     is_unzip = (_bot.Mode.type == "unzip")
@@ -607,8 +610,7 @@ async def taskScheduler(task_ctx: TaskContext):
             "").capitalize()
         type_display_name = _bot.Mode.type.capitalize()
         upload_display_name = _bot.Setting.stream_upload
-        service_str = f" ({
-            selected_service.capitalize()})" if selected_service else ""
+        service_str = f" ({selected_service.capitalize()})" if selected_service else ""
         # Construct task description string for dump chat
         dump_task_mode_str = f"<i>{type_display_name} {mode_display_name}{service_str} as {upload_display_name}</i>" if current_mode != "mirror" else f"<i>{type_display_name} {mode_display_name}{service_str}</i>"
         _messages.dump_task = _messages.task_msg + \
@@ -637,10 +639,8 @@ async def taskScheduler(task_ctx: TaskContext):
                 _messages.download_name = ospath.basename(
                     source_path)  # Set initial name
                 log.debug(
-                    f"Dir size: {
-                        sizeUnit(
-                            _transfer.total_down_size)}, Name: {
-                        _messages.download_name}")
+                    f"Dir size: {sizeUnit(_transfer.total_down_size)}, Name: {_messages.download_name}"
+                )
         else:  # Link processing modes
             log.info(f"Link mode. Processing {len(_bot.SOURCE)} sources.")
             for link in _bot.SOURCE:
@@ -682,10 +682,8 @@ async def taskScheduler(task_ctx: TaskContext):
         src_text.append(_messages.dump_task)
 
         log.info(
-            f"Prepared {
-                len(src_text)} message(s) for dump channel (total chars: {
-                sum(
-                    len(t) for t in src_text)})")
+            f"Prepared {len(src_text)} message(s) for dump channel (total chars: {sum(len(t) for t in src_text)})"
+        )
 
         # --- Environment Setup & Thumbnail Handling ---
         log.info("Setting up work environment...")
@@ -760,8 +758,8 @@ async def taskScheduler(task_ctx: TaskContext):
                         else:
                             # Log HTTP errors if the request failed
                             log.warning(
-                                f"Failed to download thumbnail. HTTP status: {
-                                    response.status}. URL: {chosen_url}")
+                                f"Failed to download thumbnail. HTTP status: {response.status}. URL: {chosen_url}"
+                            )
 
             # --- Specific Exception Handling for Async Download ---
             except aiohttp.ClientError as http_err:
@@ -795,15 +793,15 @@ async def taskScheduler(task_ctx: TaskContext):
         if not download_success:
             # Fallback if download failed or no URL was chosen
             log.warning(
-                f"Thumbnail download failed or no URL. Checking/Using fallback thumbnail: {
-                    _paths.DEFAULT_HERO}")
+                f"Thumbnail download failed or no URL. Checking/Using fallback thumbnail: {_paths.DEFAULT_HERO}"
+            )
             # Ensure _paths.DEFAULT_HERO points to a valid *local* file path
             if ospath.exists(_paths.DEFAULT_HERO):
                 final_thumb_path = _paths.DEFAULT_HERO
             else:
                 log.error(
-                    f"Fallback thumbnail {
-                        _paths.DEFAULT_HERO} also does not exist!")
+                    f"Fallback thumbnail {_paths.DEFAULT_HERO} also does not exist!"
+                )
                 final_thumb_path = None  # No thumbnail available
         # --- End Thumbnail Handling ---
 
@@ -819,18 +817,13 @@ async def taskScheduler(task_ctx: TaskContext):
                     _msg.sent_msg = await _msg.sent_msg.reply_text(text=src_text[lin], quote=True, disable_web_page_preview=True)
 
             # Construct source link for status message
-            _messages.src_link = f"https://t.me/c/{
-                _messages.link_p}/{
-                _msg.sent_msg.id}" if _msg.sent_msg and hasattr(
-                _msg.sent_msg.chat,
-                'id') and _msg.sent_msg.chat.id != OWNER else getattr(
-                _msg.sent_msg,
-                'link',
-                '#')
+            if _msg.sent_msg and hasattr(_msg.sent_msg.chat, 'id') and _msg.sent_msg.chat.id != OWNER:
+                _messages.src_link = f"https://t.me/c/{_messages.link_p}/{_msg.sent_msg.id}"
+            else:
+                _messages.src_link = getattr(_msg.sent_msg, 'link', '#')
             task_title = f"{type_display_name} {mode_display_name}{service_str}"
             # Prepend task context to status message base
-            _messages.task_msg += f"__[{task_title}]({
-                _messages.src_link})__\n\n"
+            _messages.task_msg += f"__[{task_title}]({_messages.src_link})__\n\n"
 
             # ===== PARALLEL MODE: Skip individual messages, use shared dashboa
             # Check if we're in parallel mode by seeing if we're part of
@@ -874,8 +867,8 @@ async def taskScheduler(task_ctx: TaskContext):
                 # (using shared dashboard)
                 try:
                     log.info(
-                        f"Parallel mode detected - deleting individual status message for task {
-                            task_ctx.get_short_id() if task_ctx else 'N/A'}")
+                        f"Parallel mode detected - deleting individual status message for task {task_ctx.get_short_id() if task_ctx else 'N/A'}"
+                    )
                     await _msg.status_msg.delete()
                     _msg.status_msg = None  # Clear reference
                 except Exception as del_err:
@@ -885,8 +878,8 @@ async def taskScheduler(task_ctx: TaskContext):
                 # Status message already exists (shared message for parallel
                 # tasks)
                 log.info(
-                    f"Skipping status message creation - using existing shared message for task {
-                        task_ctx.get_short_id() if task_ctx else 'N/A'}")
+                    f"Skipping status message creation - using existing shared message for task {task_ctx.get_short_id() if task_ctx else 'N/A'}"
+                )
 
         except Exception as msg_err:
             log.error(
@@ -937,8 +930,8 @@ async def taskScheduler(task_ctx: TaskContext):
                     original_Paths_down_path, clean_filename(zip_base_name))
                 makedirs(_paths.down_path, exist_ok=True)
                 log.info(
-                    f"Zip mode: Download target subfolder: {
-                        _paths.down_path}")
+                    f"Zip mode: Download target subfolder: {_paths.down_path}"
+                )
             else:
                 # Ensure it uses the base path if not zip
                 _paths.down_path = original_Paths_down_path
@@ -982,8 +975,8 @@ async def taskScheduler(task_ctx: TaskContext):
         # Check if an error occurred during the task
         if _task_error.state:
             log.warning(
-                f"Task failed. Reason: {
-                    _task_error.text}. Initiating cancellation/cleanup.")
+                f"Task failed. Reason: {_task_error.text}. Initiating cancellation/cleanup."
+            )
             # Call cancelTask only if it wasn't the source of the error itself
             # This check might be complex depending on specific errors caught above
             # A simple approach is to always call it if TaskError.state is True
@@ -1154,8 +1147,8 @@ async def Do_Leech(
             if manual_filenames_provided and len(
                     full_filenames_list) != total_links:
                 log.error(
-                    f"Do_Leech Error: Initial filename count ({
-                        len(full_filenames_list)}) doesn't match link count ({total_links}).")
+                    f"Do_Leech Error: Initial filename count ({len(full_filenames_list)}) doesn't match link count ({total_links})."
+                )
                 # Set error state and raise exception to exit via finally block
                 _task_error.state = True
                 _task_error.text = "Initial filename/link count mismatch."
@@ -1189,10 +1182,8 @@ async def Do_Leech(
                 batch_download_path = original_down_path
                 _paths.down_path = batch_download_path  # Set current download path
                 log.info(
-                    f"Cleaning work directories before batch {
-                        i //
-                        batch_size +
-                        1}... Target: {batch_download_path}")
+                    f"Cleaning work directories before batch {i // batch_size + 1}... Target: {batch_download_path}"
+                )
                 # Ensure previous batch's potential leftovers are cleaned
                 if ospath.exists(batch_download_path):
                     shutil.rmtree(batch_download_path, ignore_errors=True)
@@ -1226,10 +1217,8 @@ async def Do_Leech(
                 batch_had_download_failures = False
                 if not batch_download_succeeded:
                     log.warning(
-                        f"One or more downloads failed during batch {
-                            i //
-                            batch_size +
-                            1}. Reason: {batch_download_error_text}. Continuing task.")
+                        f"One or more downloads failed during batch {i // batch_size + 1}. Reason: {batch_download_error_text}. Continuing task."
+                    )
                     overall_success = False  # Mark overall task as having failures
                     # Track this specific batch had download issues
                     batch_had_download_failures = True
@@ -1239,10 +1228,8 @@ async def Do_Leech(
                 if not ospath.exists(batch_download_path) or not os.listdir(
                         batch_download_path):
                     log.warning(
-                        f"Download path empty after batch {
-                            i //
-                            batch_size +
-                            1}. Skipping processing/upload for this batch.")
+                        f"Download path empty after batch {i // batch_size + 1}. Skipping processing/upload for this batch."
+                    )
                     # If download failed, reset _task_error state so the main
                     # loop continues
                     if batch_had_download_failures and _task_error:
@@ -1274,17 +1261,15 @@ async def Do_Leech(
                     # imported/available
                     _transfer.total_down_size = getSize(batch_download_path)
                     log.info(
-                        f"Batch download size: {
-                            sizeUnit(
-                                _transfer.total_down_size)}. Processing type: {
-                            _bot.Mode.type}")
+                        f"Batch download size: {sizeUnit(_transfer.total_down_size)}. Processing type: {_bot.Mode.type}"
+                    )
 
                     process_path = batch_download_path
                     leech_path = None
 
                     log.debug(
-                        f">>> Initial process_path: {process_path}, Mode: {
-                            _bot.Mode.type}")
+                        f">>> Initial process_path: {process_path}, Mode: {_bot.Mode.type}"
+                    )
 
                     # --- Zip/Unzip Logic ---
                     if is_zip:
@@ -1391,8 +1376,8 @@ async def Do_Leech(
                             batch_processing_error = True
                         else:
                             log.debug(
-                                f">>> Leech successful for batch {
-                                    i // batch_size + 1}")
+                                f">>> Leech successful for batch {i // batch_size + 1}"
+                            )
                     elif leech_path is None:
                         log.debug(
                             "leech_path is None - files already uploaded (streaming mode)")
@@ -1492,8 +1477,8 @@ async def Do_Mirror(
         _messages = task_ctx.messages
         _task_error = task_ctx.task_error
         log.info(
-            f"Do_Mirror using TaskContext for task_id: {
-                task_ctx.task_id}")
+            f"Do_Mirror using TaskContext for task_id: {task_ctx.task_id}"
+        )
     else:
         _bot = BOT
         _paths = Paths
@@ -1530,12 +1515,12 @@ async def Do_Mirror(
     try:
         # --- Download Phase ---
         log.info(
-            f"Do_Mirror: Processing links via downloadManager (Service: {
-                selected_service or 'auto'})...")
+            f"Do_Mirror: Processing links via downloadManager (Service: {selected_service or 'auto'})..."
+        )
         filenames_to_pass = _bot.Options.filenames if _bot.Options.filenames else None
         log.debug(
-            f"Do_Mirror: Passing filenames list (Count: {
-                len(filenames_to_pass) if filenames_to_pass else 0}) to downloadManager.")
+            f"Do_Mirror: Passing filenames list (Count: {len(filenames_to_pass) if filenames_to_pass else 0}) to downloadManager."
+        )
 
         # Pass the retrieved filenames list to downloadManager
         await downloadManager(source, is_ytdl, filenames_to_pass, task_ctx)
@@ -1564,9 +1549,8 @@ async def Do_Mirror(
             _transfer.total_down_size = getSize(process_path)
             applyCustomName(task_ctx)
             log.info(
-                f"Download complete for mirror. Size: {
-                    sizeUnit(
-                        _transfer.total_down_size)}.")
+                f"Download complete for mirror. Size: {sizeUnit(_transfer.total_down_size)}."
+            )
 
             # Determine final mirror destination folder name
             mirror_base_name = _messages.download_name if _messages.download_name else ospath.basename(
@@ -1679,8 +1663,8 @@ async def Do_Mirror(
     # Final logging/reporting based on _task_error state
     if _task_error and _task_error.state:
         log.warning(
-            f"Do_Mirror finished with error: {
-                _task_error.text}. Logs skipped/Cancel called.")
+            f"Do_Mirror finished with error: {_task_error.text}. Logs skipped/Cancel called."
+        )
     else:
         log.info("Do_Mirror completed without error state. Sending logs...")
         await SendLogs(False, task_ctx)  # False indicates Mirror mode
@@ -1720,8 +1704,8 @@ async def Do_GDrive_Upload(
         _messages = task_ctx.messages
         _task_error = task_ctx.task_error
         log.info(
-            f"Do_GDrive_Upload using TaskContext for task_id: {
-                task_ctx.task_id}")
+            f"Do_GDrive_Upload using TaskContext for task_id: {task_ctx.task_id}"
+        )
     else:
         _bot = BOT
         _paths = Paths
@@ -1834,8 +1818,8 @@ async def Do_GDrive_Upload(
             if manual_filenames_provided and len(
                     full_filenames_list) != total_links:
                 log.error(
-                    f"Do_GDrive_Upload Error: Initial filename count ({
-                        len(full_filenames_list)}) doesn't match link count ({total_links}).")
+                    f"Do_GDrive_Upload Error: Initial filename count ({len(full_filenames_list)}) doesn't match link count ({total_links})."
+                )
                 _task_error.state = True
                 _task_error.text = "Initial filename/link count mismatch."
                 raise Exception(_task_error.text)
@@ -1849,16 +1833,17 @@ async def Do_GDrive_Upload(
                 batch_filenames = full_filenames_list[i:i +
                                                       batch_size] if manual_filenames_provided else []
 
-                log.info(f"--- Processing Batch {i // batch_size + 1} ({i + 1}-{min(i + batch_size,
-                                                                                    total_links)}) / {(total_links + batch_size - 1) // batch_size} ---")
+                batch_end = min(i + batch_size, total_links)
+                total_batches = (total_links + batch_size - 1) // batch_size
+                log.info(
+                    f"--- Processing Batch {i // batch_size + 1} ({i + 1}-{batch_end}) / {total_batches} ---"
+                )
 
                 # Clean work directories
                 batch_download_path = _paths.down_path
                 log.info(
-                    f"Cleaning work directories before batch {
-                        i //
-                        batch_size +
-                        1}... Target: {batch_download_path}")
+                    f"Cleaning work directories before batch {i // batch_size + 1}... Target: {batch_download_path}"
+                )
                 if ospath.exists(batch_download_path):
                     shutil.rmtree(batch_download_path, ignore_errors=True)
                 makedirs(batch_download_path, exist_ok=True)
@@ -1871,26 +1856,19 @@ async def Do_GDrive_Upload(
 
                     if _task_error.state:
                         log.warning(
-                            f"Batch {
-                                i //
-                                batch_size +
-                                1} download had failures.")
+                            f"Batch {i // batch_size + 1} download had failures."
+                        )
                 except Exception as download_err:
                     log.error(
-                        f"Download error in batch {
-                            i //
-                            batch_size +
-                            1}: {download_err}",
+                        f"Download error in batch {i // batch_size + 1}: {download_err}",
                         exc_info=True)
 
                 # Check if download directory has files
                 if not ospath.exists(batch_download_path) or not os.listdir(
                         batch_download_path):
                     log.warning(
-                        f"Batch {
-                            i //
-                            batch_size +
-                            1} download directory empty or missing. Skipping processing/upload.")
+                        f"Batch {i // batch_size + 1} download directory empty or missing. Skipping processing/upload."
+                    )
                     continue
 
                 # --- Process and Upload ---
@@ -1901,10 +1879,8 @@ async def Do_GDrive_Upload(
                 try:
                     _transfer.total_down_size = getSize(batch_download_path)
                     log.info(
-                        f"Batch download size: {
-                            sizeUnit(
-                                _transfer.total_down_size)}. Processing type: {
-                            _bot.Mode.type}")
+                        f"Batch download size: {sizeUnit(_transfer.total_down_size)}. Processing type: {_bot.Mode.type}"
+                    )
 
                     process_path = batch_download_path
                     gdrive_upload_path = None
@@ -1969,8 +1945,8 @@ async def Do_GDrive_Upload(
                             batch_processing_error = True
                         else:
                             log.debug(
-                                f">>> GDrive upload successful for batch {
-                                    i // batch_size + 1}")
+                                f">>> GDrive upload successful for batch {i // batch_size + 1}"
+                            )
                     else:
                         log.error(
                             f"GDrive upload path missing or invalid: {gdrive_upload_path}")

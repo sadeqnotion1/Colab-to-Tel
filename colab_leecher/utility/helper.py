@@ -19,6 +19,7 @@ from pyrogram import enums
 from pyrogram.errors import MessageNotModified
 from .variables import BOT, MSG, BotTimes, Messages, Paths
 from .task_context import TaskContext  # NEW: Import for multi-task support
+from .ui_copy import build_settings_text
 
 # Setup logger
 log = logging.getLogger(__name__)
@@ -1752,39 +1753,35 @@ async def send_settings(client, message, msg_id, is_command: bool):
         [InlineKeyboardButton("Close ❌", callback_data="close")],
     ])
 
-    # Build the settings text
-    text = "**SETTINGS ⚙️ »**"
-    text += f"\n\nUPLOAD » <i>{BOT.Setting.stream_upload}</i>"
-    text += f"\nSPLIT » <i>{BOT.Setting.split_video}</i>"
-    text += f"\nCONVERT » <i>{BOT.Setting.convert_video}</i>"
-    text += f"\nCAPTION » <i>{BOT.Setting.caption}</i>"
-
-    pr = "Exists" if BOT.Setting.prefix else "None"
-    su = "Exists" if BOT.Setting.suffix else "None"
-    thmb = "Exists" if BOT.Setting.thumbnail else "None"
-    text += f"\nPREFIX » <i>{pr}</i>\nSUFFIX » <i>{su}</i>"
-    text += f"\nTHUMBNAIL » <i>{thmb}</i>"
-
-    # Display cookie status
-    cf_set = "Set" if BOT.Setting.nzb_cf_clearance else "Not Set"
-    bitso_id_set = "Set" if BOT.Setting.bitso_identity_cookie else "Not Set"
-    bitso_sess_set = "Set" if BOT.Setting.bitso_phpsessid_cookie else "Not Set"
-    text += "\n\n<b>Cookies:</b>"
-    text += f"\n🍪 NZB CF » <i>{cf_set}</i>"
-    text += f"\n🍪 Bitso ID » <i>{bitso_id_set}</i>"
-    text += f"\n🍪 Bitso Sess » <i>{bitso_sess_set}</i>"
+    text = build_settings_text(
+        stream_upload=str(BOT.Setting.stream_upload),
+        split_video=str(BOT.Setting.split_video),
+        convert_video=str(BOT.Setting.convert_video),
+        caption=str(BOT.Setting.caption),
+        has_prefix=bool(BOT.Setting.prefix),
+        has_suffix=bool(BOT.Setting.suffix),
+        has_thumbnail=bool(BOT.Setting.thumbnail),
+        has_nzb_cf_cookie=bool(BOT.Setting.nzb_cf_clearance),
+        has_bitso_identity_cookie=bool(BOT.Setting.bitso_identity_cookie),
+        has_bitso_session_cookie=bool(BOT.Setting.bitso_phpsessid_cookie),
+    )
 
     try:
         if is_command:
             # Send as a new reply if triggered by /settings command
-            await message.reply_text(text=text, reply_markup=keyboard)
+            await message.reply_text(
+                text=text,
+                reply_markup=keyboard,
+                parse_mode=enums.ParseMode.HTML,
+            )
         else:
             # Edit the existing message if triggered by a callback
             await client.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=msg_id,
                 text=text,
-                reply_markup=keyboard
+                reply_markup=keyboard,
+                parse_mode=enums.ParseMode.HTML,
             )
     except Exception as error:
         # Avoid logging "message is not modified" errors

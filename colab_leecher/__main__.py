@@ -1,4 +1,4 @@
-# /content/Telegram-Leecher/colab_leecher/__main__.py
+﻿# /content/Telegram-Leecher/colab_leecher/__main__.py
 
 from . import aliases  # registers /mirror,/leech,/ytdl,/count,/del,/stats
 import logging, os
@@ -38,12 +38,23 @@ from .utility.helper import (
 from .utility.ui_components import MessageTemplate, Emoji
 from .utility.keyboard_layouts import quick_menu
 from .utility.ui_copy import (
+    build_cannot_start_task_message,
     build_cancel_task_button_label,
+    build_directory_path_prompt,
+    build_extract_archive_prompt,
     build_filename_option_prompt,
     build_help_text,
+    build_invalid_provider_configuration_error,
     build_link_prompt,
+    build_mindvalley_prompt,
     build_manual_filenames_prompt,
+    build_nzb_prompt,
+    build_pending_task_warning,
+    build_raw_gist_warning,
+    build_start_welcome_text,
+    build_tiktok_bulk_gist_prompt,
     build_upload_destination_prompt,
+    build_usenet_not_configured_error,
 )
 from .downlader.mindvalley import MindvalleyDownloader
 from .uploader.telegram import upload_file
@@ -759,11 +770,15 @@ async def start(client, message):
     except Exception as delete_err:
         log.debug(f"Could not delete /start command message: {delete_err}")
 
-    text = "**Yo! 👋🏼 It's Colab Leecher** ..."
+    text = build_start_welcome_text()
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton("Repo", url="https://github.com/thesadeq/Telegram-Leecher")]]
     )
-    await message.reply_text(text, reply_markup=keyboard)
+    await message.reply_text(
+        text,
+        reply_markup=keyboard,
+        parse_mode=enums.ParseMode.HTML,
+    )
 
 @colab_bot.on_message(filters.command("tupload") & filters.private)
 async def telegram_upload(client, message):
@@ -782,9 +797,8 @@ async def telegram_upload(client, message):
     can_start, reason = await TASK_QUEUE.can_start_task(user_id)
     if not can_start:
         await message.reply_text(
-            f"❌ **Cannot Start Task**\n\n"
-            f"{reason}\n\n"
-            f"Use /tasks to see your active tasks."
+            build_cannot_start_task_message(reason),
+            parse_mode=enums.ParseMode.HTML,
         )
         return
     # ===== END CHECK =====
@@ -800,8 +814,8 @@ async def telegram_upload(client, message):
             if existing_task.status_msg:
                 try:
                     await existing_task.status_msg.reply_text(
-                        f"⚠️ You already have a pending task ({existing_task.get_short_id()}).\n"
-                        f"Please send your links or use /cancel to start over."
+                        build_pending_task_warning(existing_task.get_short_id()),
+                        parse_mode=enums.ParseMode.HTML,
                     )
                 except Exception as e:
                     log.warning(f"Could not reply to existing status message: {e}")
@@ -861,9 +875,8 @@ async def drive_upload(client, message):
     can_start, reason = await TASK_QUEUE.can_start_task(user_id)
     if not can_start:
         await message.reply_text(
-            f"❌ **Cannot Start Task**\n\n"
-            f"{reason}\n\n"
-            f"Use /tasks to see your active tasks."
+            build_cannot_start_task_message(reason),
+            parse_mode=enums.ParseMode.HTML,
         )
         return
     # ===== END CHECK =====
@@ -876,8 +889,8 @@ async def drive_upload(client, message):
             # Send warning BEFORE deleting the command message
             await client.send_message(
                 chat_id=message.chat.id,
-                text=f"⚠️ You already have a pending task ({existing_task.get_short_id()}).\n"
-                     f"Please complete it or use /cancel to start over."
+                text=build_pending_task_warning(existing_task.get_short_id()),
+                parse_mode=enums.ParseMode.HTML,
             )
             await message.delete()
             return
@@ -922,9 +935,8 @@ async def directory_upload(client, message):
     can_start, reason = await TASK_QUEUE.can_start_task(user_id)
     if not can_start:
         await message.reply_text(
-            f"❌ **Cannot Start Task**\n\n"
-            f"{reason}\n\n"
-            f"Use /tasks to see your active tasks."
+            build_cannot_start_task_message(reason),
+            parse_mode=enums.ParseMode.HTML,
         )
         return
     # ===== END CHECK =====
@@ -937,8 +949,8 @@ async def directory_upload(client, message):
             # Send warning BEFORE deleting the command message
             await client.send_message(
                 chat_id=message.chat.id,
-                text=f"⚠️ You already have a pending task ({existing_task.get_short_id()}).\n"
-                     f"Please complete it or use /cancel to start over."
+                text=build_pending_task_warning(existing_task.get_short_id()),
+                parse_mode=enums.ParseMode.HTML,
             )
             await message.delete()
             return
@@ -965,15 +977,10 @@ async def directory_upload(client, message):
         log.warning(f"Could not delete command message: {e}")
 
     # Send prompt for directory path
-    text = (
-        "<b>⚡ Dir Leech » Send Me FOLDER PATH 🔗</b>\n\n"
-        "Send the full path to your directory:\n\n"
-        "<code>/path/to/folder</code>\n\n"
-        f"<i>📌 Task ID: {task_ctx.get_short_id()}</i>"
-    )
+    text = build_directory_path_prompt(task_ctx.get_short_id())
 
     try:
-        prompt_msg = await message.reply_text(text)
+        prompt_msg = await message.reply_text(text, parse_mode=enums.ParseMode.HTML)
         task_ctx.status_msg = prompt_msg  # Store prompt message in task context
         log.info(f"Sent path prompt for task {task_ctx.get_short_id()}")
     except Exception as e:
@@ -1001,9 +1008,8 @@ async def yt_upload(client, message):
     can_start, reason = await TASK_QUEUE.can_start_task(user_id)
     if not can_start:
         await message.reply_text(
-            f"❌ **Cannot Start Task**\n\n"
-            f"{reason}\n\n"
-            f"Use /tasks to see your active tasks."
+            build_cannot_start_task_message(reason),
+            parse_mode=enums.ParseMode.HTML,
         )
         return
     # ===== END CHECK =====
@@ -1065,9 +1071,8 @@ async def instagram_upload(client, message):
     can_start, reason = await TASK_QUEUE.can_start_task(user_id)
     if not can_start:
         await message.reply_text(
-            f"❌ **Cannot Start Task**\n\n"
-            f"{reason}\n\n"
-            f"Use /tasks to see your active tasks."
+            build_cannot_start_task_message(reason),
+            parse_mode=enums.ParseMode.HTML,
         )
         return
     # ===== END CHECK =====
@@ -1130,9 +1135,8 @@ async def tiktok_bulk_upload(client, message):
     can_start, reason = await TASK_QUEUE.can_start_task(user_id)
     if not can_start:
         await message.reply_text(
-            f"❌ **Cannot Start Task**\n\n"
-            f"{reason}\n\n"
-            f"Use /tasks to see your active tasks."
+            build_cannot_start_task_message(reason),
+            parse_mode=enums.ParseMode.HTML,
         )
         return
 
@@ -1157,22 +1161,10 @@ async def tiktok_bulk_upload(client, message):
         log.warning(f"Could not delete command message: {e}")
 
     # Send prompt for Gist URL
-    text = (
-        "<b>📦 TikTok Bulk Download » Send Me a GitHub Gist URL 🔗</b>\n\n"
-        "<b>Format:</b>\n"
-        "• Create a GitHub Gist with TikTok URLs (one per line)\n"
-        "• Send the <b>RAW</b> Gist URL here\n\n"
-        "<b>Example:</b>\n"
-        "<code>https://gist.githubusercontent.com/user/abc123/raw/...</code>\n\n"
-        "<b>Features:</b>\n"
-        "• Downloads 5 videos in parallel (fast!)\n"
-        "• Auto-creates ZIP with timestamp\n"
-        "• Continues on errors\n\n"
-        f"<i>📌 Task ID: {task_ctx.get_short_id()}</i>"
-    )
+    text = build_tiktok_bulk_gist_prompt(task_ctx.get_short_id())
 
     try:
-        prompt_msg = await message.reply_text(text)
+        prompt_msg = await message.reply_text(text, parse_mode=enums.ParseMode.HTML)
         task_ctx.status_msg = prompt_msg
         log.info(f"Sent Gist URL prompt for task {task_ctx.get_short_id()}")
     except Exception as e:
@@ -1660,10 +1652,11 @@ async def handle_url(client: Client, message: Message):
 
                 # Create status message
                 status_msg = await message.reply_text(
-                    f"🎬 **TikTok Bulk Download**\n\n"
-                    f"**Task ID:** `{task_ctx.get_short_id()}`\n"
-                    f"**Status:** Initializing...\n\n"
-                    f"<i>Fetching URLs from Gist...</i>"
+                    f"<b>TikTok Bulk Download</b>\n\n"
+                    f"<b>Task ID:</b> <code>{task_ctx.get_short_id()}</code>\n"
+                    "<b>Status:</b> Initializing...\n\n"
+                    "<i>Fetching URLs from Gist...</i>",
+                    parse_mode=enums.ParseMode.HTML,
                 )
                 task_ctx.status_msg = status_msg
 
@@ -1675,12 +1668,13 @@ async def handle_url(client: Client, message: Message):
 
                 if not success or not urls:
                     await status_msg.edit_text(
-                        f"❌ **TikTok Bulk Download Failed**\n\n"
-                        f"Could not fetch TikTok URLs from Gist.\n"
-                        f"Please make sure:\n"
-                        f"• You provided a RAW Gist URL\n"
-                        f"• The Gist contains valid TikTok URLs\n"
-                        f"• Each URL is on a separate line"
+                        "<b>TikTok Bulk Download Failed</b>\n\n"
+                        "Could not fetch TikTok URLs from the gist.\n"
+                        "Please verify:\n"
+                        "• You provided a RAW gist URL\n"
+                        "• The gist contains valid TikTok URLs\n"
+                        "• Each URL is on a separate line",
+                        parse_mode=enums.ParseMode.HTML,
                     )
                     # Cleanup: Remove from user_tasks on failure
                     async with user_tasks_lock:
@@ -1704,7 +1698,7 @@ async def handle_url(client: Client, message: Message):
 
                     async def _safe_edit(text):
                         try:
-                            await status_msg.edit_text(text)
+                            await status_msg.edit_text(text, parse_mode=enums.ParseMode.HTML)
                         except Exception as cancelled_edit_err:
                             log.debug(f"Could not edit cancelled status message: {cancelled_edit_err}")
 
@@ -1727,9 +1721,9 @@ async def handle_url(client: Client, message: Message):
                         part_label = f"Part {part_num}/{total_parts}" if total_parts > 1 else ""
 
                         await _safe_edit(
-                            f"📥 **Downloading TikTok Videos{' — ' + part_label if part_label else ''}**\n\n"
-                            f"**Videos in this batch:** {len(batch_urls)}\n"
-                            f"**Total:** {total_urls} URLs"
+                            f"<b>Downloading TikTok Videos{' - ' + part_label if part_label else ''}</b>\n\n"
+                            f"<b>Videos in this batch:</b> <code>{len(batch_urls)}</code>\n"
+                            f"<b>Total:</b> <code>{total_urls}</code> URLs"
                         )
 
                         download_success, summary = await downloader.download_bulk(batch_urls)
@@ -1740,11 +1734,16 @@ async def handle_url(client: Client, message: Message):
                             break
 
                         if not download_success:
-                            await _safe_edit(
-                                f"❌ **All Downloads Failed{' (' + part_label + ')' if part_label else ''}**\n\n"
-                                f"{summary}\n\nSkipping to next batch..." if total_parts > 1 else
-                                f"❌ **All Downloads Failed**\n\n{summary}\n\nPlease check the URLs and try again."
-                            )
+                            if total_parts > 1:
+                                await _safe_edit(
+                                    f"<b>All Downloads Failed{' (' + part_label + ')' if part_label else ''}</b>\n\n"
+                                    f"{summary}\n\nSkipping to next batch..."
+                                )
+                            else:
+                                await _safe_edit(
+                                    "<b>All Downloads Failed</b>\n\n"
+                                    f"{summary}\n\nPlease check the URLs and try again."
+                                )
                             if total_parts == 1:
                                 return
                             continue
@@ -1762,17 +1761,17 @@ async def handle_url(client: Client, message: Message):
 
                         if not zip_success or not zip_path or not os.path.exists(zip_path):
                             await _safe_edit(
-                                f"❌ **ZIP Creation Failed{' (' + part_label + ')' if part_label else ''}**\n\n"
-                                f"Videos were downloaded but ZIP creation failed.\n"
-                                f"Please check the logs."
+                                f"<b>ZIP Creation Failed{' (' + part_label + ')' if part_label else ''}</b>\n\n"
+                                "Videos were downloaded but ZIP creation failed.\n"
+                                "Please check the logs."
                             )
                             continue
 
                         # Upload ZIP to Telegram
                         await _safe_edit(
-                            f"📤 **Uploading to Telegram...{' — ' + part_label if part_label else ''}**\n\n"
-                            f"**ZIP File:** {zip_name}\n"
-                            f"**Videos:** {len(downloader.successful_downloads)}/{len(batch_urls)}"
+                            f"<b>Uploading to Telegram{' - ' + part_label if part_label else ''}</b>\n\n"
+                            f"<b>ZIP File:</b> <code>{zip_name}</code>\n"
+                            f"<b>Videos:</b> <code>{len(downloader.successful_downloads)}/{len(batch_urls)}</code>"
                         )
 
                         await Leech(
@@ -1787,13 +1786,13 @@ async def handle_url(client: Client, message: Message):
                         log.info(f"TikTok Bulk part {part_num}/{total_parts} done: {len(downloader.successful_downloads)}/{len(batch_urls)} succeeded")
 
                     # Final summary report
-                    report = f"✅ **TikTok Bulk Download Complete**\n\n"
-                    report += f"**Total URLs:** {total_urls}\n"
-                    report += f"**Downloaded:** {all_successful}\n"
+                    report = "<b>TikTok Bulk Download Complete</b>\n\n"
+                    report += f"<b>Total URLs:</b> <code>{total_urls}</code>\n"
+                    report += f"<b>Downloaded:</b> <code>{all_successful}</code>\n"
                     if all_failed:
-                        report += f"**Failed:** {all_failed}\n"
+                        report += f"<b>Failed:</b> <code>{all_failed}</code>\n"
                     if total_parts > 1:
-                        report += f"**Parts uploaded:** {total_parts}\n"
+                        report += f"<b>Parts uploaded:</b> <code>{total_parts}</code>\n"
 
                     await _safe_edit(report)
 
@@ -1835,9 +1834,10 @@ async def handle_url(client: Client, message: Message):
                 # Send error message to user (cleanup handled by finally block)
                 try:
                     await message.reply_text(
-                        f"❌ **Error in TikTok Bulk Download**\n\n"
-                        f"Error: {str(e)[:200]}\n\n"
-                        f"Please try again or contact support."
+                        "<b>Error in TikTok Bulk Download</b>\n\n"
+                        f"<b>Error:</b> <code>{str(e)[:200]}</code>\n\n"
+                        "Please try again or contact support.",
+                        parse_mode=enums.ParseMode.HTML,
                     )
                 except Exception as notify_err:
                     log.warning(f"Failed to send TikTok bulk error reply: {notify_err}")
@@ -1878,12 +1878,13 @@ async def handle_url(client: Client, message: Message):
                 ])
 
                 choice_msg = await message.reply_text(
-                    f"📦 **Found {len(parsed_links)} links in your gist/paste!**\n\n"
-                    f"**How do you want to download them?**\n\n"
-                    f"🚀 **All Parallel** - Download all {len(parsed_links)} files at the same time (fastest!)\n"
-                    f"⏸️ **One by One** - Download sequentially in batches\n\n"
+                    f"<b>Found {len(parsed_links)} links in your gist/paste.</b>\n\n"
+                    "<b>How do you want to download them?</b>\n\n"
+                    f"🚀 <b>All Parallel</b> - Download all {len(parsed_links)} files at the same time\n"
+                    "⏸️ <b>One by One</b> - Download sequentially in batches\n\n"
                     f"<i>Task ID: {task_ctx.get_short_id()}</i>",
-                    reply_markup=keyboard_parallel
+                    reply_markup=keyboard_parallel,
+                    parse_mode=enums.ParseMode.HTML,
                 )
 
                 # Store parsed links and choice message in task context for callback handler
@@ -1901,10 +1902,11 @@ async def handle_url(client: Client, message: Message):
 
             # Send processing message
             processing_msg = await message.reply_text(
-                f"⚙️ **Processing your request...**\n\n"
-                f"**Task ID:** `{task_ctx.get_short_id()}`\n"
-                f"**Mode:** Leech (Telegram Upload)\n\n"
-                f"<i>Please wait while we prepare your download...</i>"
+                "<b>Processing your request...</b>\n\n"
+                f"<b>Task ID:</b> <code>{task_ctx.get_short_id()}</code>\n"
+                "<b>Mode:</b> Leech (Telegram Upload)\n\n"
+                "<i>Please wait while we prepare your download...</i>",
+                parse_mode=enums.ParseMode.HTML,
             )
             task_ctx.status_msg = processing_msg
 
@@ -2001,7 +2003,10 @@ async def handle_url(client: Client, message: Message):
             # Check if path exists
             if not os.path.exists(input_text):
                  log.error(f"Dir-leech path does not exist: {input_text}")
-                 await message.reply_text(f"❌ Path not found or invalid: `{input_text}`")
+                 await message.reply_text(
+                     f"❌ Path not found or invalid: <code>{input_text}</code>",
+                     parse_mode=enums.ParseMode.HTML,
+                 )
                  await _clear_setup_session(user_id)
                  return
 
@@ -2160,9 +2165,10 @@ async def handle_url(client: Client, message: Message):
                         log.warning("NZBcloud detected but no filenames found")
                         await message.reply_text(
                             "⚠️ NZBcloud links detected but no TITLE= filenames found.\n\n"
-                            "**Required Format:**\n"
+                            "<b>Required Format:</b>\n"
                             "<code>TITLE=filename.mkv\nhttps://files.nzbcloud.com/...</code>\n\n"
-                            "**Tip:** Use the extension's \"Create Gist\" button to generate the correct format!"
+                            "<b>Tip:</b> Use the extension's \"Create Gist\" button to generate the correct format!",
+                            parse_mode=enums.ParseMode.HTML,
                         )
                         await _clear_setup_session(user_id)
                         return
@@ -2575,7 +2581,12 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
             log.info("Proceeding to start task via TaskContext...")
             try:
-                status_msg_obj = await client.send_message(OWNER, "#STARTING_TASK\n\n**Task commencing...**", reply_markup=keyboard())
+                status_msg_obj = await client.send_message(
+                    OWNER,
+                    "<code>#STARTING_TASK</code>\n\n<b>Task commencing...</b>",
+                    reply_markup=keyboard(),
+                    parse_mode=enums.ParseMode.HTML,
+                )
                 task_ctx.status_msg = status_msg_obj
             except Exception as start_err:
                 log.error(f"Failed send status msg: {start_err}", exc_info=True)
@@ -2860,8 +2871,8 @@ async def handle_image(client, message):
     log.info(f"Received photo from user {message.from_user.id}, setting thumbnail.")
     msg = await message.reply_text("<i>Trying To Save Thumbnail...</i>", parse_mode=enums.ParseMode.HTML)
     success = await setThumbnail(message)
-    if success: await msg.edit_text("**Thumbnail Changed ✅**"); await message.delete()
-    else: await msg.edit_text("🥲 **Couldn’t set thumbnail...**", quote=True)
+    if success: await msg.edit_text("<b>Thumbnail Updated</b> ✅", parse_mode=enums.ParseMode.HTML); await message.delete()
+    else: await msg.edit_text("Could not set thumbnail.", parse_mode=enums.ParseMode.HTML)
     await sleep(5); await message_deleter(None, msg)
 
 # Other Command Handlers (setname, zipaswd, unzipaswd, help - remain the same)
@@ -2892,7 +2903,10 @@ async def archive_type(client, message):
         format_choice = message.command[1].lower()
         if format_choice in ["zip", "rar", "7z"]:
             BOT.Options.archive_format = format_choice
-            msg = await message.reply_text(f"Archive Format Set to: **{format_choice.upper()}**")
+            msg = await message.reply_text(
+                f"Archive format set to <code>{format_choice.upper()}</code>.",
+                parse_mode=enums.ParseMode.HTML,
+            )
             log.info(f"Archive format set to: {format_choice}")
         else:
             msg = await message.reply_text("Invalid format! Use <code>zip</code>, <code>rar</code>, or <code>7z</code>", quote=True, parse_mode=enums.ParseMode.HTML)
@@ -2927,7 +2941,7 @@ async def _perform_extraction(archive_path, file_filter=None, task_ctx=None):
             if success:
                 msg = (
                     f"✅ Extraction + Upload complete!\n\n"
-                    f"📁 Archive: `{filename}`\n"
+                    f"📁 Archive: <code>{filename}</code>\n"
                     f"⬆️ All files uploaded to Telegram\n"
                     f"🗑️ Temp files cleaned up"
                 )
@@ -3087,7 +3101,10 @@ async def _handle_extract_input(client, message):
 
     # Validate path exists
     if not os.path.exists(archive_path) or not os.path.isfile(archive_path):
-        await message.reply_text(f"❌ File not found: `{archive_path}`\n\nUse /extract to try again.")
+        await message.reply_text(
+            f"❌ File not found: <code>{archive_path}</code>\n\nUse /extract to try again.",
+            parse_mode=enums.ParseMode.HTML,
+        )
         return
 
     # Auto-detect first part for multi-part RAR (handles formats like part01.rar or part01_Downloadly.ir.rar)
@@ -3218,18 +3235,11 @@ async def extract_archive(client, message):
     # If no arguments provided, ask for path
     if len(message.command) == 1:
         log.info("No arguments provided, setting extract_waiting=True and prompting for path")
-        help_text = (
-            "📂 **Extract Archive**\n\n"
-            "Send me the archive path and optional file filter:\n\n"
-            "**Examples:**\n"
-            "`/content/drive/MyDrive/file.part01.rar`\n"
-            "`/content/drive/MyDrive/file.rar .mkv`\n"
-            "`/content/drive/MyDrive/file.zip .mkv,.mp4`\n\n"
-            "**Format:**\n"
-            "`<path>` or `<path> <filter>`\n\n"
-            "Cancel with /cancel"
+        help_text = build_extract_archive_prompt()
+        prompt_msg = await message.reply_text(
+            help_text,
+            parse_mode=enums.ParseMode.HTML,
         )
-        prompt_msg = await message.reply_text(help_text)
         await _set_extract_waiting(_extract_user_id(message), prompt_msg.id)
         return
 
@@ -3292,7 +3302,10 @@ async def extract_archive(client, message):
                             log.info(f"Multi-part RAR detected, using first part: {archive_path}")
                             break
         else:
-            await message.reply_text(f"❌ File not found: `{explicit_path}`")
+            await message.reply_text(
+                f"❌ File not found: <code>{explicit_path}</code>",
+                parse_mode=enums.ParseMode.HTML,
+            )
             return
 
     # Method 1: Check for most recent archive in download directory
@@ -3317,18 +3330,13 @@ async def extract_archive(client, message):
     if not archive_path:
         # No archive found - prompt user to send path manually
         help_text = (
-            "📂 **Extract Archive**\n\n"
-            "❌ No recent archive found in downloads.\n\n"
-            "Send me the archive path and optional file filter:\n\n"
-            "**Examples:**\n"
-            "`/content/drive/MyDrive/file.part01.rar`\n"
-            "`/content/drive/MyDrive/file.rar .mkv`\n"
-            "`/content/drive/MyDrive/file.zip .mkv,.mp4`\n\n"
-            "**Format:**\n"
-            "`<path>` or `<path> <filter>`\n\n"
-            "Cancel with /cancel"
+            "<b>No recent archive found in downloads.</b>\n\n"
+            f"{build_extract_archive_prompt()}"
         )
-        prompt_msg = await message.reply_text(help_text)
+        prompt_msg = await message.reply_text(
+            help_text,
+            parse_mode=enums.ParseMode.HTML,
+        )
         await _set_extract_waiting(_extract_user_id(message), prompt_msg.id)
         return
 
@@ -3430,25 +3438,7 @@ async def mindvalley_download(client, message):
         filenames=[],
     )
 
-    help_text = (
-        "**🎬 Mindvalley Course Downloader**\n\n"
-        "**Send your M3U8 URLs** (choose one option):\n\n"
-        "**Option 1:** Full download (video + audio + subtitle)\n"
-        "`TITLE=My Lesson Name` (optional - for custom filename)\n"
-        "`https://...video.m3u8`\n"
-        "`https://...audio.m3u8` (optional)\n"
-        "`https://...subtitle.webvtt.m3u8` (optional)\n\n"
-        "**Option 2:** Subtitle-only download (auto-detected!)\n"
-        "Just send a subtitle URL (contains 'subtitle' or 'webvtt'):\n"
-        "`TITLE=My Subtitle Name` (optional)\n"
-        "`https://...subtitle.webvtt.m3u8`\n"
-        "Or use manual flag: `DOWNLOAD_TYPE=subtitle-only`\n\n"
-        "**Option 3:** Raw gist URL (with TITLE= as first line)\n"
-        "`https://gist.githubusercontent.com/...`\n\n"
-        "📌 **Tip:** Use browser extension to auto-copy with title!\n"
-        "💡 **Tip:** Put long URLs in a gist to avoid character limits!\n"
-        "📝 **Note:** Subtitles uploaded as both SRT and VTT formats"
-    )
+    help_text = build_mindvalley_prompt()
     await _clear_source_waiting(client, user_id)
     prompt_msg = await task_starter(message, help_text)
     if prompt_msg:
@@ -3581,7 +3571,11 @@ async def handle_text_input(client, message):
             raw_url = input_text
             if 'gist.github.com' in input_text and '/raw' not in input_text:
                 # User sent the normal gist URL, convert to raw
-                await message.reply_text("⚠️ Please use the **RAW** gist URL. Click 'Raw' button on gist page.", quote=True)
+                await message.reply_text(
+                    f"⚠️ {build_raw_gist_warning()}",
+                    quote=True,
+                    parse_mode=enums.ParseMode.HTML,
+                )
                 return
 
             # Fetch content from gist
@@ -3731,19 +3725,19 @@ async def handle_text_input(client, message):
         # Initialize status message for progress tracking
         if subtitle_only:
             status_text = (
-                f"📝 **Mindvalley Subtitle Download** [{task_ctx.get_short_id()}]\n\n"
-                f"📝 Subtitle: ✅\n"
-                f"📹 Video: ❌ (subtitle-only mode)\n"
-                f"🔊 Audio: ❌ (subtitle-only mode)\n\n"
-                f"_Download will start shortly..._"
+                f"<b>Mindvalley Subtitle Download</b> [<code>{task_ctx.get_short_id()}</code>]\n\n"
+                "<b>Subtitle:</b> ✅\n"
+                "<b>Video:</b> ❌ (subtitle-only mode)\n"
+                "<b>Audio:</b> ❌ (subtitle-only mode)\n\n"
+                "<i>Download will start shortly...</i>"
             )
         else:
             status_text = (
-                f"🎬 **Mindvalley Download Started** [{task_ctx.get_short_id()}]\n\n"
-                f"📹 Video: ✅\n"
-                f"🔊 Audio: {'✅' if audio_url else '❌ (using embedded audio)'}\n"
-                f"📝 Subtitle: {'✅' if subtitle_url else '❌'}\n\n"
-                f"_Download will start shortly..._"
+                f"<b>Mindvalley Download Started</b> [<code>{task_ctx.get_short_id()}</code>]\n\n"
+                "<b>Video:</b> ✅\n"
+                f"<b>Audio:</b> {'✅' if audio_url else '❌ (using embedded audio)'}\n"
+                f"<b>Subtitle:</b> {'✅' if subtitle_url else '❌'}\n\n"
+                "<i>Download will start shortly...</i>"
             )
 
         # Download random thumbnail - use shared pool from task_manager
@@ -3788,7 +3782,8 @@ async def handle_text_input(client, message):
                 OWNER,
                 photo=thumb_path,
                 caption=status_text,
-                reply_markup=keyboard(task_ctx.get_short_id())  # Add cancel button with task short ID
+                reply_markup=keyboard(task_ctx.get_short_id()),  # Add cancel button with task short ID
+                parse_mode=enums.ParseMode.HTML,
             )
             log.info(f"Sent Mindvalley status with thumbnail: {thumb_path} (task {task_ctx.get_short_id()})")
         else:
@@ -3797,7 +3792,8 @@ async def handle_text_input(client, message):
             task_ctx.status_msg = await client.send_message(
                 OWNER,
                 status_text,
-                reply_markup=keyboard(task_ctx.get_short_id())  # Add cancel button with task short ID
+                reply_markup=keyboard(task_ctx.get_short_id()),  # Add cancel button with task short ID
+                parse_mode=enums.ParseMode.HTML,
             )
 
         # Also set global MSG for backward compatibility with status_bar()
@@ -3929,28 +3925,31 @@ async def handle_text_input(client, message):
                         else:
                             task_ctx.error.set_error("Upload failed")
                             await message.reply_text(
-                                f"❌ **Upload Failed** [task {task_ctx.get_short_id()}]\n\n"
-                                f"File downloaded but upload to Telegram failed.\n"
-                                f"File saved at: `{final_path}`",
-                                quote=True
+                                f"<b>Upload Failed</b> [task {task_ctx.get_short_id()}]\n\n"
+                                "File downloaded but upload to Telegram failed.\n"
+                                f"File saved at: <code>{final_path}</code>",
+                                quote=True,
+                                parse_mode=enums.ParseMode.HTML,
                             )
                     except Exception as upload_error:
                         log.exception(f"Task {task_ctx.get_short_id()}: Upload error")
                         task_ctx.error.set_error(str(upload_error))
                         await message.reply_text(
-                            f"❌ **Upload Error** [task {task_ctx.get_short_id()}]: {str(upload_error)}\n\n"
-                            f"File saved locally at: `{final_path}`",
-                            quote=True
+                            f"<b>Upload Error</b> [task {task_ctx.get_short_id()}]: {str(upload_error)}\n\n"
+                            f"File saved locally at: <code>{final_path}</code>",
+                            quote=True,
+                            parse_mode=enums.ParseMode.HTML,
                         )
                 else:
                     task_ctx.error.set_error("Download failed")
                     await message.reply_text(
-                        f"❌ **Download Failed** [task {task_ctx.get_short_id()}]\n\n"
+                        f"<b>Download Failed</b> [task {task_ctx.get_short_id()}]\n\n"
                         "Please check:\n"
                         "• URLs are valid M3U8 playlists\n"
                         "• Network connection is stable\n"
                         "• Try again with /mindvalley",
-                        quote=True
+                        quote=True,
+                        parse_mode=enums.ParseMode.HTML,
                     )
 
             except Exception as task_error:
@@ -3958,8 +3957,9 @@ async def handle_text_input(client, message):
                 task_ctx.error.set_error(str(task_error))
                 task_ctx.mark_completed()  # Mark as completed even on error
                 await message.reply_text(
-                    f"❌ **Task Error** [task {task_ctx.get_short_id()}]: {str(task_error)}",
-                    quote=True
+                    f"<b>Task Error</b> [task {task_ctx.get_short_id()}]: {str(task_error)}",
+                    quote=True,
+                    parse_mode=enums.ParseMode.HTML,
                 )
             finally:
                 # Clean up: remove from queue and update dashboard
@@ -4007,16 +4007,7 @@ async def nzb_download(client, message):
         filenames=[],
     )
 
-    help_text = (
-        "**📰 NZB Usenet Downloader**\n\n"
-        "**Upload your .nzb file** or **send NZB URL**\n\n"
-        "📌 **Requirements:**\n"
-        "• Valid Usenet account configured in credentials.json\n"
-        "• NZB file with valid article IDs\n\n"
-        "💡 **Tip:** Supports multi-part RAR archives!\n"
-        "⚠️ **Note:** Missing articles will be skipped\n\n"
-        f"**Active Provider:** {BOT.Setting.nzb_active_provider or 'Not configured'}"
-    )
+    help_text = build_nzb_prompt(BOT.Setting.nzb_active_provider)
 
     await _clear_source_waiting(client, user_id)
     prompt_msg = await task_starter(message, help_text)
@@ -4088,34 +4079,18 @@ async def handle_nzb_file(client, message, nzb_file_path=None):
         # Validate Usenet credentials
         if not BOT.Setting.nzb_providers or not BOT.Setting.nzb_active_provider:
             await message.reply_text(
-                "❌ **Usenet Not Configured**\n\n"
-                "Add to `credentials.json`:\n"
-                "```json\n"
-                "{\n"
-                '  "NZB_PROVIDERS": {\n'
-                '    "provider_name": {\n'
-                '      "host": "news.server.com",\n'
-                '      "port": 563,\n'
-                '      "username": "user",\n'
-                '      "password": "pass",\n'
-                '      "ssl": true,\n'
-                '      "connections": 8\n'
-                "    }\n"
-                "  },\n"
-                '  "NZB_DEFAULT_PROVIDER": "provider_name"\n'
-                "}\n"
-                "```",
-                quote=True
+                build_usenet_not_configured_error(),
+                quote=True,
+                parse_mode=enums.ParseMode.HTML,
             )
             return
 
         active_provider = BOT.Setting.nzb_providers.get(BOT.Setting.nzb_active_provider, {})
         if not active_provider.get('host'):
             await message.reply_text(
-                f"❌ **Invalid Provider Configuration**\n\n"
-                f"Active provider '{BOT.Setting.nzb_active_provider}' is missing required fields.\n"
-                "Check your credentials.json",
-                quote=True
+                build_invalid_provider_configuration_error(BOT.Setting.nzb_active_provider),
+                quote=True,
+                parse_mode=enums.ParseMode.HTML,
             )
             return
 
@@ -4282,7 +4257,7 @@ async def cancel_command(client, message):
         # Add owner-only "Cancel All" option when multiple tasks exist.
         if len(user_active_tasks) > 1 and user_id == OWNER:
             keyboard.append([
-                InlineKeyboardButton("Cancel All Tasks", callback_data="cancel_all_tasks")
+                InlineKeyboardButton("❌ Cancel All Tasks", callback_data="cancel_all_tasks")
             ])
 
         await message.reply_text(
@@ -4455,3 +4430,5 @@ if __name__ == "__main__":
           try:
               colab_bot.run()
           except Exception as run_err: log.critical(f"Bot crashed during run: {run_err}", exc_info=True)
+
+

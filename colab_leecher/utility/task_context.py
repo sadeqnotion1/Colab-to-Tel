@@ -17,6 +17,7 @@ from collections import deque
 from datetime import datetime
 from typing import Dict, Optional, List, Set, Deque
 from pyrogram.types import Message
+from .ui_copy import build_health_summary_text
 
 log = logging.getLogger(__name__)
 
@@ -389,17 +390,13 @@ class TaskQueue:
         """Register a new task (thread-safe)"""
         async with self._lock:
             if self.is_shutting_down:
-                log.warning(
-                    f"Rejecting task {
-                        task_ctx.get_short_id()} - system shutting down")
+                log.warning(f"Rejecting task {task_ctx.get_short_id()} - system shutting down")
                 return
             self.active_tasks[task_ctx.task_id] = task_ctx
             self.metrics.active_tasks = len(self.active_tasks)
             log.info(
-                f"Task {
-                    task_ctx.get_short_id()} added to queue. Total active: {
-                    len(
-                        self.active_tasks)}")
+                f"Task {task_ctx.get_short_id()} added to queue. Total active: {len(self.active_tasks)}"
+            )
 
     async def remove_task(self, task_id: str) -> Optional[TaskContext]:
         """Remove a completed/cancelled task (thread-safe)"""
@@ -428,10 +425,8 @@ class TaskQueue:
                     list) else task_ctx.transfer.up_bytes
 
                 log.info(
-                    f"Task {
-                        task_ctx.get_short_id()} removed from queue. Remaining: {
-                        len(
-                            self.active_tasks)}")
+                    f"Task {task_ctx.get_short_id()} removed from queue. Remaining: {len(self.active_tasks)}"
+                )
             return task_ctx
 
     def get_health_summary(self) -> str:
@@ -445,16 +440,16 @@ class TaskQueue:
                 return f"{seconds / 60:.1f}m"
             return f"{seconds / 3600:.1f}h"
 
-        return (
-            f"🏥 **System Health Report**\n"
-            f"├ **Status:** {'🔴 Shutting Down' if self.is_shutting_down else '🟢 Healthy'}\n"
-            f"├ **Uptime:** `{format_time(uptime)}`\n"
-            f"├ **Active Tasks:** `{len(self.active_tasks)}` / `{self.MAX_TOTAL_TASKS}`\n"
-            f"├ **Background Tasks:** `{len(self.background_tasks)}` (monitored)\n"
-            f"├ **Success Rate:** `{self.metrics.get_success_rate():.1f}%`\n"
-            f"├ **Avg Task Time:** `{format_time(self.metrics.get_avg_completion_time())}`\n"
-            f"├ **Total Down:** `{self.metrics.total_bytes_downloaded / 1e9:.2f} GB`\n"
-            f"╰ **Total Up:** `{self.metrics.total_bytes_uploaded / 1e9:.2f} GB`"
+        return build_health_summary_text(
+            is_shutting_down=self.is_shutting_down,
+            uptime_text=format_time(uptime),
+            active_tasks=len(self.active_tasks),
+            max_total_tasks=self.MAX_TOTAL_TASKS,
+            background_tasks=len(self.background_tasks),
+            success_rate_text=f"{self.metrics.get_success_rate():.1f}%",
+            avg_task_time_text=format_time(self.metrics.get_avg_completion_time()),
+            total_down_text=f"{self.metrics.total_bytes_downloaded / 1e9:.2f} GB",
+            total_up_text=f"{self.metrics.total_bytes_uploaded / 1e9:.2f} GB",
         )
 
     async def shutdown(self):
@@ -468,9 +463,7 @@ class TaskQueue:
 
         for ctx in tasks_to_cancel:
             if ctx.async_task and not ctx.async_task.done():
-                log.info(
-                    f"Cancelling task {
-                        ctx.get_short_id()} during shutdown")
+                log.info(f"Cancelling task {ctx.get_short_id()} during shutdown")
                 ctx.async_task.cancel()
 
         # 2. Cancel monitored background tasks
@@ -533,8 +526,11 @@ class TaskQueue:
             # Global limit check
             total_tasks = len(self.active_tasks)
             if total_tasks >= self.MAX_TOTAL_TASKS:
-                return False, f"System limit reached ({total_tasks}/{
-                    self.MAX_TOTAL_TASKS} tasks active). Please wait for some to complete."
+                return (
+                    False,
+                    f"System limit reached ({total_tasks}/{self.MAX_TOTAL_TASKS} tasks active). "
+                    "Please wait for some to complete.",
+                )
 
             # Per-user limit check
             if user_id:
@@ -545,8 +541,11 @@ class TaskQueue:
                 user_task_count = len(user_tasks)
 
                 if user_task_count >= self.MAX_TASKS_PER_USER:
-                    return False, f"You have {user_task_count}/{
-                        self.MAX_TASKS_PER_USER} tasks active. Please wait for some to complete."
+                    return (
+                        False,
+                        f"You have {user_task_count}/{self.MAX_TASKS_PER_USER} tasks active. "
+                        "Please wait for some to complete.",
+                    )
 
             return True, "OK"
 
@@ -638,13 +637,9 @@ def create_task_context(
     from .variables import Paths  # Import here to avoid circular dependency
     task_ctx.work_path = f"{Paths.WORK_PATH}/{task_ctx.task_id}"
     task_ctx.down_path = f"{task_ctx.work_path}/Downloads"
-    task_ctx.hero_image = f"{
-        task_ctx.work_path}/hero_{
-        task_ctx.get_short_id()}.jpg"
+    task_ctx.hero_image = f"{task_ctx.work_path}/hero_{task_ctx.get_short_id()}.jpg"
 
-    log.info(
-        f"Created TaskContext {
-            task_ctx.get_short_id()} for user {user_id}")
+    log.info(f"Created TaskContext {task_ctx.get_short_id()} for user {user_id}")
     return task_ctx
 
 
