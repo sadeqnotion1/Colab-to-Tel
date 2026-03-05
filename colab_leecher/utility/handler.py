@@ -582,7 +582,7 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
             f"Check {work_path} for partial downloads and report."
         )
 
-    # FIX #2: was "❌ **Task Failed!**" / "🛑 **Task Cancelled by User**"
+    # FIX #2: was markdown-styled failure/cancel text rendered incorrectly in HTML mode.
     # Markdown ** renders as literal asterisks in HTML-mode messages.
     final_summary_header = "<b>\u274c Task Failed!</b>" if task_failed else "<b>\U0001f6d1 Task Cancelled by User</b>"
     final_summary_text = (
@@ -908,25 +908,21 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
             else transfer_obj.up_bytes
         )
         file_count = len(transfer_obj.sent_file)
-        file_count_str = f"<code>{file_count}</code>"
-
-        # FIX #4: proper HTML anchor replacing broken Markdown link with ┬─────┬ prefix.
-        # FIX #8: unified box style — ╭/├/╰ throughout, no rogue ┬─────┬.
-        l_ink = (
-            "\n\u251c\u2500\u2500\u2500\u2500\u2500 "
-            "<a href='https://colab.research.google.com/drive/12hdEqaidRZ8krqj7rpnyDzg1dkKmvdvp'>"
-            "\u2601\ufe0f Colab Usage</a> "
-            "\u2500\u2500\u2500\u2500\u2500\u2524\n"
+        usage_link = (
+            "\n\n<a href='https://colab.research.google.com/drive/12hdEqaidRZ8krqj7rpnyDzg1dkKmvdvp'>"
+            "Colab usage guide</a>"
         )
 
         if is_leech:
-            file_count_display = f"\u251c<b>File Count \u00bb </b>{file_count_str} Files\n"
+            file_count_display = f"<b>Files:</b> <code>{file_count}</code>\n"
             size_label = "Uploaded"
             size_value = sizeUnit(total_uploaded_size)
+            completion_title = "Leech Complete"
         else:
             file_count_display = ""
             size_label = "Total Size"
             size_value = sizeUnit(transfer_obj.total_down_size)
+            completion_title = "Mirror Complete"
 
         custom_name = getattr(task_ctx.bot.Options, "custom_name", "")
         display_name = escape_html(custom_name or messages_obj.download_name or "N/A")
@@ -936,37 +932,36 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
         except Exception:
             elapsed_time_str = "N/A"
 
-        mode_label = (task_ctx.mode or "task").upper()
+        task_summary = messages_obj.task_msg if messages_obj and messages_obj.task_msg else ""
+        short_id = task_ctx.get_short_id()
         last_text = (
-            f"\n\n<b>#{mode_label}_COMPLETE</b> {task_id_str}\n\n"
-            f"\u256d<b>Name \u00bb </b><code>{display_name}</code>\n"
-            f"\u251c<b>{size_label} \u00bb </b><code>{size_value}</code>\n"
+            f"\n\n<b>{completion_title}</b> <code>{short_id}</code>\n\n"
+            f"<b>Name:</b> <code>{display_name}</code>\n"
+            f"<b>{size_label}:</b> <code>{size_value}</code>\n"
             f"{file_count_display}"
-            # FIX #6: was '\u00bb</b>' (no space), now '\u00bb </b>' — consistent with other fields
-            f"\u2570<b>Time Taken \u00bb </b><code>{elapsed_time_str}</code>"
+            f"<b>Time Taken:</b> <code>{elapsed_time_str}</code>"
         )
 
         if status_msg:
-            final_status_text = messages_obj.task_msg + l_ink + last_text
-            # FIX #5: added emojis to match cancelTask keyboard style
+            final_status_text = task_summary + usage_link + last_text
             final_markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("\u2b50 GitHub", url="https://github.com/XronTrix10/Telegram-Leecher")],
+                [InlineKeyboardButton("GitHub", url="https://github.com/XronTrix10/Telegram-Leecher")],
                 [
-                    InlineKeyboardButton("\U0001f4e3 Channel", url="https://t.me/Colab_Leecher"),
-                    InlineKeyboardButton("\U0001f4ac Group", url="https://t.me/Colab_Leecher_Discuss"),
+                    InlineKeyboardButton("Channel", url="https://t.me/Colab_Leecher"),
+                    InlineKeyboardButton("Group", url="https://t.me/Colab_Leecher_Discuss"),
                 ],
             ])
             try:
                 sent_msg = task_ctx.sent_msg
                 if sent_msg:
-                    source_href = safe_href(messages_obj.src_link)
+                    source_href = safe_href(messages_obj.src_link if messages_obj else None)
                     source_markup = (
-                        f"<a href='{escape_html(source_href)}'>Here</a>"
+                        f"<a href='{escape_html(source_href)}'>Open</a>"
                         if source_href
                         else "Unavailable"
                     )
                     await sent_msg.reply_text(
-                        text=f"<b>SOURCE \u00bb</b> {source_markup}" + last_text,
+                        text=f"<b>Source:</b> {source_markup}" + last_text,
                         disable_web_page_preview=False,
                     )
                     log.info(f"Sent final summary to dump chat {task_id_str}.")

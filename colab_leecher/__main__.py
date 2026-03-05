@@ -37,6 +37,14 @@ from .utility.helper import (
 # Enhanced UI Components
 from .utility.ui_components import MessageTemplate, Emoji
 from .utility.keyboard_layouts import quick_menu
+from .utility.ui_copy import (
+    build_cancel_task_button_label,
+    build_filename_option_prompt,
+    build_help_text,
+    build_link_prompt,
+    build_manual_filenames_prompt,
+    build_upload_destination_prompt,
+)
 from .downlader.mindvalley import MindvalleyDownloader
 from .uploader.telegram import upload_file
 from .utility.handler import SendLogs
@@ -514,7 +522,7 @@ async def ask_leech_type(client, chat_id, mode_name, reply_to_message_id=None):
     # Add cancel button manually
     from pyrogram.types import InlineKeyboardButton
     keyboard.inline_keyboard.append([
-        InlineKeyboardButton(f"{Emoji.ERROR} Cancel Task", callback_data="cancel")
+        InlineKeyboardButton(f"{Emoji.ERROR} Cancel", callback_data="cancel")
     ])
 
     text = header + options_text
@@ -528,16 +536,25 @@ async def ask_leech_type(client, chat_id, mode_name, reply_to_message_id=None):
 async def ask_filename_option(client, chat_id, service_name):
     log.info(f"Asking filename option for {service_name}")
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Yes, Extract from URL", callback_data=f'fn_{service_name.lower()}_extract')],
-        [InlineKeyboardButton("No, Provide Manually", callback_data=f'fn_{service_name.lower()}_manual')],
-        [InlineKeyboardButton("Cancel Task", callback_data='cancel')]
+        [InlineKeyboardButton("Extract from URLs", callback_data=f'fn_{service_name.lower()}_extract')],
+        [InlineKeyboardButton("Enter Names Manually", callback_data=f'fn_{service_name.lower()}_manual')],
+        [InlineKeyboardButton("Cancel", callback_data='cancel')]
     ])
-    await client.send_message(chat_id, f"🏷️ For {service_name}, extract filenames automatically from URLs?", reply_markup=keyboard)
+    await client.send_message(
+        chat_id,
+        build_filename_option_prompt(service_name),
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=keyboard,
+    )
 
 # --- Helper function to ask for manual filenames ---
 async def ask_manual_filenames(client, chat_id, service_name, count, user_id=None, source_links=None):
     log.info(f"Asking for {count} manual filenames for {service_name}")
-    prompt_msg = await client.send_message(chat_id, f"📝 Okay, **reply to this message** with the {count} filename(s) for {service_name}, one per line.")
+    prompt_msg = await client.send_message(
+        chat_id,
+        build_manual_filenames_prompt(service_name, count),
+        parse_mode=enums.ParseMode.HTML,
+    )
     await _set_filename_reply_waiting(
         user_id=user_id if user_id is not None else chat_id,
         prompt_message_id=prompt_msg.id,
@@ -549,17 +566,18 @@ async def ask_manual_filenames(client, chat_id, service_name, count, user_id=Non
 async def ask_upload_destination(client, chat_id):
     log.info(f"Asking upload destination for chat {chat_id}")
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("☁️ Google Drive", callback_data="destination_gdrive")],
-        [InlineKeyboardButton("📂 Local Mirror (Colab)", callback_data="destination_mirror")],
-        [InlineKeyboardButton("Cancel Task", callback_data="cancel")]
+        [InlineKeyboardButton("Google Drive", callback_data="destination_gdrive")],
+        [InlineKeyboardButton("Local Mirror (Colab)", callback_data="destination_mirror")],
+        [InlineKeyboardButton("Cancel", callback_data="cancel")]
     ])
-    text = (
-        "<b>📤 Select Upload Destination »</b>\n\n"
-        "☁️ <b>Google Drive:</b> <i>Upload files to your Google Drive (requires token.pickle)</i>\n"
-        "📂 <b>Local Mirror:</b> <i>Copy files to Colab environment (/content/Mirrored_Files)</i>"
-    )
+    text = build_upload_destination_prompt()
     try:
-        await client.send_message(chat_id, text, reply_markup=keyboard)
+        await client.send_message(
+            chat_id,
+            text,
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=keyboard,
+        )
     except Exception as e:
         log.error(f"Failed to send upload destination prompt: {e}", exc_info=True)
 
@@ -811,18 +829,10 @@ async def telegram_upload(client, message):
         log.warning(f"Could not delete command message: {e}")
 
     # Send prompt for URLs
-    text = (
-        "<b>⚡ Leech Task » Send Me THEM LINK(s) 🔗</b>\n\n"
-        "(Direct, Magnet, TG, Mega, GDrive, Debrid, Bitso)\n\n"
-        "<code>https//link1.xyz\n"
-        "[name.ext]\n"
-        "{zip_pw}\n"
-        "(unzip_pw)</code>\n\n"
-        f"<i>📌 Task ID: {task_ctx.get_short_id()}</i>"
-    )
+    text = build_link_prompt("Leech to Telegram", task_id=task_ctx.get_short_id())
 
     try:
-        prompt_msg = await message.reply_text(text)
+        prompt_msg = await message.reply_text(text, parse_mode=enums.ParseMode.HTML)
         task_ctx.status_msg = prompt_msg  # Store prompt message in task context
         log.info(f"Sent URL prompt for task {task_ctx.get_short_id()}")
     except Exception as e:
@@ -1020,14 +1030,14 @@ async def yt_upload(client, message):
 
     # Send prompt for URLs
     text = (
-        "<b>🏮 YTDL Leech » Send Me LINK(s) 🔗</b>\n\n"
-        "(YouTube, Twitter, Instagram, TikTok, etc.)\n\n"
-        "<code>https//youtube.com/watch?v=xyz</code>\n\n"
-        f"<i>📌 Task ID: {task_ctx.get_short_id()}</i>"
+        "<b>YTDL Source Links</b>\n\n"
+        "<i>Supported: YouTube, X/Twitter, Instagram, TikTok, and other yt-dlp sources.</i>\n\n"
+        "<code>https://youtube.com/watch?v=example</code>\n\n"
+        f"<i>Task ID: <code>{task_ctx.get_short_id()}</code></i>"
     )
 
     try:
-        prompt_msg = await message.reply_text(text)
+        prompt_msg = await message.reply_text(text, parse_mode=enums.ParseMode.HTML)
         task_ctx.status_msg = prompt_msg  # Store prompt message in task context
         log.info(f"Sent URL prompt for task {task_ctx.get_short_id()}")
     except Exception as e:
@@ -1084,15 +1094,15 @@ async def instagram_upload(client, message):
 
     # Send prompt for URLs
     text = (
-        "<b>📸 Instagram Leech » Send Me LINK(s) 🔗</b>\n\n"
-        "(Posts, Reels, Stories, IGTV, Carousels)\n\n"
-        "<code>https://instagram.com/p/xyz\n"
-        "https://instagram.com/reel/abc</code>\n\n"
-        f"<i>📌 Task ID: {task_ctx.get_short_id()}</i>"
+        "<b>Instagram Source Links</b>\n\n"
+        "<i>Send post, reel, story, or carousel URLs.</i>\n\n"
+        "<code>https://instagram.com/p/example\n"
+        "https://instagram.com/reel/example</code>\n\n"
+        f"<i>Task ID: <code>{task_ctx.get_short_id()}</code></i>"
     )
 
     try:
-        prompt_msg = await message.reply_text(text)
+        prompt_msg = await message.reply_text(text, parse_mode=enums.ParseMode.HTML)
         task_ctx.status_msg = prompt_msg  # Store prompt message in task context
         log.info(f"Sent URL prompt for task {task_ctx.get_short_id()}")
     except Exception as e:
@@ -1578,42 +1588,36 @@ async def fetch_and_parse_links(url: str) -> list[str] | None:
 # URL Handler: Modified to handle external link lists AND failed parsing
 # Add this function definition inside __main__.py
 async def ask_service_type(client, message):
-     """Sends a new message asking for the download service type."""
-     # Ensure OWNER is imported or accessible
-     from colab_leecher import OWNER
-     log = logging.getLogger(__name__)
-     log.info("Asking user to select download service...")
-     # Define keyboard
-     keyboard_markup = InlineKeyboardMarkup([
-          [InlineKeyboardButton("Aria", callback_data='service_direct'), InlineKeyboardButton("Debrid", callback_data='service_Debrid')],
-          [InlineKeyboardButton("Bitso", callback_data='service_bitso')],
-          [InlineKeyboardButton("Cancel Task", callback_data='cancel')]
-     ])
-     try:
-         # --- FIX: Send a new message instead of editing ---
-         # Reply to the user's message containing the links for context
-         if message and hasattr(message, 'reply_text'):
-              await message.reply_text(
-                  "👇 **Select Download Service** for these links:",
-                  reply_markup=keyboard_markup,
-                  quote=True # Quote the user's link message
-              )
-         else:
-              # Fallback if message context is somehow lost (shouldn't happen often)
-              log.warning("ask_service_type: Message context lost, sending to OWNER.")
-              await client.send_message(
-                  OWNER,
-                  "👇 **Select Download Service** for the links provided:",
-                  reply_markup=keyboard_markup
-              )
-         # --- END FIX ---
-     except Exception as e:
-          log.error(f"Failed to ask service type: {e}", exc_info=True)
-          # Try sending error message to owner as fallback
-          try:
-              await _send_generic_error(client, OWNER, "show the service selection menu")
-          except Exception as owner_notify_err:
-              log.debug(f"Could not notify owner about service-type error: {owner_notify_err}")
+    """Send a menu asking for the download service type."""
+    from colab_leecher import OWNER
+
+    log = logging.getLogger(__name__)
+    log.info("Asking user to select download service...")
+    keyboard_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Aria", callback_data="service_direct"), InlineKeyboardButton("Debrid", callback_data="service_Debrid")],
+        [InlineKeyboardButton("Bitso", callback_data="service_bitso")],
+        [InlineKeyboardButton("Cancel", callback_data="cancel")],
+    ])
+    try:
+        if message and hasattr(message, "reply_text"):
+            await message.reply_text(
+                "Select the download service for these links:",
+                reply_markup=keyboard_markup,
+                quote=True,
+            )
+        else:
+            log.warning("ask_service_type: Message context lost, sending to OWNER.")
+            await client.send_message(
+                OWNER,
+                "Select the download service for the provided links:",
+                reply_markup=keyboard_markup,
+            )
+    except Exception as e:
+        log.error(f"Failed to ask service type: {e}", exc_info=True)
+        try:
+            await _send_generic_error(client, OWNER, "show the service selection menu")
+        except Exception as owner_notify_err:
+            log.debug(f"Could not notify owner about service-type error: {owner_notify_err}")
 # --- End ask_service_type function ---
 
 # --- Replace the entire handle_url function ---
@@ -2199,6 +2203,8 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         query_data == "cancel"
         or query_data.startswith("cancel:")
         or query_data == "cancel_all_tasks"
+        or query_data == "cancel_all_tasks_confirm"
+        or query_data == "cancel_all_tasks_abort"
     ):
         await callback_query.answer("Only owner can cancel.", show_alert=True)
         return
@@ -2394,11 +2400,9 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             # Set the mode based on user's choice
             if destination == "gdrive":
                 selected_mode = "gdrive"
-                text = "<b>☁️ Google Drive Upload » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, Bitso)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
                 log.info("Mode set to 'gdrive' for Google Drive upload")
             elif destination == "mirror":
                 selected_mode = "mirror"
-                text = "<b>📂 Local Mirror » Send Me THEM LINK(s) 🔗</b>\n\n(Direct, Magnet, TG, Mega, GDrive, Debrid, Bitso)\n\n<code>https//link1.xyz\n[name.ext]\n{zip_pw}\n(unzip_pw)</code>"
                 log.info("Mode set to 'mirror' for local Colab mirror")
             else:
                 log.error(f"Unknown destination: {destination}")
@@ -2406,11 +2410,18 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 return
 
             pending_service = None
+            pending_short_id = None
             async with user_tasks_lock:
                 pending_task = user_tasks.get(user_id)
                 if pending_task:
                     pending_task.mode = selected_mode
                     pending_service = pending_task.service_type
+                    pending_short_id = pending_task.get_short_id()
+
+            if destination == "gdrive":
+                text = build_link_prompt("Upload to Google Drive", task_id=pending_short_id)
+            else:
+                text = build_link_prompt("Upload to Local Mirror", task_id=pending_short_id)
 
             await _update_setup_session(
                 user_id,
@@ -2433,7 +2444,11 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             # Send prompt message to collect links (similar to task_starter behavior)
             try:
                 await _clear_source_waiting(client, user_id)
-                prompt_msg = await client.send_message(chat_id, text)
+                prompt_msg = await client.send_message(
+                    chat_id,
+                    text,
+                    parse_mode=enums.ParseMode.HTML,
+                )
                 await _set_source_waiting(user_id, chat_id, prompt_msg.id)
                 log.info(f"Link collection prompt sent for {destination} destination")
             except Exception as e:
@@ -2510,13 +2525,15 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                     await message.edit_text("❌ Error: No links found.")
                     await _clear_setup_session(user_id)
                     return
-                # This is where the prompt message is defined and sent:
-                prompt_text = (f"📝 Okay, **reply to this message** with the {expected_count} filename(s) for {normalized_service}, one per line.\n\n"
-                               f"**OR provide a link** (Gist/Pastebin/Rentry raw URL, or direct `.txt` link) containing the filenames.")
+                prompt_text = build_manual_filenames_prompt(normalized_service, expected_count)
                 try:
                     # Send the prompt
                     await _clear_filename_reply_waiting(client, chat_id, user_id)
-                    prompt_msg = await client.send_message(chat_id, prompt_text)
+                    prompt_msg = await client.send_message(
+                        chat_id,
+                        prompt_text,
+                        parse_mode=enums.ParseMode.HTML,
+                    )
                     await _set_filename_reply_waiting(
                         user_id=user_id,
                         prompt_message_id=prompt_msg.id,
@@ -2759,6 +2776,30 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             if not all_tasks:
                 await callback_query.answer("No active tasks to cancel.", show_alert=True)
                 return
+            await callback_query.answer()
+            confirm_keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("Confirm Cancel All", callback_data="cancel_all_tasks_confirm"),
+                    InlineKeyboardButton("Keep Running", callback_data="cancel_all_tasks_abort"),
+                ]
+            ])
+            await client.send_message(
+                chat_id,
+                f"Cancel all active tasks ({len(all_tasks)})?",
+                reply_markup=confirm_keyboard,
+            )
+        elif query_data == "cancel_all_tasks_abort":
+            await callback_query.answer("No tasks were canceled.", show_alert=True)
+            if message:
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+        elif query_data == "cancel_all_tasks_confirm":
+            all_tasks = await TASK_QUEUE.get_all_tasks()
+            if not all_tasks:
+                await callback_query.answer("No active tasks to cancel.", show_alert=True)
+                return
             await callback_query.answer("Cancelling all tasks...", show_alert=True)
 
             log.info(f"Bulk cancel requested: {len(all_tasks)} tasks")
@@ -2782,6 +2823,11 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             await _clear_password_reply_prompt(client, user_id)
             await _clear_settings_reply_waiting(client, chat_id, user_id)
             await _clear_setup_session(user_id)
+            if message:
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
 
         # --- Fallback for Unknown Callbacks ---
         # <<< THIS BLOCK'S INDENTATION MUST MATCH THE PREVIOUS BLOCKS >>>
@@ -2822,7 +2868,7 @@ async def handle_image(client, message):
 @colab_bot.on_message(filters.command("setname") & filters.private)
 async def custom_name(client, message):
     global BOT; log.info("Received /setname command.")
-    if len(message.command) != 2: msg = await message.reply_text("Send\n/setname <code>custom_fileame.extension</code>", quote=True, parse_mode=enums.ParseMode.HTML)
+    if len(message.command) != 2: msg = await message.reply_text("Send\n/setname <code>custom_filename.extension</code>", quote=True, parse_mode=enums.ParseMode.HTML)
     else: BOT.Options.custom_name = message.command[1]; msg = await message.reply_text("Custom Name Set!"); log.info(f"Custom name: {BOT.Options.custom_name}")
     await sleep(15); await message_deleter(message, msg)
 @colab_bot.on_message(filters.command("zipaswd") & filters.private)
@@ -4210,38 +4256,40 @@ async def handle_nzb_file(client, message, nzb_file_path=None):
 @colab_bot.on_message(filters.command("cancel") & filters.private)
 async def cancel_command(client, message):
     log.info(f"Received /cancel from {message.from_user.id}")
-    
+
     # 1. Check for active parallel tasks
     active_tasks = await TASK_QUEUE.get_all_tasks()
     user_id = message.from_user.id
-    
-    # Filter tasks for this user (if we want to restrict, though usually owner-only bot)
-    user_tasks = {tid: ctx for tid, ctx in active_tasks.items() if ctx.user_id == user_id or user_id == OWNER}
-    
-    if user_tasks:
-        # Show menu to cancel specific tasks
+
+    # Filter tasks for this user
+    user_active_tasks = {
+        tid: ctx for tid, ctx in active_tasks.items()
+        if ctx.user_id == user_id or user_id == OWNER
+    }
+
+    if user_active_tasks:
         keyboard = []
-        for task_id, ctx in user_tasks.items():
-            # Button: "❌ Task Name" -> callback: cancel:short_id
-            name = ctx.get_short_id()
-            if ctx.messages.download_name:
-                name = ctx.messages.download_name[:15] + "..."
-            elif ctx.source_urls:
-                name = ctx.source_urls[0][:15] + "..."
-                
-            btn_text = f"❌ {name} ({ctx.get_short_id()})"
+        for _, ctx in user_active_tasks.items():
+            download_name = ctx.messages.download_name if ctx.messages else None
+            source_url = ctx.source_urls[0] if ctx.source_urls else None
+            btn_text = build_cancel_task_button_label(
+                download_name,
+                source_url,
+                ctx.get_short_id(),
+            )
             keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"cancel:{ctx.get_short_id()}")])
-            
+
         # Add owner-only "Cancel All" option when multiple tasks exist.
-        if len(user_tasks) > 1 and user_id == OWNER:
+        if len(user_active_tasks) > 1 and user_id == OWNER:
             keyboard.append([
-                InlineKeyboardButton("❌ Cancel All Tasks", callback_data="cancel_all_tasks")
+                InlineKeyboardButton("Cancel All Tasks", callback_data="cancel_all_tasks")
             ])
-            
+
         await message.reply_text(
-            f"**🛑 Active Tasks ({len(user_tasks)})**\n\nSelect a task to cancel:",
+            f"<b>Active Tasks ({len(user_active_tasks)})</b>\n\nSelect a task to cancel:",
             reply_markup=InlineKeyboardMarkup(keyboard),
-            quote=True
+            quote=True,
+            parse_mode=enums.ParseMode.HTML,
         )
         return
 
@@ -4273,21 +4321,19 @@ async def health_check(client, message):
 @colab_bot.on_message(filters.command("help") & filters.private)
 async def help_command(client, message):
     log.info("Received /help command.")
-    # Update help text to remove separate commands
-    help_text = ("Send /start To Check If I am alive 🤨\n\n"
-                 "**Download/Mirror Commands:**\n"
-                 "  `/tupload` - Leech to Telegram\n"
-                 "  `/gdupload` - Mirror to GDrive\n"
-                 "  `/ytupload` - Leech YouTube-DL links\n"
-                 "  `/igupload` or `/ig` - Instagram downloader (posts, reels, stories)\n"
-                 "  `/tiktokbulk` - Bulk TikTok download (Gist → ZIP)\n"
-                 "  `/drupload` - Leech from Colab directory\n"
-                 "  `/mindvalley` - Download Mindvalley courses (M3U8)\n"
-                 "  `/nzb` - Download from Usenet (NZB files)\n"
-                 "Follow prompts after command (you'll be asked to select service type for /tupload & /gdupload).\n\n"
-                 "**Other Commands:** `/settings`, `/setname`, `/zipaswd`, `/unzipaswd`, `/archivetype`\n\n"
-                 "⚠️ **Send image for Thumbnail!**")
-    await message.reply_text(help_text, quote=True, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Instructions 📖", url="https://github.com/XronTrix10/Telegram-Leecher/wiki/INSTRUCTIONS")],[InlineKeyboardButton("Channel 📣", url="https://t.me/Colab_Leecher"), InlineKeyboardButton("Group 💬", url="https://t.me/Colab_Leecher_Discuss")]]))
+    help_text = build_help_text()
+    await message.reply_text(
+        help_text,
+        quote=True,
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Instructions", url="https://github.com/XronTrix10/Telegram-Leecher/wiki/INSTRUCTIONS")],
+            [
+                InlineKeyboardButton("Channel", url="https://t.me/Colab_Leecher"),
+                InlineKeyboardButton("Group", url="https://t.me/Colab_Leecher_Discuss"),
+            ],
+        ]),
+    )
 
 # Send SABnzbd URL on bot startup
 async def send_sabnzbd_url_to_telegram():
@@ -4409,10 +4455,3 @@ if __name__ == "__main__":
           try:
               colab_bot.run()
           except Exception as run_err: log.critical(f"Bot crashed during run: {run_err}", exc_info=True)
-
-
-
-
-
-
-

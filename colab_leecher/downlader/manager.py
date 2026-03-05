@@ -38,7 +38,7 @@ async def http_download_logic(url: str, file_path: str, display_name: str, heade
     global BotTimes, Messages, MSG, TRANSFER, TaskError, Paths, log 
     download_start_time = time.time()
     padding = len(str(total_links))
-    status_header = f"<b>📥 DOWNLOADING » </b><i>🔗Link {str(link_num).zfill(padding)}/{str(total_links).zfill(padding)}</i>\n\n<b>🏷️ Name » </b><code>{display_name}</code>\n"
+    status_header = f"<b>Downloading</b> <i>Link {str(link_num).zfill(padding)}/{str(total_links).zfill(padding)}</i>\n\n<b>Name:</b> <code>{display_name}</code>\n"
     Messages.status_head = status_header 
 
     try:

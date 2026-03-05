@@ -60,7 +60,7 @@ async def g_DownLoad(link, num):
     global Messages, Paths, BotTimes, Gdrive
     if not Gdrive.service: log.error("GDrive service not init."); await cancelTask("GDrive Service Error."); return
     display_name = Messages.download_name if Messages.download_name else "GDrive Download"
-    status_header = f"<b>📥 GDRIVE » </b><i>🔗Link {str(num).zfill(2)}</i>\n\n<b>🏷️ Name » </b><code>{display_name}</code>\n"
+    status_header = f"<b>Google Drive Download</b> <i>Link {str(num).zfill(2)}</i>\n\n<b>Name:</b> <code>{display_name}</code>\n"
     try:
         file_id = await getIDFromURL(link);
         if not file_id: return
@@ -68,7 +68,7 @@ async def g_DownLoad(link, num):
         if not meta: return
         os.makedirs(Paths.down_path, exist_ok=True)
         if meta.get("mimeType") == "application/vnd.google-apps.folder":
-            log.info(f"GDrive Folder: {meta.get('name')}"); Messages.status_head = f"<b>📥 GDRIVE FOLDER » </b>\n\n<b>Folder »</b> <code>{meta.get('name', file_id)}</code>\n"; await gDownloadFolder(file_id, Paths.down_path)
+            log.info(f"GDrive Folder: {meta.get('name')}"); Messages.status_head = f"<b>Google Drive Folder</b>\n\n<b>Folder:</b> <code>{meta.get('name', file_id)}</code>\n"; await gDownloadFolder(file_id, Paths.down_path)
         else:
             log.info(f"GDrive File: {meta.get('name')}"); Messages.status_head = status_header; await gDownloadFile(file_id, Paths.down_path)
     except Exception as e: log.error(f"Unexpected GDrive download error: {e}", exc_info=True); await cancelTask(f"GDrive Error: {e}")

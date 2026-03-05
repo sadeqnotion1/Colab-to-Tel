@@ -19,6 +19,7 @@ from .helper import getTime
 from .variables import Paths
 # FIX: import shared utilities instead of duplicating them locally
 from .ui_components import SizeFormatter, ProgressBar
+from .ui_copy import build_cancel_task_button_label, summarize_task_name
 
 # Gate all debug file I/O behind BOT_DEBUG env var.
 # Set BOT_DEBUG=1 in your environment to enable.
@@ -158,32 +159,27 @@ async def update_summary_dashboard(
         except Exception:
             pass
 
-        header = f"<b>\U0001f680 Parallel Tasks</b> ({len(tasks)} active){total_speed_str}\n"
+        header = (
+            f"<b>\U0001f680 Active Tasks</b> \u2022 <b>{len(tasks)}</b> running{total_speed_str}\n\n"
+        )
         summary_text = header
         tasks_shown = 0
 
         for idx, (task_id, task_ctx) in enumerate(tasks.items(), 1):
             short_id = task_ctx.get_short_id()
 
-            # Get filename
-            filename = "Unknown"
-            if task_ctx.messages and task_ctx.messages.download_name:
-                filename = task_ctx.messages.download_name
-            elif task_ctx.source_urls and len(task_ctx.source_urls) > 0:
-                url = task_ctx.source_urls[0]
-                try:
-                    from urllib.parse import urlparse, unquote
-                    path = urlparse(url).path
-                    if '/play?' in url or '/play#' in url:
-                        filename = "NZBCloud File"
-                    else:
-                        filename = unquote(path.split(
-                            '/')[-1]) if path else url[:50]
-                except Exception:
-                    filename = url[:50] if url else "Unknown"
-
-            if len(filename) > 35:
-                filename = filename[:32] + "..."
+            source_url = task_ctx.source_urls[0] if task_ctx.source_urls else None
+            raw_name = task_ctx.messages.download_name if task_ctx.messages else None
+            if not raw_name and source_url and (
+                "/play?" in source_url or "/play#" in source_url
+            ):
+                raw_name = "NZBCloud File"
+            filename = summarize_task_name(
+                raw_name,
+                source_url,
+                fallback="Unknown",
+                max_length=42,
+            )
 
             # Calculate progress
             if task_ctx.transfer.up_bytes > 0:
@@ -274,17 +270,19 @@ async def update_summary_dashboard(
 
             status_line = f"<b>{status_label}</b>"
             if status_detail:
-                status_line += f": <code>{escape(status_detail)}</code>"
+                status_line += f"\n{escape(status_detail)}"
 
             task_line = (
-                f"<b>Task {idx}</b> <code>{escape(short_id)}</code>\n"
-                f"<code>{escape(filename)}</code>\n"
-                f"{status_line}\n"
+                f"<b>{idx}. {escape(filename)}</b>\n"
+                f"<code>ID: {escape(short_id)}</code>\n"
+                f"{status_line}\n\n"
             )
 
             if len(summary_text) + len(task_line) > CHAR_LIMIT:
                 remaining_count = len(tasks) - tasks_shown
-                summary_text += f"\n<b>+ {remaining_count} more tasks...</b>"
+                summary_text += (
+                    f"<i>+ {remaining_count} more task(s) not shown</i>\n"
+                )
                 break
 
             summary_text += task_line
@@ -292,11 +290,12 @@ async def update_summary_dashboard(
 
         # Create cancel buttons for each shown task
         buttons = []
-        for idx, (task_id, task_ctx) in enumerate(
-                list(tasks.items())[:tasks_shown], 1):
+        for task_id, task_ctx in list(tasks.items())[:tasks_shown]:
             short_id = task_ctx.get_short_id()
+            download_name = task_ctx.messages.download_name if task_ctx.messages else None
+            source_url = task_ctx.source_urls[0] if task_ctx.source_urls else None
             buttons.append([InlineKeyboardButton(
-                f"Cancel Task {idx}",
+                build_cancel_task_button_label(download_name, source_url, short_id),
                 callback_data=f"cancel:{short_id}"
             )])
 

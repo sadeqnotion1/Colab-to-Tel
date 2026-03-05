@@ -187,7 +187,7 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
                 total_str = helper.sizeUnit(total)
                 eta_str = helper.getTime(eta_seconds)
 
-                status_head = f"<b>📤 UPLOADING{' ' + task_id_str if task_ctx else ''} » </b>\n\n<b>🏷️ Name » </b><code>{base_upload_name}</code>\n"
+                status_head = f"<b>Uploading{' ' + task_id_str if task_ctx else ''}</b>\n\n<b>Name:</b> <code>{base_upload_name}</code>\n"
                 log.debug(f"up_progress {task_id_str}: Calling status_bar. Speed='{speed_string}', Pct={percentage:.1f}, ETA='{eta_str}', Done='{done_str}', Total='{total_str}'")
                 # NEW: Pass task_ctx to status_bar for per-task progress tracking
                 await helper.status_bar(status_head, speed_string, percentage, eta_str, done_str, total_str, "TG Upload 🚀", task_ctx=task_ctx)
@@ -291,7 +291,7 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
                 break # Exit loop after max retries
 
             # Update status during wait
-            status_head = f"<b>📤 UPLOADING{' ' + task_id_str if task_ctx else ''} » </b>\n\n<b>🏷️ Name » </b><code>{base_upload_name}</code>\n"
+            status_head = f"<b>Uploading{' ' + task_id_str if task_ctx else ''}</b>\n\n<b>Name:</b> <code>{base_upload_name}</code>\n"
             try:
                 # NEW: Pass task_ctx to status_bar
                 await helper.status_bar(status_head, "N/A", 0, f"Waiting {wait_time}s", "N/A", helper.sizeUnit(file_size), f"TG {type(wait_err).__name__} ⏳", task_ctx=task_ctx)
