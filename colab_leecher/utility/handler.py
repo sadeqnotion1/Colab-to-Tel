@@ -14,6 +14,7 @@ from ..uploader.telegram import upload_file
 from .variables import BOT, MSG, BotTimes, Messages, Paths, TRANSFER, TaskError
 from .converters import archive, extract, videoConverter, sizeChecker
 from .helper import fileType, getSize, getTime, keyboard, shortFileName, sizeUnit, sysINFO
+from .message_safety import escape_html, safe_href
 from pyrogram.errors import MessageNotModified
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from .task_context import TaskContext  # NEW: Import for multi-task support
@@ -928,7 +929,7 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
             size_value = sizeUnit(transfer_obj.total_down_size)
 
         custom_name = getattr(task_ctx.bot.Options, "custom_name", "")
-        display_name = custom_name or messages_obj.download_name or "N/A"
+        display_name = escape_html(custom_name or messages_obj.download_name or "N/A")
         try:
             elapsed_seconds = (datetime.now() - start_time).seconds
             elapsed_time_str = getTime(elapsed_seconds)
@@ -958,9 +959,14 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
             try:
                 sent_msg = task_ctx.sent_msg
                 if sent_msg:
-                    # FIX #3: was '**SOURCE »** __[Here](url)__' (Markdown in HTML context)
+                    source_href = safe_href(messages_obj.src_link)
+                    source_markup = (
+                        f"<a href='{escape_html(source_href)}'>Here</a>"
+                        if source_href
+                        else "Unavailable"
+                    )
                     await sent_msg.reply_text(
-                        text=f"<b>SOURCE \u00bb</b> <a href='{messages_obj.src_link}'>Here</a>" + last_text,
+                        text=f"<b>SOURCE \u00bb</b> {source_markup}" + last_text,
                         disable_web_page_preview=False,
                     )
                     log.info(f"Sent final summary to dump chat {task_id_str}.")
@@ -1000,10 +1006,12 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
                             msg_id = file_obj.id if hasattr(
                                 file_obj, "id") else None
                             file_link = f"https://t.me/c/{link_chat_id}/{msg_id}" if link_chat_id and msg_id else "N/A"
+                            safe_file_name = escape_html(file_name)
+                            safe_file_link = safe_href(file_link)
                             file_text = (
-                                f"\n({str(i + 1).zfill(2)}) <a href='{file_link}'>{file_name}</a>"
-                                if file_link != "N/A"
-                                else f"\n({str(i + 1).zfill(2)}) {file_name} (Link Unavailable)"
+                                f"\n({str(i + 1).zfill(2)}) <a href='{escape_html(safe_file_link)}'>{safe_file_name}</a>"
+                                if safe_file_link
+                                else f"\n({str(i + 1).zfill(2)}) {safe_file_name} (Link Unavailable)"
                             )
                             if len(current_log_text + file_text) >= 4096:
                                 log_texts.append(current_log_text)
@@ -1048,8 +1056,12 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
                             file_name = item.get("name", "Unknown")
                             file_link = item.get("link", "N/A")
                             file_size = sizeUnit(item.get("size", 0))
+                            safe_file_name = escape_html(file_name)
+                            safe_file_link = safe_href(file_link)
                             gdrive_entry = (
-                                f"\n({str(i + 1).zfill(2)}) <a href='{file_link}'>{file_name}</a> ({file_size})"
+                                f"\n({str(i + 1).zfill(2)}) <a href='{escape_html(safe_file_link)}'>{safe_file_name}</a> ({file_size})"
+                                if safe_file_link
+                                else f"\n({str(i + 1).zfill(2)}) {safe_file_name} ({file_size}) (Link Unavailable)"
                             )
                             if len(current_gdrive_log + gdrive_entry) >= 4096:
                                 gdrive_log_texts.append(current_gdrive_log)
@@ -1084,7 +1096,7 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
                     f"Error sending/editing final logs {task_id_str}: {e}",
                     exc_info=True)
                 if OWNER and colab_bot:
-                    await colab_bot.send_message(OWNER, f"Error updating final status {task_id_str}: {e}")
+                    await colab_bot.send_message(OWNER, f"Error updating final status {task_id_str}.")
         else:
             log.error(
                 f"Cannot send final logs {task_id_str}: Status message object missing.")

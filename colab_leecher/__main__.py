@@ -17,6 +17,7 @@ from .utility.task_context import TaskContext, TASK_QUEUE, create_task_context
 from .utility.task_dashboard import update_summary_dashboard, force_update_summary
 from .utility.task_manager import taskScheduler, task_starter
 from .utility.rate_limiter import RATE_LIMITER
+from .utility.message_safety import user_error, mask_secret
 from .utility.reply_state import (
     clear_password_reply_waiting,
     get_password_reply_waiting,
@@ -51,6 +52,23 @@ def not_command(_, __, message):
 not_command_filter = filters.create(not_command)
 
 log.info(f"--> MERGED V1: colab_bot instance used in __main__.py: ID = {id(colab_bot)}")
+DEBUG_MESSAGE_PREVIEW = os.getenv("DEBUG_MESSAGE_PREVIEW", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _reply_with_generic_error(message: Message, action: str, *, quote: bool = False) -> None:
+    """Send sanitized error feedback to users without leaking exception details."""
+    try:
+        await message.reply_text(user_error(action), quote=quote)
+    except Exception as reply_err:
+        log.debug(f"Failed to send generic error reply: {reply_err}")
+
+
+async def _send_generic_error(client: Client, chat_id: int, action: str) -> None:
+    """Send sanitized error feedback to a chat without leaking internals."""
+    try:
+        await client.send_message(chat_id, user_error(action))
+    except Exception as send_err:
+        log.debug(f"Failed to send generic error message to chat {chat_id}: {send_err}")
 
 source_waiting_prompts = {}
 source_waiting_lock = asyncio.Lock()
@@ -718,7 +736,16 @@ async def run_parallel_task(client, message, task_ctx, skip_registration=False):
 @colab_bot.on_message(filters.command("start") & filters.private)
 async def start(client, message):
     log.info(f"Received /start from {message.from_user.id}")
-    await message.delete(); text = "**Yo! 👋🏼 It's Colab Leecher** ..."; keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Repo", url="https://github.com/thesadeq/Telegram-Leecher")]]); await message.reply_text(text, reply_markup=keyboard)
+    try:
+        await message.delete()
+    except Exception as delete_err:
+        log.debug(f"Could not delete /start command message: {delete_err}")
+
+    text = "**Yo! 👋🏼 It's Colab Leecher** ..."
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Repo", url="https://github.com/thesadeq/Telegram-Leecher")]]
+    )
+    await message.reply_text(text, reply_markup=keyboard)
 
 @colab_bot.on_message(filters.command("tupload") & filters.private)
 async def telegram_upload(client, message):
@@ -804,7 +831,7 @@ async def telegram_upload(client, message):
         async with user_tasks_lock:
             if user_id in user_tasks:
                 del user_tasks[user_id]
-        await message.reply_text(f"❌ Failed to start task: {e}")
+        await _reply_with_generic_error(message, "start the task")
 
 
 @colab_bot.on_message(filters.command("gdupload") & filters.private)
@@ -945,7 +972,7 @@ async def directory_upload(client, message):
         async with user_tasks_lock:
             if user_id in user_tasks:
                 del user_tasks[user_id]
-        await message.reply_text(f"❌ Failed to start task: {e}")
+        await _reply_with_generic_error(message, "start the task")
 
 @colab_bot.on_message(filters.command("ytupload") & filters.private)
 async def yt_upload(client, message):
@@ -1009,7 +1036,7 @@ async def yt_upload(client, message):
         async with user_tasks_lock:
             if user_id in user_tasks:
                 del user_tasks[user_id]
-        await message.reply_text(f"❌ Failed to start task: {e}")
+        await _reply_with_generic_error(message, "start the task")
 
 @colab_bot.on_message(filters.command("igupload") & filters.private)
 async def instagram_upload(client, message):
@@ -1074,7 +1101,7 @@ async def instagram_upload(client, message):
         async with user_tasks_lock:
             if user_id in user_tasks:
                 del user_tasks[user_id]
-        await message.reply_text(f"❌ Failed to start task: {e}")
+        await _reply_with_generic_error(message, "start the task")
 
 @colab_bot.on_message(filters.command("tiktokbulk") & filters.private)
 async def tiktok_bulk_upload(client, message):
@@ -1144,15 +1171,19 @@ async def tiktok_bulk_upload(client, message):
         async with user_tasks_lock:
             if user_id in user_tasks:
                 del user_tasks[user_id]
-        await message.reply_text(f"❌ Failed to start task: {e}")
+        await _reply_with_generic_error(message, "start the task")
 
 # --- REMOVED /nzbclouddownload, /Debriddownload, /bitsodownload handlers ---
 
 @colab_bot.on_message(filters.command("settings") & filters.private)
 async def settings(client, message):
     log.info(f"Received /settings from {message.from_user.id}")
-    if message.chat.id == OWNER: await message.delete(); await send_settings(client, message, message.id, True)
-    else: log.warning(f"Unauthorized /settings from {message.from_user.id}")
+    if message.chat.id == OWNER:
+        await message.delete()
+        await send_settings(client, message, message.id, True)
+    else:
+        log.warning(f"Unauthorized /settings from {message.from_user.id}")
+        await message.reply_text("❌ Unauthorized.")
 
 # --- Reply Handler: Simplified for filenames only ---
 @colab_bot.on_message(filters.reply & filters.private)
@@ -1424,7 +1455,7 @@ async def handle_reply(client: Client, message: Message):
 
             except Exception as extract_err:
                 log.error(f"Error during password-retry extraction: {extract_err}", exc_info=True)
-                await status_msg.edit_text(f"Error during extraction: {str(extract_err)[:100]}")
+                await status_msg.edit_text(user_error("complete extraction"))
 
         else:
             log.warning(
@@ -1435,7 +1466,7 @@ async def handle_reply(client: Client, message: Message):
         log.error(f"Error processing reply: {e}", exc_info=True)
         # Inform user about the error
         try:
-            await message.reply_text(f"Error processing your reply: {e}", quote=True)
+            await _reply_with_generic_error(message, "process your reply", quote=True)
         except Exception as reply_err:
             log.debug(f"Could not send reply-processing error message: {reply_err}")
 
@@ -1580,7 +1611,7 @@ async def ask_service_type(client, message):
           log.error(f"Failed to ask service type: {e}", exc_info=True)
           # Try sending error message to owner as fallback
           try:
-              await client.send_message(OWNER, f"⚠️ Error asking service type: {e}")
+              await _send_generic_error(client, OWNER, "show the service selection menu")
           except Exception as owner_notify_err:
               log.debug(f"Could not notify owner about service-type error: {owner_notify_err}")
 # --- End ask_service_type function ---
@@ -1900,7 +1931,7 @@ async def handle_url(client: Client, message: Message):
 
         except Exception as e:
             log.exception(f"Error launching parallel task for user {user_id}")
-            await message.reply_text(f"❌ Failed to start task: {str(e)[:200]}")
+            await _reply_with_generic_error(message, "start the task")
             return
 
     # === END Parallel Task Mode ===
@@ -2149,7 +2180,7 @@ async def handle_url(client: Client, message: Message):
 
     except Exception as e:
         log.error(f"Error handling URL/Path message: {e}", exc_info=True)
-        await message.reply_text(f"⚠️ Error processing input: {e}")
+        await _reply_with_generic_error(message, "process your input")
         await _clear_setup_session(user_id)
 # --- End handle_url ---
 
@@ -2408,7 +2439,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             except Exception as e:
                 log.error(f"Failed to send link prompt: {e}", exc_info=True)
                 await _clear_setup_session(user_id)
-                await client.send_message(chat_id, f"❌ Error sending prompt: {e}")
+                await _send_generic_error(client, chat_id, "send the prompt")
 
         # --- Filename Options ---
         # <<< THIS BLOCK'S INDENTATION MUST MATCH THE 'if' ABOVE >>>
@@ -2496,7 +2527,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                     if message: await message.delete() # Delete the button message
                 except Exception as e:
                     log.error(f"Failed to send manual filename prompt: {e}")
-                    if message: await client.send_message(chat_id, f"❌ Error asking for filenames: {e}") # Use message if possible
+                    if message: await _send_generic_error(client, chat_id, "ask for filenames")  # Use message if possible
 
             else:
                 log.warning(f"Unknown filename choice: {fn_choice}")
@@ -2973,7 +3004,7 @@ async def _process_extract_reply(client, message):
 
     except Exception as e:
         log.error(f"Failed to download/extract replied file: {e}")
-        await message.reply_text(f"❌ Failed: {str(e)[:100]}")
+        await _reply_with_generic_error(message, "extract the replied archive")
 
 # Helper function to handle extract path input from user
 async def _handle_extract_input(client, message):
@@ -3456,7 +3487,7 @@ async def handle_text_input(client, message):
 
             except Exception as e:
                 log.exception("Error downloading NZB from URL")
-                await message.reply_text(f"❌ Error downloading NZB: {str(e)}", quote=True)
+                await _reply_with_generic_error(message, "download NZB", quote=True)
 
             return  # Don't process further
 
@@ -3545,7 +3576,7 @@ async def handle_text_input(client, message):
                         log.info(f"Fetched {len(urls)} M3U8 URLs from gist")
             except Exception as fetch_err:
                 log.error(f"Failed to fetch gist: {fetch_err}")
-                await message.reply_text(f"❌ Failed to fetch gist: {str(fetch_err)}", quote=True)
+                await _reply_with_generic_error(message, "fetch the gist", quote=True)
                 return
 
         # Direct M3U8 URLs input (including .webvtt.m3u8 for subtitles)
@@ -3903,11 +3934,7 @@ async def handle_text_input(client, message):
 
     except Exception as e:
         log.exception("Error processing Mindvalley URLs")
-        await message.reply_text(
-            f"❌ **Error:** {str(e)}\n\n"
-            "Please try again with /mindvalley",
-            quote=True
-        )
+        await _reply_with_generic_error(message, "process Mindvalley URLs", quote=True)
 
 
 # ========== NZB (Usenet) Download Handlers ==========
@@ -4177,7 +4204,7 @@ async def handle_nzb_file(client, message, nzb_file_path=None):
     except Exception as e:
         log.exception("Error processing NZB file")
         await _set_nzb_waiting(_extract_user_id(message), False)
-        await message.reply_text(f"❌ **Error:** {str(e)}", quote=True)
+        await _reply_with_generic_error(message, "process the NZB file", quote=True)
 
 
 @colab_bot.on_message(filters.command("cancel") & filters.private)
@@ -4276,6 +4303,7 @@ async def send_sabnzbd_url_to_telegram():
                 if len(lines) >= 2:
                     url = lines[0].strip()
                     api_key = lines[1].strip()
+                    masked_api_key = mask_secret(api_key)
                     url_type = lines[2].strip() if len(lines) >= 3 else 'public'  # default to public for backwards compat
 
                     # Customize message based on URL type
@@ -4291,7 +4319,8 @@ async def send_sabnzbd_url_to_telegram():
                     message_text = (
                         f"<b>{icon} {title}</b>\n\n"
                         f"<b>🔗 URL:</b> {url}\n"
-                        f"<b>🔑 API Key:</b> <code>{api_key}</code>\n\n"
+                        f"<b>🔑 API Key:</b> <code>{masked_api_key}</code>\n"
+                        "<i>Full API key is kept local and is not sent over Telegram.</i>\n\n"
                         f"{note}"
                     )
 
@@ -4319,7 +4348,17 @@ async def startup_handler(client, message):
 # DEBUG: Log all messages
 @colab_bot.on_message(group=1)
 async def debug_all_messages(client, message):
-    log.info(f"DEBUG: Received message from user {message.from_user.id if message.from_user else 'N/A'}, chat {message.chat.id if message.chat else 'N/A'}, text: {message.text[:50] if message.text else 'No text'}")
+    user_id = message.from_user.id if message.from_user else 'N/A'
+    chat_id = message.chat.id if message.chat else 'N/A'
+    text_len = len(message.text) if message.text else 0
+    has_caption = bool(message.caption)
+    media_type = str(message.media) if getattr(message, "media", None) else "none"
+    log.info(
+        f"DEBUG: Received message from user {user_id}, chat {chat_id}, text_len={text_len}, has_caption={has_caption}, media={media_type}"
+    )
+    if DEBUG_MESSAGE_PREVIEW and message.text:
+        preview = message.text.replace("\n", " ")[:50]
+        log.debug(f"DEBUG PREVIEW (opt-in): {preview}")
     raise ContinuePropagation  # Allow other handlers to process this message
 
 # Main Execution Guard

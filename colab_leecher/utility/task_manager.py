@@ -18,6 +18,7 @@ from .helper import (
     is_telegram, is_mega, is_terabox, is_torrent,
     clean_filename, sizeUnit
 )
+from .message_safety import user_error
 from .handler import (
     Leech, Unzip_Handler, Zip_Handler, SendLogs, cancelTask,
 )
@@ -538,7 +539,7 @@ async def task_starter(message, text):
             log.error(f"Failed reply in task_starter: {e}", exc_info=True)
             BOT.State.started = False
             try:
-                await message.reply_text(f"Oops! Error sending prompt: {e}")
+                await message.reply_text(user_error("send the setup prompt"))
             except Exception as reply_err:
                 log.debug(
                     f"Could not send task starter error reply: {reply_err}")
