@@ -33,8 +33,8 @@ def _format_bytes(x: int) -> str:
 
 
 def _progress_bar(percentage: float, length: int = 10) -> str:
-    """Return a bracketed gradient bar, replacing the old plain-blocks helper."""
-    return "[" + ProgressBar.generate(percentage, length, "gradient") + "]"
+    """Return an ASCII-safe progress bar for consistent Telegram rendering."""
+    return "[" + ProgressBar.generate(percentage, length, "ascii") + "]"
 
 
 def _keyboard_signature(keyboard: Optional[InlineKeyboardMarkup]) -> str:

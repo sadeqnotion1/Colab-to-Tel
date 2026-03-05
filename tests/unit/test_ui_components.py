@@ -22,6 +22,14 @@ def test_progress_bar_with_percentage_format():
     assert "42.3%" in rendered
 
 
+def test_progress_bar_ascii_style_uses_safe_characters():
+    module = load_module("colab_leecher/utility/ui_components.py", "ui_components_ascii_test")
+    bar = module.ProgressBar.generate(55, length=10, style="ascii")
+
+    assert len(bar) == 10
+    assert set(bar).issubset({"=", "-"})
+
+
 def test_time_and_size_formatters_are_deterministic():
     module = load_module("colab_leecher/utility/ui_components.py", "ui_components_formatter_test")
 

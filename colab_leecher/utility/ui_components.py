@@ -105,6 +105,7 @@ class ProgressBar:
             'squares': ('\u25a0', '\u25a1'),
             'dots': ('\u2b24', '\u25ef'),
             'arrows': ('\u25b0', '\u25b1'),
+            'ascii': ('=', '-'),
             'gradient': ('\u2588', '\u2593', '\u2592', '\u2591'),
         }
 
