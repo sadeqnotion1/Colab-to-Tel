@@ -385,12 +385,12 @@ def build_archiver_progress_text(
     elapsed_time_text: str,
     source_size_text: str,
 ) -> str:
-    """Build HTML progress text for archive creation updates."""
+    """Build HTML progress text for archive creation updates using Modern UI."""
     return (
-        f"{status_head}\n"
-        f"┌ {bar} <b>{percentage:.0f}%</b>\n"
-        f"├ <b>Elapsed:</b> <code>{escape(elapsed_time_text)}</code>\n"
-        f"└ <b>Source Size:</b> <code>{escape(source_size_text)}</code>"
+        f"{status_head}\n\n"
+        f"<b>┌「{bar}」 » {percentage:.1f}%</b>\n"
+        f"<b>├⏱️ Elapsed »</b> <code>{escape(elapsed_time_text)}</code>\n"
+        f"<b>└📦 Source »</b> <code>{escape(source_size_text)}</code>"
     )
 
 

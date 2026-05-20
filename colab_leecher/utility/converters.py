@@ -291,62 +291,85 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
         )
         log.debug(f"Archiver (7z) process started (PID: {proc.pid})")
 
-        # Modified log_stream to return stderr lines
+        # Modified log_stream to handle both \n and \r for real-time progress
         async def log_stream_wrapper(stream, stream_name, is_stdout):
+            nonlocal last_reported_pct, last_update_time  # CRITICAL: Fix missing updates
             lines = []
+            buffer = ""
             while True:
-                line_bytes = await stream.readline()
-                if not line_bytes:
+                # Read in chunks to catch \r progress updates from 7z
+                chunk_bytes = await stream.read(1024)
+                if not chunk_bytes:
                     break
-                line = line_bytes.decode('utf-8', errors='ignore').strip()
-                if line:
-                    if not is_stdout:
-                        log.warning(f"7z {stream_name}: {line}")
-                        lines.append(line)
+                
+                buffer += chunk_bytes.decode('utf-8', errors='ignore')
+                
+                while True:
+                    # Find first occurrence of \r or \n
+                    pos_n = buffer.find('\n')
+                    pos_r = buffer.find('\r')
+                    
+                    if pos_n == -1 and pos_r == -1:
+                        break
+                    
+                    # Get the earliest delimiter
+                    if pos_n != -1 and (pos_r == -1 or pos_n < pos_r):
+                        pos = pos_n
                     else:
-                        log.debug(f"7z {stream_name}: {line}")
-                    # Progress tracking (same as before)
-                    if is_stdout:
-                        match = re.search(r"(\d+)\s*%", line)
-                        if match:
-                            try:
-                                percentage = int(match.group(1))
-                                current_time = datetime.now()
-                                if (percentage > last_reported_pct or (
-                                        current_time - last_update_time).total_seconds() >= 2.0):
+                        pos = pos_r
+                    
+                    line = buffer[:pos].strip()
+                    buffer = buffer[pos + 1:]
 
-                                    # Update TaskMessages archiving progress
-                                    # fields for dashboard
-                                    _messages.total_files = 1  # Single archive being created
-                                    _messages.files_processed = 1 if percentage >= 100 else 0
-                                    _messages.current_file = archive_out_final_name
-                                    # NOTE: Removed archive size check during progress to avoid I/O contention
-                                    # and potential file lock issues while archive is being written
-                                    # Size will be checked after archiving
-                                    # completes
+                    if line:
+                        if not is_stdout:
+                            log.warning(f"7z {stream_name}: {line}")
+                            lines.append(line)
+                        else:
+                            log.debug(f"7z {stream_name}: {line}")
+                        
+                        # Progress tracking
+                        if is_stdout:
+                            match = re.search(r"(\d+)\s*%", line)
+                            if match:
+                                try:
+                                    percentage = int(match.group(1))
+                                    current_time = datetime.now()
+                                    if (percentage > last_reported_pct or (
+                                            current_time - last_update_time).total_seconds() >= 2.5):
 
-                                    bar_length = 12
-                                    filled_length = min(bar_length, max(
-                                        0, int(percentage / 100 * bar_length)))
-                                    bar = "█" * filled_length + "░" * \
-                                        (bar_length - filled_length)
-                                    elapsed_time_str = getTime(
-                                        (current_time - _task_start).total_seconds())
-                                    status_text = build_archiver_progress_text(
-                                        _messages.status_head,
-                                        bar=bar,
-                                        percentage=percentage,
-                                        elapsed_time_text=elapsed_time_str,
-                                        source_size_text=total_in_unit,
-                                    )
-                                    await status_bar(status_text, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx, force_update=True)
-                            except ValueError:
-                                log.warning(
-                                    f"Could not convert 7z percentage '{match.group(1)}' to int.")
-                            except Exception as status_err:
-                                log.warning(
-                                    f"Status update error in log_stream: {status_err}")
-                # Reduced sleep time to avoid backing up the pipe (was 0.1)
+                                        # Update throttle variables
+                                        last_reported_pct = percentage
+                                        last_update_time = current_time
+
+                                        # Update TaskMessages archiving progress
+                                        _messages.total_files = 1
+                                        _messages.files_processed = 1 if percentage >= 100 else 0
+                                        _messages.current_file = archive_out_final_name
+
+                                        bar_length = 20
+                                        filled_length = min(bar_length, max(
+                                            0, int(percentage / 100 * bar_length)))
+                                        # Use beautiful style
+                                        bar = "█" * filled_length + "▒" * (bar_length - filled_length)
+                                        
+                                        elapsed_time_str = getTime(
+                                            (current_time - _task_start).total_seconds())
+                                        status_text = build_archiver_progress_text(
+                                            _messages.status_head,
+                                            bar=bar,
+                                            percentage=percentage,
+                                            elapsed_time_text=elapsed_time_str,
+                                            source_size_text=total_in_unit,
+                                        )
+                                        await status_bar(status_text, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx, force_update=True)
+                                except ValueError:
+                                    log.warning(
+                                        f"Could not convert 7z percentage '{match.group(1)}' to int.")
+                                except Exception as status_err:
+                                    log.warning(
+                                        f"Status update error in log_stream: {status_err}")
+                
                 await asyncio.sleep(0.01)
             return lines
 

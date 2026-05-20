@@ -1951,7 +1951,7 @@ async def status_bar(
             else:
                 # Standard formatting mode
                 log.debug("status_bar using standard formatting mode.")
-                bar_length = 12  # Length of the progress bar
+                bar_length = 20  # Length of the progress bar (Increased to 20 for better granularity)
 
                 # Ensure percentage is treated as a number for calculation
                 try:
@@ -1966,8 +1966,10 @@ async def status_bar(
                     bar_length, max(
                         0, int(
                             percentage_float / 100 * bar_length)))
-                # Use unicode blocks for a richer Telegram progress display.
-                bar = "█" * filled_length + "░" * (bar_length - filled_length)
+                
+                # Enhanced visual bar style (Beautiful/Modern)
+                # Using █ for filled and ▒ for remaining (richer texture)
+                bar = "█" * filled_length + "▒" * (bar_length - filled_length)
 
                 eta_str = eta  # Use eta string passed directly
 
@@ -1981,15 +1983,15 @@ async def status_bar(
                         datetime.now() - BotTimes.task_start).seconds
                 elapsed_str = getTime(elapsed_seconds)
 
-                # Format the main body of the status message
+                # Format the main body of the status message (Modern UI)
                 text_body = (
-                    f"\n╭「{bar}」 <b>»</b> <b>{percentage_float:.1f}%</b>"
-                    f"\n├⚡️ <b>Speed »</b> <code>{escape(str(speed))}</code>"
-                    f"\n├⚙️ <b>Engine »</b> <code>{escape(str(engine))}</code>"
-                    f"\n├⏳ <b>ETA »</b> <code>{escape(str(eta_str))}</code>"
-                    f"\n├⏱️ <b>Elapsed »</b> <code>{escape(elapsed_str)}</code>"
-                    f"\n├✅ <b>Done »</b> <code>{escape(str(done))}</code>"
-                    f"\n╰📦 <b>Total »</b> <code>{escape(str(total_size))}</code>"
+                    f"\n<b>┌「{bar}」 » {percentage_float:.1f}%</b>"
+                    f"\n<b>├⚡️ Speed »</b> <code>{escape(str(speed))}</code>"
+                    f"\n<b>├⚙️ Engine »</b> <code>{escape(str(engine))}</code>"
+                    f"\n<b>├⏳ ETA »</b> <code>{escape(str(eta_str))}</code>"
+                    f"\n<b>├⏱️ Elapsed »</b> <code>{escape(elapsed_str)}</code>"
+                    f"\n<b>├✅ Done »</b> <code>{escape(str(done))}</code>"
+                    f"\n<b>└📦 Total »</b> <code>{escape(str(total_size))}</code>"
                 )
 
                 # Combine the header (down_msg), body, and system info
