@@ -404,6 +404,7 @@ class TikTokBulkDownloader(BaseDownloader):
             self.urls = urls
             total_videos = len(urls)
             remaining_urls = []
+            self.batch_user_stats = {} # Track video count per user in THIS batch
 
             log.info(f"Starting bulk download of up to {total_videos} TikTok videos (Limit: {sizeUnit(size_limit) if size_limit else 'None'})")
             self.start_progress_tracking("video")
@@ -425,7 +426,7 @@ class TikTokBulkDownloader(BaseDownloader):
                 # Check if we've already hit the size limit before starting next chunk
                 if size_limit and current_batch_size >= size_limit:
                     remaining_urls = urls[i:]
-                    log.info(f"Size limit reached before chunk {i//self.max_concurrent + 1}. {len(remaining_urls)} URLs remaining.")
+                    log.info(f"Size limit reached before batch {i//self.max_concurrent + 1}. {len(remaining_urls)} URLs remaining.")
                     break
 
                 # Create tasks for this chunk
@@ -447,6 +448,18 @@ class TikTokBulkDownloader(BaseDownloader):
                         self.successful_downloads.append(result)
                         session_successful.append(result)
                         current_batch_size += result['file_size']
+                        
+                        # Extract username from file path to update stats
+                        # Path format: .../uploader/@uploader_...
+                        try:
+                            file_path = result['file_path']
+                            parts = Path(file_path).parts
+                            # The uploader name is the parent folder of the file
+                            if len(parts) >= 2:
+                                uploader = parts[-2]
+                                self.batch_user_stats[uploader] = self.batch_user_stats.get(uploader, 0) + 1
+                        except Exception as e:
+                            log.warning(f"Could not extract uploader for stats: {e}")
                     else:
                         self.failed_downloads.append(result)
 
@@ -467,7 +480,7 @@ class TikTokBulkDownloader(BaseDownloader):
                 # Check size limit after chunk
                 if size_limit and current_batch_size >= size_limit:
                     remaining_urls = urls[processed_count:]
-                    log.info(f"Size limit reached after chunk. {len(remaining_urls)} URLs remaining.")
+                    log.info(f"Size limit reached after batch. {len(remaining_urls)} URLs remaining.")
                     break
 
             # Summary
@@ -496,6 +509,25 @@ class TikTokBulkDownloader(BaseDownloader):
             log.exception(error_msg)
             await self.update_progress_bar(0.0, f"❌ {error_msg}", engine="TikTok Bulk")
             return False, error_msg, []
+
+    def get_batch_user_summary(self) -> str:
+        """
+        Get a summary of users and their video counts in the CURRENT batch.
+
+        Returns:
+            HTML formatted string for Telegram caption.
+        """
+        if not hasattr(self, 'batch_user_stats') or not self.batch_user_stats:
+            return ""
+
+        summary = "\n\n<b>👤 Users in this Batch:</b>\n"
+        # Sort users by video count descending
+        sorted_users = sorted(self.batch_user_stats.items(), key=lambda x: x[1], reverse=True)
+        
+        for user, count in sorted_users:
+            summary += f"• <code>{user}</code>: <b>{count}</b> videos\n"
+        
+        return summary
 
     def get_failed_urls_log(self) -> str:
         """

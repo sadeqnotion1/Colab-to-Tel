@@ -1650,58 +1650,49 @@ async def handle_url(client: Client, message: Message):
                 from colab_leecher.utility.handler import Leech
                 from datetime import datetime
 
-                # Create status message
-                status_msg = await message.reply_text(
+                # Get thumbnail path (priority: custom > random > default)
+                if BOT.Setting.thumbnail and os.path.exists(Paths.THMB_PATH):
+                    thumb_path = Paths.THMB_PATH
+                elif os.path.exists(Paths.DEFAULT_HERO):
+                    thumb_path = Paths.DEFAULT_HERO
+                else:
+                    thumb_path = None
+
+                status_text = (
                     f"<b>TikTok Bulk Download</b>\n\n"
                     f"<b>Task ID:</b> <code>{task_ctx.get_short_id()}</code>\n"
                     "<b>Status:</b> Initializing...\n\n"
-                    "<i>Fetching URLs from Gist...</i>",
-                    parse_mode=enums.ParseMode.HTML,
+                    "<i>Fetching URLs from Gist...</i>"
                 )
+
+                # Initialize status message (use photo if thumbnail exists)
+                if thumb_path and os.path.exists(thumb_path):
+                    status_msg = await message.reply_photo(
+                        photo=thumb_path,
+                        caption=status_text,
+                        parse_mode=enums.ParseMode.HTML,
+                        reply_markup=keyboard()
+                    )
+                else:
+                    status_msg = await message.reply_text(
+                        status_text,
+                        parse_mode=enums.ParseMode.HTML,
+                        reply_markup=keyboard()
+                    )
+
                 task_ctx.status_msg = status_msg
 
-                # Create downloader instance
-                downloader = TikTokBulkDownloader(client, message, task_ctx)
+                all_successful = 0
+                all_failed = 0
 
-                # Fetch URLs from Gist
-                success, urls = await downloader.fetch_gist_urls(gist_url)
-
-                if not success or not urls:
-                    await status_msg.edit_text(
-                        "<b>TikTok Bulk Download Failed</b>\n\n"
-                        "Could not fetch TikTok URLs from the gist.\n"
-                        "Please verify:\n"
-                        "• You provided a RAW gist URL\n"
-                        "• The gist contains valid TikTok URLs\n"
-                        "• Each URL is on a separate line",
-                        parse_mode=enums.ParseMode.HTML,
-                    )
-                    # Cleanup: Remove from user_tasks on failure
-                    async with user_tasks_lock:
-                        if user_id in user_tasks:
-                            del user_tasks[user_id]
-                    return
-
-                # CRITICAL: Add task to TASK_QUEUE for dashboard tracking
-                await TASK_QUEUE.add_task(task_ctx)
-                log.info(f"TikTok bulk task {task_ctx.get_short_id()} added to TASK_QUEUE")
-
-                # Wrap entire download process in try/finally for proper cleanup
-                try:
-                    TARGET_BATCH_SIZE = 950 * 1024 * 1024  # 950MB target for each ZIP
-                    total_urls = len(urls)
-                    current_urls = urls
-                    part_num = 1
-                    
-                    all_successful = 0
-                    all_failed = 0
-
-                    async def _safe_edit(text):
-                        try:
-                            await status_msg.edit_text(text, parse_mode=enums.ParseMode.HTML)
-                        except Exception as cancelled_edit_err:
-                            log.debug(f"Could not edit cancelled status message: {cancelled_edit_err}")
-
+                async def _safe_edit(text):
+                    try:
+                        if hasattr(status_msg, 'caption'):
+                            await status_msg.edit_caption(text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard())
+                        else:
+                            await status_msg.edit_text(text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard())
+                    except Exception as edit_err:
+                        log.debug(f"Could not edit status message: {edit_err}")
                     while current_urls:
                         # Stop if task was cancelled externally
                         if task_ctx.is_cancelled or (task_ctx.error and task_ctx.error.state):
@@ -1737,7 +1728,7 @@ async def handle_url(client: Client, message: Message):
 
                         # Create ZIP archive for this batch
                         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-                        zip_name = f"TikTok_Bulk_{timestamp}_Part{part_num}"
+                        zip_name = f"TikTok_Bulk_{timestamp}_Batch{part_num}"
 
                         # Set download_name BEFORE create_zip_archive so archive() picks it up
                         task_ctx.messages.download_name = zip_name
@@ -1747,7 +1738,7 @@ async def handle_url(client: Client, message: Message):
 
                         if not zip_success or not zip_path or not os.path.exists(zip_path):
                             await _safe_edit(
-                                f"<b>ZIP Creation Failed (Part {part_num})</b>\n\n"
+                                f"<b>ZIP Creation Failed (Batch {part_num})</b>\n\n"
                                 "Videos were downloaded but ZIP creation failed.\n"
                                 "Please check the logs."
                             )
@@ -1755,16 +1746,25 @@ async def handle_url(client: Client, message: Message):
                             continue
 
                         # Upload ZIP to Telegram
-                        await _safe_edit(
-                            f"<b>Uploading to Telegram - Part {part_num}</b>\n\n"
+                        user_summary = downloader.get_batch_user_summary()
+                        upload_caption = (
+                            f"<b>TikTok Bulk Download - Batch {part_num}</b>\n\n"
                             f"<b>ZIP File:</b> <code>{zip_name}</code>\n"
-                            f"<b>Videos in this part:</b> <code>{len(downloader.successful_downloads) - all_successful}</code>"
+                            f"<b>Videos in this batch:</b> <code>{len(downloader.successful_downloads) - all_successful}</code>"
+                            f"{user_summary}"
+                        )
+
+                        await _safe_edit(
+                            f"<b>Uploading to Telegram - Batch {part_num}</b>\n\n"
+                            f"<b>ZIP File:</b> <code>{zip_name}</code>\n"
+                            f"<b>Videos:</b> <code>{len(downloader.successful_downloads) - all_successful}</code>"
                         )
 
                         await Leech(
                             path=zip_path,
                             remove_source=False,
-                            task_ctx=task_ctx
+                            task_ctx=task_ctx,
+                            caption=upload_caption
                         )
 
                         all_successful = len(downloader.successful_downloads)
