@@ -1807,8 +1807,7 @@ async def handle_url(client: Client, message: Message):
                         await Leech(
                             path=zip_path,
                             remove_source=False,
-                            task_ctx=task_ctx,
-                            caption=upload_caption
+                            task_ctx=task_ctx
                         )
 
                         all_successful = len(downloader.successful_downloads)

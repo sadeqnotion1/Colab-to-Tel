@@ -308,6 +308,9 @@ async def update_summary_dashboard(
         if not thumbnail_path:
             log.warning("No valid thumbnail found for summary dashboard")
 
+        # Define tasks_shown for logging
+        tasks_shown = 1 if TASK_QUEUE.dashboard_page > 0 else len(tasks)
+
         if BOT_DEBUG:
             try:
                 from datetime import datetime
