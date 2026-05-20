@@ -372,6 +372,7 @@ class TaskQueue:
 
     def __init__(self):
         self.active_tasks: Dict[str, TaskContext] = {}  # task_id → TaskContext
+        self.running_tasks: Set[str] = set()           # task_id of tasks currently executing
         self.summary_msg: Optional[Message] = None  # Summary dashboard message
         # Last rendered summary text (for no-op updates)
         self.last_summary_text: str = ""
@@ -385,11 +386,51 @@ class TaskQueue:
         self.min_forced_update_interval: float = 1.0
         self._lock = asyncio.Lock()  # Thread-safe operations for task dict
         self._summary_lock = asyncio.Lock()  # Thread-safe operations for summary updates
+        self._worker_cond = asyncio.Condition() # For coordinating task execution slots
 
         # master-level additions
         self.metrics = SystemMetrics()
         self.background_tasks: Set[asyncio.Task] = set()
         self.is_shutting_down: bool = False
+
+    def get_worker_limit(self) -> int:
+        """
+        Determine the concurrency limit based on active tasks.
+        
+        Rules:
+        - If ALL active tasks are 'tiktokbulk', limit is 3.
+        - If there is at least ONE task of another type, limit is 2.
+        """
+        if not self.active_tasks:
+            return 2 # Default fallback
+            
+        # We only count tasks that have been REGISTERED (added to active_tasks)
+        all_tiktok = all(
+            getattr(t, 'service_type', None) == "tiktokbulk" 
+            for t in self.active_tasks.values()
+        )
+        return 3 if all_tiktok else 2
+
+    async def acquire_worker_slot(self, task_id: str):
+        """Wait for a free worker slot based on dynamic limits."""
+        async with self._worker_cond:
+            while True:
+                limit = self.get_worker_limit()
+                if len(self.running_tasks) < limit:
+                    self.running_tasks.add(task_id)
+                    log.info(f"Task {task_id[:8]} acquired worker slot. ({len(self.running_tasks)}/{limit})")
+                    return
+                
+                # Wait for a task to finish
+                await self._worker_cond.wait()
+
+    async def release_worker_slot(self, task_id: str):
+        """Release a worker slot and notify waiting tasks."""
+        async with self._worker_cond:
+            if task_id in self.running_tasks:
+                self.running_tasks.remove(task_id)
+                log.info(f"Task {task_id[:8]} released worker slot. ({len(self.running_tasks)} running)")
+                self._worker_cond.notify_all()
 
     def create_background_task(self, coro, name: str) -> asyncio.Task:
         """Create and track a background task to prevent leaks"""

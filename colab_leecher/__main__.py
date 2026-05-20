@@ -705,10 +705,18 @@ async def run_parallel_task(client, message, task_ctx, skip_registration=False):
         else:
             slog.info(f"Task already registered (skip_registration=True)", active_count=TASK_QUEUE.get_task_count())
 
-        # Run the task via taskScheduler (already supports task_ctx)
-        slog.info(f"Calling taskScheduler")
-        await taskScheduler(task_ctx)
-        slog.info(f"taskScheduler completed")
+        # ===== NEW: WAIT FOR WORKER SLOT (CONCURRENCY LIMIT) =====
+        # This enforces the 3-worker (pure tiktok) or 2-worker (mixed) limit
+        await TASK_QUEUE.acquire_worker_slot(task_ctx.task_id)
+
+        try:
+            # Run the task via taskScheduler (already supports task_ctx)
+            slog.info(f"Calling taskScheduler")
+            await taskScheduler(task_ctx)
+            slog.info(f"taskScheduler completed")
+        finally:
+            # Always release the worker slot when done
+            await TASK_QUEUE.release_worker_slot(task_ctx.task_id)
 
     except asyncio.CancelledError:
         slog.warning(f"Task was cancelled by user")
