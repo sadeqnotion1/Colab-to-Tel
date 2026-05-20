@@ -402,12 +402,12 @@ class TikTokBulkDownloader(BaseDownloader):
             Tuple of (overall_success: bool, summary_message: str, remaining_urls: List[str])
         """
         try:
-            # Use 1GB as hard limit if not specified or if larger than 1GB
-            # 1GB = 1024 * 1024 * 1024 bytes
-            HARD_LIMIT = 1024 * 1024 * 1024
+            # Use 500MB as hard limit if not specified or if larger than 500MB
+            # 500MB = 500 * 1024 * 1024 bytes
+            HARD_LIMIT = 500 * 1024 * 1024
             if size_limit is None or size_limit > HARD_LIMIT:
                 size_limit = HARD_LIMIT
-                log.info(f"Enforcing 1GB hard limit for TikTok bulk download.")
+                log.info(f"Enforcing 500MB hard limit for TikTok bulk download.")
 
             self.urls = urls
             total_videos = len(urls)
