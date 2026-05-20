@@ -342,30 +342,47 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                                 try:
                                     percentage = int(match.group(1))
                                     current_time = datetime.now()
+                                    # Increased update frequency (1.5s instead of 2.5s) for a more "fluid" feel
                                     if (percentage > last_reported_pct or (
-                                            current_time - last_update_time).total_seconds() >= 2.5):
+                                            current_time - last_update_time).total_seconds() >= 1.5):
 
                                         # Update throttle variables
                                         last_reported_pct = percentage
                                         last_update_time = current_time
+
+                                        # Calculate Speed and ETA based on percentage and time
+                                        elapsed_seconds = (current_time - _task_start).total_seconds()
+                                        if elapsed_seconds > 0.5 and percentage > 0:
+                                            # Estimate bytes processed: total * percentage
+                                            bytes_done = total_size * (percentage / 100)
+                                            speed_bps = bytes_done / elapsed_seconds
+                                            remaining_bytes = total_size - bytes_done
+                                            
+                                            speed_text = f"{sizeUnit(speed_bps)}/s"
+                                            if speed_bps > 0:
+                                                eta_seconds = remaining_bytes / speed_bps
+                                                eta_text = getTime(eta_seconds)
+                                            else:
+                                                eta_text = "Calculating..."
+                                        else:
+                                            speed_text = "N/A"
+                                            eta_text = "Calculating..."
 
                                         # Update TaskMessages archiving progress
                                         _messages.total_files = 1
                                         _messages.files_processed = 1 if percentage >= 100 else 0
                                         _messages.current_file = archive_out_final_name
 
-                                        bar_length = 20
-                                        filled_length = min(bar_length, max(
-                                            0, int(percentage / 100 * bar_length)))
-                                        # Use beautiful style
-                                        bar = "█" * filled_length + "▒" * (bar_length - filled_length)
+                                        # Use the beautiful gradient style progress bar
+                                        bar = ProgressBar.generate(percentage, length=20, style='gradient')
                                         
-                                        elapsed_time_str = getTime(
-                                            (current_time - _task_start).total_seconds())
+                                        elapsed_time_str = getTime(elapsed_seconds)
                                         status_text = build_archiver_progress_text(
                                             _messages.status_head,
                                             bar=bar,
                                             percentage=percentage,
+                                            speed_text=speed_text,
+                                            eta_text=eta_text,
                                             elapsed_time_text=elapsed_time_str,
                                             source_size_text=total_in_unit,
                                         )

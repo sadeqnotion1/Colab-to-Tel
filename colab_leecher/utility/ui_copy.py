@@ -382,6 +382,8 @@ def build_archiver_progress_text(
     *,
     bar: str,
     percentage: float,
+    speed_text: str = "N/A",
+    eta_text: str = "N/A",
     elapsed_time_text: str,
     source_size_text: str,
 ) -> str:
@@ -389,6 +391,8 @@ def build_archiver_progress_text(
     return (
         f"{status_head}\n\n"
         f"<b>┌「{bar}」 » {percentage:.1f}%</b>\n"
+        f"<b>├⚡️ Speed »</b> <code>{escape(speed_text)}</code>\n"
+        f"<b>├⏳ ETA »</b> <code>{escape(eta_text)}</code>\n"
         f"<b>├⏱️ Elapsed »</b> <code>{escape(elapsed_time_text)}</code>\n"
         f"<b>└📦 Source »</b> <code>{escape(source_size_text)}</code>"
     )
