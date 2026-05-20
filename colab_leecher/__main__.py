@@ -2370,7 +2370,6 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
         if query_data == "dash_refresh":
             await callback_query.answer("Refreshing Dashboard... 🔄")
-            from colab_leecher.utility.task_dashboard import force_update_summary
             await force_update_summary(client)
             return
 
