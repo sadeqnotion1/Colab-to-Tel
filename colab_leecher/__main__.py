@@ -1579,6 +1579,46 @@ async def fetch_and_parse_links(url: str) -> list[str] | None:
 # URL Handler: Modified to handle external link lists
 # URL Handler: Modified to handle external link lists AND failed parsing
 # Add this function definition inside __main__.py
+async def ask_mode_selection(client, message):
+    """Send a menu asking for the download mode when a link is sent without an active task."""
+    from colab_leecher import OWNER
+    log = logging.getLogger(__name__)
+    log.info(f"Asking user {message.from_user.id} to select mode for raw link input...")
+    
+    keyboard_markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⚡ Leech", callback_data="modepick_leech"),
+            InlineKeyboardButton("♻️ Mirror", callback_data="modepick_mirror")
+        ],
+        [
+            InlineKeyboardButton("🎬 Mindvalley", callback_data="modepick_mindvalley"),
+            InlineKeyboardButton("📱 TikTok Bulk", callback_data="modepick_tiktokbulk")
+        ],
+        [
+            InlineKeyboardButton("🎥 YTDL Leech", callback_data="modepick_ytdl")
+        ],
+        [
+            InlineKeyboardButton("❌ Cancel", callback_data="cancel")
+        ]
+    ])
+    
+    text = (
+        "<b>No Active Task!</b>\n\n"
+        "I detected that you sent a link or Gist, but you haven't started a task yet.\n\n"
+        "<b>What would you like to do with this input?</b>"
+    )
+    
+    try:
+        await message.reply_text(
+            text,
+            reply_markup=keyboard_markup,
+            parse_mode=enums.ParseMode.HTML,
+            quote=True,
+        )
+    except Exception as e:
+        log.error(f"Failed to ask mode selection: {e}")
+
+
 async def ask_service_type(client, message):
     """Send a menu asking for the download service type."""
     from colab_leecher import OWNER
@@ -2021,8 +2061,41 @@ async def handle_url(client: Client, message: Message):
 
     setup_session = await _get_setup_session(user_id)
     if not setup_session:
-        log.warning("Task not started by command, ignoring link/path in handle_url.")
-        await message.reply_text("<i>Start task with /tupload, /gdupload, or /drupload first.</i>")
+        # === AUTO-DETECT GIST CONTENT OR SHOW MENU ===
+        input_text = message.text.strip() if message.text else ""
+        
+        # Check if it's a known link paste service
+        if any(x in input_text for x in ['gist.github', 'pastebin.com', 'rentry.co']):
+            try:
+                # Use helper to fetch raw lines for detection
+                gist_lines = await fetch_filenames_from_url(input_text)
+                if gist_lines:
+                    first_line = gist_lines[0].strip().upper()
+                    
+                    # Detection 1: Mindvalley (TITLE=)
+                    if first_line.startswith("TITLE="):
+                        log.info(f"Auto-detected Mindvalley mode for gist: {input_text}")
+                        await _update_setup_session(user_id, mode="leech", service_type="mindvalley")
+                        await _set_mindvalley_waiting(user_id, True)
+                        raise ContinuePropagation
+                    
+                    # Detection 2: TikTok Bulk (tiktok.com)
+                    if "TIKTOK.COM" in first_line:
+                        log.info(f"Auto-detected TikTokBulk mode for gist: {input_text}")
+                        # Setup TikTok task context as if /tiktokbulk was run
+                        task_ctx = create_task_context(user_id, message.chat.id, mode="leech")
+                        task_ctx.service_type = "tiktokbulk"
+                        async with user_tasks_lock:
+                            user_tasks[user_id] = task_ctx
+                        # Re-call handle_url which will now catch the task_ctx at the top
+                        return await handle_url(client, message)
+            except ContinuePropagation:
+                raise
+            except Exception as e:
+                log.debug(f"Gist auto-detection skipped/failed: {e}")
+
+        # If no setup_session and auto-detection failed, show selection menu
+        await ask_mode_selection(client, message)
         return
     # --- End Initial State Checks ---
 
@@ -2292,7 +2365,47 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             from colab_leecher.utility.task_dashboard import force_update_summary
             await force_update_summary(client)
             return
-            await callback_query.answer()  # Acknowledge
+
+        # === MODE PICKER HANDLER ===
+        if query_data.startswith("modepick_"):
+            choice = query_data.split("_")[1]
+            orig_msg = callback_query.message.reply_to_message
+            if not orig_msg:
+                await callback_query.answer("❌ Original message not found. Please resend the link.", show_alert=True)
+                return
+            
+            await callback_query.answer(f"Selected: {choice.capitalize()}")
+            try: await callback_query.message.delete()
+            except: pass
+            
+            # Setup the session based on choice
+            if choice == "leech":
+                await _update_setup_session(user_id, mode="leech")
+            elif choice == "mirror":
+                await _update_setup_session(user_id, mode="mirror")
+            elif choice == "mindvalley":
+                await _update_setup_session(user_id, mode="leech", service_type="mindvalley")
+                await _set_mindvalley_waiting(user_id, True)
+            elif choice == "tiktokbulk":
+                # Special handling for tiktokbulk
+                task_ctx = create_task_context(user_id, chat_id, mode="leech")
+                task_ctx.service_type = "tiktokbulk"
+                async with user_tasks_lock:
+                    user_tasks[user_id] = task_ctx
+            elif choice == "ytdl":
+                await _update_setup_session(user_id, mode="leech", service_type="ytdl")
+            
+            # Process the original message
+            if choice == "mindvalley":
+                await handle_text_input(client, orig_msg)
+            else:
+                await handle_url(client, orig_msg)
+            return
+
+        # --- Handle Parallel Task Choice ---
+        if ":" in query_data and not query_data.startswith("cancel:"):
+            # Acknowledge
+            await callback_query.answer()
             parts = query_data.split(":", 1)
             if len(parts) != 2:
                 await client.send_message(chat_id, "❌ Invalid parallel task action.")
