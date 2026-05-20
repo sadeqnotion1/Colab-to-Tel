@@ -205,14 +205,14 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
         # corruption
         archive_out_final_name = f"{clean_name}.7z"
         archive_format_param = "-t7z"
-        # Normal compression (good balance of speed/size)
-        compression_level = "-mx=5"
+        # FASTEST compression (TikTok videos are already compressed)
+        compression_level = "-mx=1"
         format_display = "7Z"
     else:  # ZIP (fallback)
         archive_out_final_name = f"{clean_name}.zip"
         archive_format_param = "-tzip"
-        # Use compression for ZIP too (was -mx=0, caused corruption!)
-        compression_level = "-mx=5"
+        # FASTEST compression
+        compression_level = "-mx=1"
         format_display = "ZIP"
 
     pswd_arg = None
@@ -339,7 +339,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                                         elapsed_time_text=elapsed_time_str,
                                         source_size_text=total_in_unit,
                                     )
-                                    await status_bar(status_text, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
+                                    await status_bar(status_text, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx, force_update=True)
                             except ValueError:
                                 log.warning(
                                     f"Could not convert 7z percentage '{match.group(1)}' to int.")
@@ -405,7 +405,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                             file_size_text=sizeUnit(final_archive_size),
                             status_text="Testing archive integrity...",
                         )
-                        await status_bar(verify_msg, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
+                        await status_bar(verify_msg, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx, force_update=True)
                     except Exception as status_err:
                         log.debug(
                             f"Could not update status during verification: {status_err}")
@@ -439,7 +439,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                                     file_size_text=sizeUnit(final_archive_size),
                                     status_text="Integrity check passed. Ready to upload.",
                                 )
-                                await status_bar(verify_success_msg, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx)
+                                await status_bar(verify_success_msg, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx, force_update=True)
                             except Exception as status_err:
                                 log.debug(
                                     f"Could not update status after verification: {status_err}")
@@ -1379,7 +1379,9 @@ async def extract_zip_streaming(
                         eta=eta_str,
                         done=status_text,
                         total_size=zip_size_str,
-                        engine="Streaming Extractor (zipfile)"
+                        engine="Streaming Extractor (zipfile)",
+                        task_ctx=task_ctx,
+                        force_update=True
                     )
 
                     # Create target path
@@ -1777,7 +1779,9 @@ async def extract_rar_streaming(
                     eta=eta_str,
                     done=status_text,
                     total_size=rar_size_str,
-                    engine="Streaming Extractor (rarfile)"
+                    engine="Streaming Extractor (rarfile)",
+                    task_ctx=task_ctx,
+                    force_update=True
                 )
 
                 # Check memory usage every 10 files (if monitoring available)

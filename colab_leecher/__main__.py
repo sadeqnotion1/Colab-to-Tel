@@ -1688,11 +1688,11 @@ async def handle_url(client: Client, message: Message):
 
                 # Wrap entire download process in try/finally for proper cleanup
                 try:
-                    BATCH_SIZE = 250
+                    TARGET_BATCH_SIZE = 950 * 1024 * 1024  # 950MB target for each ZIP
                     total_urls = len(urls)
-                    batches = [urls[i:i + BATCH_SIZE] for i in range(0, total_urls, BATCH_SIZE)]
-                    total_parts = len(batches)
-
+                    current_urls = urls
+                    part_num = 1
+                    
                     all_successful = 0
                     all_failed = 0
 
@@ -1702,15 +1702,11 @@ async def handle_url(client: Client, message: Message):
                         except Exception as cancelled_edit_err:
                             log.debug(f"Could not edit cancelled status message: {cancelled_edit_err}")
 
-                    for part_num, batch_urls in enumerate(batches, 1):
+                    while current_urls:
                         # Stop if task was cancelled externally
                         if task_ctx.is_cancelled or (task_ctx.error and task_ctx.error.state):
                             log.info(f"TikTok bulk: task cancelled, stopping at part {part_num}")
                             break
-
-                        # Reset downloader state for this batch
-                        downloader.successful_downloads = []
-                        downloader.failed_downloads = []
 
                         # Clear download directory before each batch
                         import shutil as _shutil
@@ -1718,15 +1714,13 @@ async def handle_url(client: Client, message: Message):
                             _shutil.rmtree(downloader.download_dir)
                         os.makedirs(downloader.download_dir, exist_ok=True)
 
-                        part_label = f"Part {part_num}/{total_parts}" if total_parts > 1 else ""
-
                         await _safe_edit(
-                            f"<b>Downloading TikTok Videos{' - ' + part_label if part_label else ''}</b>\n\n"
-                            f"<b>Videos in this batch:</b> <code>{len(batch_urls)}</code>\n"
-                            f"<b>Total:</b> <code>{total_urls}</code> URLs"
+                            f"<b>Downloading TikTok Videos - Part {part_num}</b>\n\n"
+                            f"<b>Target Size:</b> <code>{sizeUnit(TARGET_BATCH_SIZE)}</code>\n"
+                            f"<b>Remaining:</b> <code>{len(current_urls)}</code> URLs"
                         )
 
-                        download_success, summary = await downloader.download_bulk(batch_urls)
+                        download_success, summary, current_urls = await downloader.download_bulk(current_urls, size_limit=TARGET_BATCH_SIZE)
 
                         # Stop if task was cancelled during download
                         if task_ctx.is_cancelled or (task_ctx.error and task_ctx.error.state):
@@ -1734,26 +1728,18 @@ async def handle_url(client: Client, message: Message):
                             break
 
                         if not download_success:
-                            if total_parts > 1:
-                                await _safe_edit(
-                                    f"<b>All Downloads Failed{' (' + part_label + ')' if part_label else ''}</b>\n\n"
-                                    f"{summary}\n\nSkipping to next batch..."
-                                )
-                            else:
-                                await _safe_edit(
-                                    "<b>All Downloads Failed</b>\n\n"
-                                    f"{summary}\n\nPlease check the URLs and try again."
-                                )
-                            if total_parts == 1:
-                                return
+                            await _safe_edit(
+                                f"<b>Batch Failed (Part {part_num})</b>\n\n"
+                                f"{summary}\n\nSkipping to next batch..."
+                            )
+                            part_num += 1
                             continue
 
                         # Create ZIP archive for this batch
                         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-                        zip_name = f"TikTok_Bulk_{timestamp}_Part{part_num}of{total_parts}" if total_parts > 1 else f"TikTok_Bulk_{timestamp}"
+                        zip_name = f"TikTok_Bulk_{timestamp}_Part{part_num}"
 
                         # Set download_name BEFORE create_zip_archive so archive() picks it up
-                        from colab_leecher.utility.variables import Messages, BotTimes
                         task_ctx.messages.download_name = zip_name
                         task_ctx.messages.src_link = gist_url
 
@@ -1761,17 +1747,18 @@ async def handle_url(client: Client, message: Message):
 
                         if not zip_success or not zip_path or not os.path.exists(zip_path):
                             await _safe_edit(
-                                f"<b>ZIP Creation Failed{' (' + part_label + ')' if part_label else ''}</b>\n\n"
+                                f"<b>ZIP Creation Failed (Part {part_num})</b>\n\n"
                                 "Videos were downloaded but ZIP creation failed.\n"
                                 "Please check the logs."
                             )
+                            part_num += 1
                             continue
 
                         # Upload ZIP to Telegram
                         await _safe_edit(
-                            f"<b>Uploading to Telegram{' - ' + part_label if part_label else ''}</b>\n\n"
+                            f"<b>Uploading to Telegram - Part {part_num}</b>\n\n"
                             f"<b>ZIP File:</b> <code>{zip_name}</code>\n"
-                            f"<b>Videos:</b> <code>{len(downloader.successful_downloads)}/{len(batch_urls)}</code>"
+                            f"<b>Videos in this part:</b> <code>{len(downloader.successful_downloads) - all_successful}</code>"
                         )
 
                         await Leech(
@@ -1780,10 +1767,11 @@ async def handle_url(client: Client, message: Message):
                             task_ctx=task_ctx
                         )
 
-                        all_successful += len(downloader.successful_downloads)
-                        all_failed += len(downloader.failed_downloads)
+                        all_successful = len(downloader.successful_downloads)
+                        all_failed = len(downloader.failed_downloads)
+                        part_num += 1
 
-                        log.info(f"TikTok Bulk part {part_num}/{total_parts} done: {len(downloader.successful_downloads)}/{len(batch_urls)} succeeded")
+                        log.info(f"TikTok Bulk part {part_num-1} done: {all_successful} total succeeded so far")
 
                     # Final summary report
                     report = "<b>TikTok Bulk Download Complete</b>\n\n"
@@ -1791,12 +1779,29 @@ async def handle_url(client: Client, message: Message):
                     report += f"<b>Downloaded:</b> <code>{all_successful}</code>\n"
                     if all_failed:
                         report += f"<b>Failed:</b> <code>{all_failed}</code>\n"
-                    if total_parts > 1:
-                        report += f"<b>Parts uploaded:</b> <code>{total_parts}</code>\n"
+                    if part_num > 2:
+                        report += f"<b>Parts uploaded:</b> <code>{part_num - 1}</code>\n"
 
                     await _safe_edit(report)
 
-                    log.info(f"TikTok Bulk download complete for task {task_ctx.get_short_id()}: {all_successful}/{total_urls} succeeded across {total_parts} part(s)")
+                    # Upload failed URLs log if any
+                    if all_failed:
+                        failed_log_content = downloader.get_failed_urls_log()
+                        if failed_log_content:
+                            log_path = os.path.join(downloader.download_dir, "failed_urls.txt")
+                            os.makedirs(downloader.download_dir, exist_ok=True)
+                            with open(log_path, "w", encoding="utf-8") as f:
+                                f.write(failed_log_content)
+                            
+                            log.info(f"Uploading failed URLs log: {log_path}")
+                            await client.send_document(
+                                chat_id=message.chat.id,
+                                document=log_path,
+                                caption=f"❌ Failed URLs Log for Task {task_ctx.get_short_id()}",
+                                reply_to_message_id=message.id
+                            )
+
+                    log.info(f"TikTok Bulk download complete for task {task_ctx.get_short_id()}: {all_successful}/{total_urls} succeeded")
 
                 finally:
                     # CRITICAL: Always cleanup task from TASK_QUEUE (even on exceptions)

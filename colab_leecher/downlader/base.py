@@ -60,7 +60,8 @@ class BaseDownloader:
         status_text: str = "Downloading...",
         speed: str = "N/A",
         eta: str = None,
-        engine: str = None
+        engine: str = None,
+        force_update: bool = False
     ):
         """
         Update progress bar using the bot's standard status_bar system
@@ -71,6 +72,7 @@ class BaseDownloader:
             speed: Download speed string (e.g., "5.2 MB/s") or "N/A"
             eta: ETA string or None (will auto-calculate if None)
             engine: Downloader engine name (e.g., "Mindvalley (N_m3u8DL-RE)")
+            force_update: If True, force Telegram update even if in parallel mode
         """
         try:
             # Use task_ctx.status_msg if available, otherwise fall back to global MSG
@@ -125,7 +127,8 @@ class BaseDownloader:
                 done=status_text,
                 total_size=total_size_str,
                 engine=engine,
-                task_ctx=self.task_ctx  # Pass task context for multi-task support
+                task_ctx=self.task_ctx,  # Pass task context for multi-task support
+                force_update=force_update
             )
 
         except Exception as e:

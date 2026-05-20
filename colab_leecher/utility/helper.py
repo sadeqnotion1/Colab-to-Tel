@@ -1800,7 +1800,8 @@ async def status_bar(
         total_size,
         engine,
         use_custom_text: bool = False,
-        task_ctx: TaskContext = None):
+        task_ctx: TaskContext = None,
+        force_update: bool = False):
     """
     Update progress bar for download/upload tasks.
 
@@ -1808,6 +1809,7 @@ async def status_bar(
         task_ctx: Optional TaskContext for per-task state (NEW in Phase 3)
                   If provided, uses task_ctx.status_msg and task_ctx.started_at
                   If None, falls back to global MSG and BotTimes (backward compat)
+        force_update: If True, bypasses parallel mode skip and throttles to update Telegram (NEW)
     """
     global MSG, Messages, BotTimes, log  # Ensure necessary globals are accessible
 
@@ -1819,7 +1821,7 @@ async def status_bar(
         f"📊 status_bar {task_id_str} called. Pct={percentage}%, Speed={speed}")
 
     # ===== PARALLEL MODE: Skip individual status updates, use dashboard inste
-    if task_ctx:
+    if task_ctx and not force_update:
         from .task_context import TASK_QUEUE
         if await TASK_QUEUE.has_task(task_ctx.task_id):
             # Task is in parallel queue - individual status updates are disabled
