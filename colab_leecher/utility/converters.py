@@ -403,24 +403,45 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
         # Small delay to allow OS buffers to flush
         await asyncio.sleep(0.5)
 
-        # Explicitly sync the archive file to disk if it exists
-        if ospath.exists(archive_out_path):
+        # Detect if splitting occurred (.001, .002, etc.)
+        first_volume = archive_out_path + ".001"
+        is_split = (max_split_size_bytes and max_split_size_bytes > 0 and ospath.exists(first_volume))
+        
+        # Determine the primary path to check/return
+        actual_archive_path = first_volume if is_split else archive_out_path
+
+        # Explicitly sync the archive file(s) to disk if they exist
+        if ospath.exists(actual_archive_path):
             try:
                 # Open and sync file to ensure all writes are committed to disk
-                with open(archive_out_path, 'rb') as f:
+                with open(actual_archive_path, 'rb') as f:
                     os.fsync(f.fileno())
-                log.debug(f"Archive file synced to disk: {archive_out_path}")
+                log.debug(f"Archive file synced to disk: {actual_archive_path}")
             except Exception as sync_err:
                 log.warning(
                     f"Could not fsync archive file (may be fine): {sync_err}")
 
         # Check success and GET SIZE
-        if exit_code == 0 and ospath.exists(archive_out_path):
+        if exit_code == 0 and ospath.exists(actual_archive_path):
             try:
-                final_archive_size = getSize(archive_out_path)
+                if is_split:
+                    # Calculate total size of all volumes
+                    final_archive_size = 0
+                    vol_num = 1
+                    while True:
+                        vol_path = f"{archive_out_path}.{vol_num:03d}"
+                        if ospath.exists(vol_path):
+                            final_archive_size += getSize(vol_path)
+                            vol_num += 1
+                        else:
+                            break
+                    log.info(f"Split archiving completed: {vol_num-1} parts, Total Size: {sizeUnit(final_archive_size)}")
+                else:
+                    final_archive_size = getSize(archive_out_path)
+                
                 if final_archive_size > 0:
                     log.info(
-                        f"Archiving completed successfully: {archive_out_path}, Size: {sizeUnit(final_archive_size)}")
+                        f"Archiving completed successfully: {actual_archive_path}, Size: {sizeUnit(final_archive_size)}")
 
                     # INTEGRITY CHECK: Verify archive is valid before uploading
                     log.info(
@@ -431,7 +452,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                         verify_msg = build_archiver_verification_text(
                             _messages.status_head,
                             title="Verifying Archive",
-                            file_name=archive_out_final_name,
+                            file_name=archive_out_final_name if not is_split else f"{archive_out_final_name}.001",
                             file_size_text=sizeUnit(final_archive_size),
                             status_text="Testing archive integrity...",
                         )
@@ -442,7 +463,8 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
 
                     try:
                         # Use 7z test command to verify archive integrity
-                        test_cmd_args = ["7z", "t", archive_out_path]
+                        # For split archives, 7z test command should be run on the FIRST volume
+                        test_cmd_args = ["7z", "t", actual_archive_path]
                         log.debug(
                             f"Running integrity test: {' '.join(test_cmd_args)}")
 

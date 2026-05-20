@@ -2282,7 +2282,6 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             try:
                 page_num = int(query_data.split(":")[1])
                 TASK_QUEUE.dashboard_page = page_num
-                from colab_leecher.utility.task_dashboard import force_update_summary
                 await force_update_summary(client)
             except Exception as e:
                 log.error(f"Dashboard page update error: {e}")
