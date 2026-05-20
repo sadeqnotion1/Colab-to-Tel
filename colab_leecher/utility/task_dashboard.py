@@ -54,13 +54,15 @@ def _keyboard_signature(keyboard: Optional[InlineKeyboardMarkup]) -> str:
 
 async def update_summary_dashboard(
         client=None,
-        force: bool = False) -> Optional[Message]:
+        force: bool = False,
+        move_to_bottom: bool = False) -> Optional[Message]:
     """
     Update or create the summary dashboard showing all active tasks (thread-safe).
 
     Args:
         client: Pyrogram client instance
         force: If True, bypass throttling and update immediately
+        move_to_bottom: If True, delete old message and send new one to keep it at bottom
 
     Returns:
         Updated/created summary message, or None if no tasks active
@@ -69,17 +71,17 @@ async def update_summary_dashboard(
         client = colab_bot
 
     # Optimization: Fast fail check outside lock (read-only)
-    if not force and not TASK_QUEUE.should_update_summary():
+    if not force and not move_to_bottom and not TASK_QUEUE.should_update_summary():
         return TASK_QUEUE.summary_msg
 
     # Use lock to prevent concurrent updates
     async with TASK_QUEUE._summary_lock:
-        # Check throttling (unless forced)
-        if not force and not TASK_QUEUE.should_update_summary():
+        # Check throttling (unless forced or moving)
+        if not force and not move_to_bottom and not TASK_QUEUE.should_update_summary():
             return TASK_QUEUE.summary_msg
 
         # Even for forced updates, apply debouncing to prevent Telegram rate limits
-        if force:
+        if force and not move_to_bottom:
             import time
             time_since_last = time.time() - TASK_QUEUE.last_summary_update
             if time_since_last < TASK_QUEUE.min_forced_update_interval:
@@ -332,9 +334,19 @@ async def update_summary_dashboard(
                 log.warning(f"Debug text dump failed: {debug_err}")
 
         log.info(
-            f"\U0001f4ca Updating dashboard: {tasks_shown} tasks shown, message exists: {TASK_QUEUE.summary_msg is not None}")
+            f"\U0001f4ca Updating dashboard: {tasks_shown} tasks shown, message exists: {TASK_QUEUE.summary_msg is not None}, move_to_bottom: {move_to_bottom}")
 
         try:
+            # If move_to_bottom is requested, delete the old message first
+            if move_to_bottom and TASK_QUEUE.summary_msg:
+                try:
+                    log.debug(f"Moving dashboard to bottom: Deleting old message {TASK_QUEUE.summary_msg.id}")
+                    await TASK_QUEUE.summary_msg.delete()
+                except Exception as del_err:
+                    log.warning(f"Failed to delete old dashboard during move: {del_err}")
+                finally:
+                    TASK_QUEUE.summary_msg = None
+
             if TASK_QUEUE.summary_msg:
                 log.debug(
                     f"Editing existing summary message (ID: {TASK_QUEUE.summary_msg.id})")
@@ -514,7 +526,7 @@ async def force_update_summary(client=None):
         except Exception:
             pass
 
-    await update_summary_dashboard(client, force=True)
+    await update_summary_dashboard(client, force=True, move_to_bottom=True)
 
     if _scheduled_update_task and not _scheduled_update_task.done():
         return
@@ -522,7 +534,7 @@ async def force_update_summary(client=None):
     async def delayed_update():
         import asyncio
         await asyncio.sleep(2.0)
-        await update_summary_dashboard(client, force=True)
+        await update_summary_dashboard(client, force=True, move_to_bottom=True)
 
     import asyncio
     _scheduled_update_task = asyncio.create_task(delayed_update())

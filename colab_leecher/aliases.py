@@ -152,3 +152,18 @@ async def stats_cmd(client, message):
     except Exception:
         log.exception("Stats command failed")
         await message.reply_text("Failed to fetch system stats.", quote=True)
+
+
+@colab_bot.on_message(filters.command("status") & filters.private)
+async def status_cmd(client, message):
+    # Force dashboard to bottom
+    from .utility.task_dashboard import update_summary_dashboard
+    from .utility.task_context import TASK_QUEUE
+    
+    tasks = await TASK_QUEUE.get_all_tasks()
+    if not tasks:
+        await message.reply_text("❌ No active tasks found.", quote=True)
+        return
+        
+    await message.delete() # Delete user command
+    await update_summary_dashboard(client, force=True, move_to_bottom=True)
