@@ -1682,17 +1682,41 @@ async def handle_url(client: Client, message: Message):
 
                 task_ctx.status_msg = status_msg
 
-                all_successful = 0
-                all_failed = 0
+                # Create downloader instance
+                downloader = TikTokBulkDownloader(client, message, task_ctx)
 
-                async def _safe_edit(text):
-                    try:
-                        if hasattr(status_msg, 'caption'):
-                            await status_msg.edit_caption(text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard())
-                        else:
-                            await status_msg.edit_text(text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard())
-                    except Exception as edit_err:
-                        log.debug(f"Could not edit status message: {edit_err}")
+                # Fetch URLs from Gist
+                success, urls = await downloader.fetch_gist_urls(gist_url)
+
+                if not success or not urls:
+                    await _safe_edit(
+                        "<b>TikTok Bulk Download Failed</b>\n\n"
+                        "Could not fetch TikTok URLs from the gist.\n"
+                        "Please verify:\n"
+                        "• You provided a RAW gist URL\n"
+                        "• The gist contains valid TikTok URLs\n"
+                        "• Each URL is on a separate line"
+                    )
+                    # Cleanup: Remove from user_tasks on failure
+                    async with user_tasks_lock:
+                        if user_id in user_tasks:
+                            del user_tasks[user_id]
+                    return
+
+                # CRITICAL: Add task to TASK_QUEUE for dashboard tracking
+                await TASK_QUEUE.add_task(task_ctx)
+                log.info(f"TikTok bulk task {task_ctx.get_short_id()} added to TASK_QUEUE")
+
+                # Wrap entire download process in try/finally for proper cleanup
+                try:
+                    TARGET_BATCH_SIZE = 800 * 1024 * 1024  # 800MB target (safer than 950MB)
+                    total_urls = len(urls)
+                    current_urls = urls
+                    part_num = 1
+                    
+                    all_successful = 0
+                    all_failed = 0
+
                     while current_urls:
                         # Stop if task was cancelled externally
                         if task_ctx.is_cancelled or (task_ctx.error and task_ctx.error.state):

@@ -575,11 +575,11 @@ class TikTokBulkDownloader(BaseDownloader):
 
             # Use the existing archive() function from converters.py
             # Pass the download directory to archive all files in it
-            # CRITICAL: Use 950MB split size as requested by user
+            # CRITICAL: Use 800MB split size for safety
             archive_path, archive_size = await archive(
                 path=self.download_dir,
                 remove=False,  # Don't remove source files
-                max_split_size_bytes=950*1024*1024,  # 950MB per part
+                max_split_size_bytes=800*1024*1024,  # 800MB per part
                 task_ctx=self.task_ctx
             )
 
