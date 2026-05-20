@@ -1638,6 +1638,26 @@ async def handle_url(client: Client, message: Message):
                     log.debug(f"Could not delete TikTok prompt message: {delete_prompt_err}")
 
             try:
+                # Helper function to safely update status message (text or photo caption)
+                async def _safe_edit(text: str):
+                    try:
+                        # Use task_ctx.status_msg (the message we sent above)
+                        if task_ctx.status_msg.photo:
+                            await task_ctx.status_msg.edit_caption(
+                                caption=text,
+                                parse_mode=enums.ParseMode.HTML,
+                                reply_markup=keyboard(task_ctx.task_id)
+                            )
+                        else:
+                            await task_ctx.status_msg.edit_text(
+                                text=text,
+                                parse_mode=enums.ParseMode.HTML,
+                                reply_markup=keyboard(task_ctx.task_id)
+                            )
+                    except Exception as edit_err:
+                        if "message is not modified" not in str(edit_err).lower():
+                            log.debug(f"Safe edit failed: {edit_err}")
+
                 # Get Gist URL from message
                 gist_url = message.text.strip() if message.text else ""
 
@@ -1671,13 +1691,13 @@ async def handle_url(client: Client, message: Message):
                         photo=thumb_path,
                         caption=status_text,
                         parse_mode=enums.ParseMode.HTML,
-                        reply_markup=keyboard()
+                        reply_markup=keyboard(task_ctx.task_id)
                     )
                 else:
                     status_msg = await message.reply_text(
                         status_text,
                         parse_mode=enums.ParseMode.HTML,
-                        reply_markup=keyboard()
+                        reply_markup=keyboard(task_ctx.task_id)
                     )
 
                 task_ctx.status_msg = status_msg
