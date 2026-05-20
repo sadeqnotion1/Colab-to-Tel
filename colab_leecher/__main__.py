@@ -1,7 +1,7 @@
 ﻿# /content/Telegram-Leecher/colab_leecher/__main__.py
 
 from . import aliases  # registers /mirror,/leech,/ytdl,/count,/del,/stats
-import logging, os
+import logging, os, math
 import asyncio
 import re # Import regex module
 import aiohttp # Import aiohttp
@@ -1753,27 +1753,67 @@ async def handle_url(client: Client, message: Message):
                 # Create downloader instance
                 downloader = TikTokBulkDownloader(client, message, task_ctx)
 
-                # Fetch URLs from Gist
-                success, urls = await downloader.fetch_gist_urls(gist_url)
+                # Fetch URLs from Gist (or use pre-split chunk)
+                chunk = task_ctx.metadata.get('tiktok_chunk')
+                if chunk:
+                    urls = chunk
+                    is_subtask = True
+                    log.info(f"TikTok sub-task {task_ctx.get_short_id()} starting with {len(urls)} URLs")
+                else:
+                    is_subtask = False
+                    success, urls = await downloader.fetch_gist_urls(gist_url)
+                    if not success or not urls:
+                        await _safe_edit(
+                            "<b>TikTok Bulk Download Failed</b>\n\n"
+                            "Could not fetch TikTok URLs from the gist."
+                        )
+                        return
 
-                if not success or not urls:
-                    await _safe_edit(
-                        "<b>TikTok Bulk Download Failed</b>\n\n"
-                        "Could not fetch TikTok URLs from the gist.\n"
-                        "Please verify:\n"
-                        "• You provided a RAW gist URL\n"
-                        "• The gist contains valid TikTok URLs\n"
-                        "• Each URL is on a separate line"
-                    )
-                    # Cleanup: Remove from user_tasks on failure
-                    async with user_tasks_lock:
-                        if user_id in user_tasks:
-                            del user_tasks[user_id]
-                    return
+                    # === NEW: PARALLEL SPLITTING LOGIC ===
+                    # Only split if it's the original parent task and has many URLs
+                    worker_limit = TASK_QUEUE.get_worker_limit()
+                    # Split if URLs > 30 and we can have at least 2 workers
+                    if not is_subtask and len(urls) >= 30 and worker_limit > 1:
+                        num_workers = min(worker_limit, math.ceil(len(urls) / 20))
+                        
+                        # Split URLs into chunks
+                        avg = len(urls) // num_workers
+                        rem = len(urls) % num_workers
+                        chunks = []
+                        start = 0
+                        for i in range(num_workers):
+                            end = start + avg + (1 if i < rem else 0)
+                            chunks.append(urls[start:end])
+                            start = end
+                            
+                        log.info(f"Splitting TikTok Bulk ({len(urls)} URLs) into {num_workers} parallel workers")
+                        await _safe_edit(f"🚀 <b>Turbo Mode:</b> Splitting work into {num_workers} parallel workers...")
+                        await asyncio.sleep(1.5)
+                        
+                        for i, chunk_urls in enumerate(chunks):
+                            # Create sub-task context
+                            sub_ctx = create_task_context(user_id, message.chat.id, mode="leech")
+                            sub_ctx.service_type = "tiktokbulk"
+                            sub_ctx.metadata['tiktok_chunk'] = chunk_urls
+                            sub_ctx.messages.download_name = f"{task_ctx.messages.download_name or 'TikTok'}_Worker{i+1}"
+                            
+                            # Launch sub-task
+                            TASK_QUEUE.create_background_task(
+                                run_parallel_task(client, message, sub_ctx),
+                                name=f"tiktok-worker-{sub_ctx.get_short_id()}"
+                            )
+                        
+                        # Parent task is done spawning
+                        await _safe_edit(f"✅ Created {num_workers} parallel workers. Tracking progress in dashboard.")
+                        await asyncio.sleep(2)
+                        return
+                    # === END SPLITTING ===
 
                 # CRITICAL: Add task to TASK_QUEUE for dashboard tracking
-                await TASK_QUEUE.add_task(task_ctx)
-                log.info(f"TikTok bulk task {task_ctx.get_short_id()} added to TASK_QUEUE")
+                # (Sub-tasks already registered via run_parallel_task)
+                if not is_subtask:
+                    await TASK_QUEUE.add_task(task_ctx)
+                    log.info(f"TikTok bulk task {task_ctx.get_short_id()} added to TASK_QUEUE")
 
                 # Wrap entire download process in try/finally for proper cleanup
                 try:
