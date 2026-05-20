@@ -138,3 +138,8 @@ tests/debug/*.py
 docs/_build/
 site/
 dashboard_debug.txt
+
+archive/
+*.session*
+*.log
+

@@ -1,3 +1,0 @@
-﻿No diffstat was captured during the initial dry-run revert preview.
-Refer to revert-preview.txt for staged rollback scope.
-

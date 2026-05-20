@@ -1,7 +1,0 @@
-﻿decision_time_utc=2026-02-27T11:14:24.8512590Z
-restore_time_utc=2026-02-27T11:14:33.0394311Z
-elapsed_minutes=0.14
-rollback_preview_ok=True
-rollback_error=none
-rollback_target_sha=d47bab47f269b2a4238d63826d39b6399ab31653
-tabletop_revalidation_log=docs/operations/evidence/20260227-111424/tabletop-log.txt

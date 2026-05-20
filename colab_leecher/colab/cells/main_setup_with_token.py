@@ -83,7 +83,11 @@ def Loading():
         black = (black + 2) % 75
         white = (white -1) if white != 0 else 37
         time.sleep(0.5)
-    clear_output()
+    # Only clear if everything is fine, otherwise keep logs for debugging
+    if setup_ok:
+        clear_output()
+    else:
+        print("\n")
 
 audio_url = "https://raw.githubusercontent.com/KoboldAI/KoboldAI-Client/main/colab/silence.m4a"
 audio_thread = Thread(target=keep_alive, args=(audio_url,))
@@ -106,7 +110,7 @@ if isinstance(DUMP_ID, int) and DUMP_ID != 0:
         DUMP_ID = n_dump
 
 # Repository setup
-repo_path = "/content/Telegram-Leecher"
+repo_path = "/content/Colab-to-Tel"
 colab_dir_path = os.path.join(repo_path, "colab_leecher")
 main_script_path = os.path.join(colab_dir_path, "__main__.py")
 requirements_file = os.path.join(repo_path, "requirements.txt")
@@ -124,8 +128,8 @@ if valid_creds and ipython:
 
     # Git clone or pull with token support
     github_user = "theSadeQ"
-    repository_name = "Telegram-Leecher"
-    branch_name = "feature/multi-task-parallel"
+    repository_name = "Colab-to-Tel"
+    branch_name = "master"
 
     # Build clone URL with token if provided
     if GITHUB_TOKEN and GITHUB_TOKEN.strip():

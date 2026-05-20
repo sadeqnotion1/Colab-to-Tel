@@ -90,7 +90,11 @@ def Loading():
         black = (black + 2) % 75
         white = (white -1) if white != 0 else 37
         time.sleep(2)
-    clear_output()
+    # Only clear if everything is fine, otherwise keep logs for debugging
+    if setup_ok:
+        clear_output()
+    else:
+        print("\n")
 
 audio_url    = "https://raw.githubusercontent.com/KoboldAI/KoboldAI-Client/main/colab/silence.m4a"
 audio_thread = Thread(target=keep_alive, args=(audio_url,))
@@ -115,7 +119,7 @@ else:
      if valid_creds: log.error("DUMP_ID missing/invalid."); valid_creds = False; Working = False
 
 # --- Environment Setup ---
-repo_name = "Telegram-Leecher"
+repo_name = "Colab-to-Tel"
 repo_path = f"/content/{repo_name}"
 colab_dir_path = os.path.join(repo_path, "colab_leecher")
 main_script_path = os.path.join(colab_dir_path, "__main__.py")
@@ -134,8 +138,8 @@ if valid_creds and ipython:
      if not os.path.exists(repo_path):
           log.info(f"Repository not found at {repo_path}. Cloning repo...")
           github_user = "theSadeQ"
-          repository_name = "Telegram-Leecher"
-          branch_name = "feature/multi-task-parallel"
+          repository_name = "Colab-to-Tel"
+          branch_name = "master"
           cmd_clone = f"git clone -b {branch_name} https://github.com/{github_user}/{repository_name}"
           proc_clone = subprocess.run(cmd_clone, shell=True, capture_output=True, text=True)
           if proc_clone.returncode != 0: log.error(f"Git clone failed:\n{proc_clone.stderr}"); Working = False
@@ -151,7 +155,7 @@ if valid_creds and ipython:
           else: log.info("OS packages checked/installed.")
 
           log.info("Installing Mindvalley downloader dependencies...")
-          cmd_mindvalley = "bash /content/Telegram-Leecher/install_mindvalley_deps.sh"
+          cmd_mindvalley = f"bash {repo_path}/install_mindvalley_deps.sh"
           proc_mindvalley = subprocess.run(cmd_mindvalley, shell=True, capture_output=True, text=True)
           if proc_mindvalley.returncode != 0:
               log.warning(f"Mindvalley deps install issues:\n{proc_mindvalley.stderr}")

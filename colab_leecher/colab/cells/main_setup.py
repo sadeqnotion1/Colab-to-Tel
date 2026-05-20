@@ -46,7 +46,10 @@ print(banner)
 def Loading():
     spinner = ['/', '-', '\\', '|']; i = 0
     while Working: print("\r" + f"Preparing Environment... {spinner[i % len(spinner)]}", end=""); i += 1; time.sleep(0.2)
-    clear_output()
+    if setup_ok:
+        clear_output()
+    else:
+        print("\n")
 
 
 _Thread = Thread(target=Loading, name="Prepare", args=())
@@ -69,7 +72,7 @@ else:
 
 # --- Environment Setup ---
 # --- MODIFICATION: Use correct repository name for path ---
-repo_name = "Telegram-Leecher" # Assuming this is the folder name created by clone
+repo_name = "Colab-to-Tel" # Assuming this is the folder name created by clone
 repo_path = f"/content/{repo_name}"
 # --- END MODIFICATION ---
 # --- CORRECTED PATH BASED ON IMAGE ---
@@ -91,7 +94,7 @@ if valid_creds and ipython:
      if not os.path.exists(repo_path):
           log.info(f"Repository not found at {repo_path}. Cloning YOUR repo...")
           # --- MODIFICATION: Correct clone URL ---
-          cmd_clone = "git clone https://github.com/theSadeQ/Telegram-Leecher"
+          cmd_clone = "git clone https://github.com/theSadeQ/Colab-to-Tel"
           # --- END MODIFICATION ---
           proc_clone = subprocess.run(cmd_clone, shell=True, capture_output=True, text=True)
           if proc_clone.returncode != 0: log.error(f"Git clone failed:\n{proc_clone.stderr}"); Working = False

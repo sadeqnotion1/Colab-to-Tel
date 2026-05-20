@@ -1,5 +1,0 @@
-asyncio
-opencv-python
-tgcrypto
-uvloop
-sabyenc

@@ -105,7 +105,11 @@ def Loading():
         black = (black + 2) % 75
         white = (white -1) if white != 0 else 37
         time.sleep(2)
-    clear_output()
+    # Only clear if everything is fine, otherwise keep logs for debugging
+    if setup_ok:
+        clear_output()
+    else:
+        print("\n") # Just a newline to stop the spinner line
 
 audio_url    = "https://raw.githubusercontent.com/KoboldAI/KoboldAI-Client/main/colab/silence.m4a"
 audio_thread = Thread(target=keep_alive, args=(audio_url,))
