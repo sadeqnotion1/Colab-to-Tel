@@ -72,8 +72,8 @@ class SystemMetrics:
 @dataclass
 class TaskTransfer:
     """Per-task transfer statistics"""
-    down_bytes: int = 0
-    up_bytes: int = 0
+    down_bytes: List[int] = field(default_factory=lambda: [0])
+    up_bytes: List[int] = field(default_factory=lambda: [0])
     total_size: int = 0  # Total file size (for progress percentage and ETA)
     # List of successfully sent message objects (from Pyrogram)
     sent_file: List = field(default_factory=list)
@@ -86,8 +86,8 @@ class TaskTransfer:
 
     def reset(self):
         """Reset transfer statistics"""
-        self.down_bytes = 0
-        self.up_bytes = 0
+        self.down_bytes = [0]
+        self.up_bytes = [0]
         self.total_size = 0
         self.sent_file = []
         self.sent_file_names = []
@@ -100,19 +100,25 @@ class TaskTransfer:
         size_to_use = total_size if total_size > 0 else self.total_size
         if size_to_use == 0:
             return 0.0
-        return min(100.0, (self.down_bytes / size_to_use) * 100)
+        
+        # Handle both int and list for down_bytes
+        current_bytes = sum(self.down_bytes) if isinstance(self.down_bytes, list) else self.down_bytes
+        return min(100.0, (current_bytes / size_to_use) * 100)
 
     def get_eta(self) -> float:
         """Calculate ETA in seconds based on current speed"""
-        if self.total_size == 0 or self.down_bytes == 0:
+        # Handle both int and list for down_bytes
+        current_bytes = sum(self.down_bytes) if isinstance(self.down_bytes, list) else self.down_bytes
+        
+        if self.total_size == 0 or current_bytes == 0:
             return 0.0
 
         elapsed = time.time() - self.start_time
         if elapsed < 0.01:
             return 0.0
 
-        speed = self.down_bytes / elapsed  # bytes per second
-        remaining_bytes = self.total_size - self.down_bytes
+        speed = current_bytes / elapsed  # bytes per second
+        remaining_bytes = self.total_size - current_bytes
 
         if speed > 0:
             return remaining_bytes / speed
@@ -125,7 +131,11 @@ class TaskTransfer:
         if elapsed < 0.01:  # Less than 10ms
             return "0 B/s"
 
-        total_bytes = max(self.down_bytes, self.up_bytes)
+        # Handle both int and list
+        d_bytes = sum(self.down_bytes) if isinstance(self.down_bytes, list) else self.down_bytes
+        u_bytes = sum(self.up_bytes) if isinstance(self.up_bytes, list) else self.up_bytes
+        
+        total_bytes = max(d_bytes, u_bytes)
         speed = total_bytes / elapsed
 
         # Format speed

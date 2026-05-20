@@ -333,7 +333,10 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
     else:
         # NEW: Record successful upload size in per-task transfer object if available, otherwise global
         try:
-            transfer_obj.up_bytes.append(file_size)
+            if isinstance(transfer_obj.up_bytes, list):
+                transfer_obj.up_bytes.append(file_size)
+            else:
+                transfer_obj.up_bytes += file_size
         except AttributeError:
             log.warning(f"Could not record uploaded bytes {task_id_str}, transfer object might be missing attributes.")
         except Exception as report_err:

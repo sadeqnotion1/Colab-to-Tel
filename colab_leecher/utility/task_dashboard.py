@@ -16,7 +16,7 @@ from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 from .. import OWNER, colab_bot
 from .task_context import TASK_QUEUE
 from .helper import getTime
-from .variables import Paths
+from .variables import Paths, BOT
 # FIX: import shared utilities instead of duplicating them locally
 from .ui_components import SizeFormatter, ProgressBar
 from .ui_copy import build_cancel_task_button_label, summarize_task_name

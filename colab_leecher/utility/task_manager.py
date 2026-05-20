@@ -863,17 +863,11 @@ async def taskScheduler(task_ctx: TaskContext):
                             f"Failed to send photo (MD5 or other error): {photo_err}. Sending text-only message.")
                         _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + "\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()) if task_ctx else keyboard())
             elif is_parallel_mode and _msg.status_msg:
-                # Delete individual status message if we're in parallel mode
-                # (using shared dashboard)
-                try:
-                    log.info(
-                        f"Parallel mode detected - deleting individual status message for task {task_ctx.get_short_id() if task_ctx else 'N/A'}"
-                    )
-                    await _msg.status_msg.delete()
-                    _msg.status_msg = None  # Clear reference
-                except Exception as del_err:
-                    log.warning(
-                        f"Failed to delete individual status message: {del_err}")
+                # In parallel mode, we keep the individual status message (e.g., the "Processing..." prompt)
+                # so it can be used for final logs/summary by SendLogs.
+                log.info(
+                    f"Parallel mode detected - keeping existing status message for task {task_ctx.get_short_id() if task_ctx else 'N/A'}"
+                )
             else:
                 # Status message already exists (shared message for parallel
                 # tasks)
