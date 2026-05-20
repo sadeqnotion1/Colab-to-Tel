@@ -391,7 +391,8 @@ class TikTokBulkDownloader(BaseDownloader):
 
     async def download_bulk(self, urls: List[str], size_limit: int = None) -> Tuple[bool, str, List[str]]:
         """
-        Download multiple TikTok videos in parallel until size limit is reached
+        Download multiple TikTok videos in parallel until size limit is reached.
+        Enforces a hard limit to stay under the specified size.
 
         Args:
             urls: List of TikTok URLs to download
@@ -401,60 +402,77 @@ class TikTokBulkDownloader(BaseDownloader):
             Tuple of (overall_success: bool, summary_message: str, remaining_urls: List[str])
         """
         try:
+            # Use 1GB as hard limit if not specified or if larger than 1GB
+            # 1GB = 1024 * 1024 * 1024 bytes
+            HARD_LIMIT = 1024 * 1024 * 1024
+            if size_limit is None or size_limit > HARD_LIMIT:
+                size_limit = HARD_LIMIT
+                log.info(f"Enforcing 1GB hard limit for TikTok bulk download.")
+
             self.urls = urls
             total_videos = len(urls)
             remaining_urls = []
             self.batch_user_stats = {} # Track video count per user in THIS batch
 
-            log.info(f"Starting bulk download of up to {total_videos} TikTok videos (Limit: {sizeUnit(size_limit) if size_limit else 'None'})")
+            log.info(f"Starting bulk download of up to {total_videos} TikTok videos (Hard Limit: {sizeUnit(size_limit)})")
             self.start_progress_tracking("video")
 
             # Create semaphore to limit concurrent downloads
             semaphore = asyncio.Semaphore(self.max_concurrent)
 
-            # To handle size limit effectively with parallel downloads, we'll process in chunks
-            # of max_concurrent and check size after each chunk
             processed_count = 0
             current_batch_size = 0
-            
-            # Reset session successes for this specific call's summary
             session_successful = []
             
-            for i in range(0, total_videos, self.max_concurrent):
-                chunk_urls = urls[i:i + self.max_concurrent]
-                
-                # Check if we've already hit the size limit before starting next chunk
-                if size_limit and current_batch_size >= size_limit:
-                    remaining_urls = urls[i:]
-                    log.info(f"Size limit reached before batch {i//self.max_concurrent + 1}. {len(remaining_urls)} URLs remaining.")
-                    break
-
-                # Create tasks for this chunk
-                tasks = []
-                for j, url in enumerate(chunk_urls):
-                    video_num = i + j + 1
+            # To handle hard limit accurately, we'll use a task queue approach
+            # instead of fixed chunks, allowing us to stop as soon as we hit the limit
+            
+            pending_urls = urls.copy()
+            active_tasks = set()
+            
+            while (pending_urls or active_tasks) and not (self.task_ctx and self.task_ctx.is_cancelled):
+                # Start new downloads if we have room and haven't hit the limit
+                while len(active_tasks) < self.max_concurrent and pending_urls:
+                    # Check if we've already hit or exceeded the limit
+                    if current_batch_size >= size_limit:
+                        log.info(f"Hard size limit ({sizeUnit(size_limit)}) reached/exceeded. Stopping new downloads.")
+                        remaining_urls = pending_urls
+                        pending_urls = [] # Stop starting new ones
+                        break
+                    
+                    url = pending_urls.pop(0)
+                    video_num = total_videos - len(pending_urls) - len(active_tasks)
+                    
                     task = asyncio.create_task(
                         self._download_single_video(url, video_num, total_videos, semaphore)
                     )
-                    tasks.append(task)
+                    active_tasks.add(task)
 
-                # Wait for all tasks in this chunk to complete
-                # Using as_completed to update progress for EACH video as it finishes
-                for task in asyncio.as_completed(tasks):
+                if not active_tasks:
+                    break
+
+                # Wait for at least one task to complete
+                done, active_tasks = await asyncio.wait(
+                    active_tasks, 
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+
+                for task in done:
                     result = await task
                     processed_count += 1
                     
                     if result['success']:
+                        # Check if this new file would put us over the limit
+                        # Even if it does, we keep it since it's already downloaded,
+                        # but we won't start any more.
+                        current_batch_size += result['file_size']
                         self.successful_downloads.append(result)
                         session_successful.append(result)
-                        current_batch_size += result['file_size']
                         
-                        # Extract username from file path to update stats
-                        # Path format: .../uploader/@uploader_...
+                        # Update user stats
                         try:
                             file_path = result['file_path']
                             parts = Path(file_path).parts
-                            # The uploader name is the parent folder of the file
                             if len(parts) >= 2:
                                 uploader = parts[-2]
                                 self.batch_user_stats[uploader] = self.batch_user_stats.get(uploader, 0) + 1
@@ -464,41 +482,37 @@ class TikTokBulkDownloader(BaseDownloader):
                         self.failed_downloads.append(result)
 
                     # Update progress for EACH video
-                    percentage = (processed_count / total_videos) * 90  # Reserve 10% for zipping
+                    percentage = (processed_count / total_videos) * 90
                     status_text = f"{processed_count}/{total_videos} videos ({len(session_successful)} OK, {len(self.failed_downloads)} failed)"
-                    if size_limit:
-                        status_text += f" | {sizeUnit(current_batch_size)}/{sizeUnit(size_limit)}"
+                    status_text += f" | {sizeUnit(current_batch_size)}/{sizeUnit(size_limit)}"
                     
-                    # Force update to bypass parallel mode skip and show bar in Telegram
                     await self.update_progress_bar(percentage, status_text, engine="TikTok Bulk", force_update=True)
 
-                # Check if task was cancelled by user after chunk
-                if self.task_ctx and self.task_ctx.is_cancelled:
-                    remaining_urls = urls[processed_count:]
-                    break
+                # Check if we just hit the limit after these tasks finished
+                if current_batch_size >= size_limit and pending_urls:
+                    log.info(f"Hard size limit ({sizeUnit(size_limit)}) hit after task completion. Remaining: {len(pending_urls)}")
+                    remaining_urls.extend(pending_urls)
+                    pending_urls = []
 
-                # Check size limit after chunk
-                if size_limit and current_batch_size >= size_limit:
-                    remaining_urls = urls[processed_count:]
-                    log.info(f"Size limit reached after batch. {len(remaining_urls)} URLs remaining.")
-                    break
+            # Summary logic...
+            if self.task_ctx and self.task_ctx.is_cancelled:
+                remaining_urls.extend(pending_urls)
 
-            # Summary
             success_count = len(session_successful)
             fail_count = len(self.failed_downloads)
 
-            log.info(f"Batch download complete: {success_count} succeeded in this batch, {fail_count} total failed")
+            log.info(f"Batch download complete: {success_count} succeeded, {fail_count} failed")
 
             if success_count == 0 and not remaining_urls:
                 await self.update_progress_bar(100.0, "❌ All downloads failed", engine="TikTok Bulk")
                 return False, "All downloads failed", []
 
-            # Calculate total size of this batch
             batch_total_size = sum(d['file_size'] for d in session_successful)
             summary = f"✅ Downloaded {success_count} videos ({sizeUnit(batch_total_size)})"
-
             if fail_count > 0:
                 summary += f"\n⚠️ {fail_count} failed total"
+            if remaining_urls:
+                summary += f"\n⏸ {len(remaining_urls)} remaining (Limit reached)"
 
             await self.update_progress_bar(90.0, summary, engine="TikTok Bulk")
 
@@ -575,11 +589,11 @@ class TikTokBulkDownloader(BaseDownloader):
 
             # Use the existing archive() function from converters.py
             # Pass the download directory to archive all files in it
-            # CRITICAL: Use 800MB split size for safety
+            # Use 1GB split size for consistent policy
             archive_path, archive_size = await archive(
                 path=self.download_dir,
                 remove=False,  # Don't remove source files
-                max_split_size_bytes=800*1024*1024,  # 800MB per part
+                max_split_size_bytes=1024*1024*1024,  # 1GB per part
                 task_ctx=self.task_ctx
             )
 

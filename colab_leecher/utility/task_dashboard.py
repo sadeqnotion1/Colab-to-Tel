@@ -28,8 +28,10 @@ BOT_DEBUG = os.getenv("BOT_DEBUG", "0") == "1"
 log = logging.getLogger(__name__)
 
 
-def _format_bytes(x: int) -> str:
+def _format_bytes(x) -> str:
     """Thin wrapper so existing callers inside this file keep working."""
+    if isinstance(x, list):
+        x = sum(x)
     return SizeFormatter.format_bytes(x)
 
 
@@ -163,15 +165,18 @@ async def update_summary_dashboard(
                 filename = summarize_task_name(raw_name, None, max_length=30)
                 
                 percentage = 0.0
-                if task_ctx.transfer.up_bytes > 0 and task_ctx.transfer.total_size > 0:
-                    percentage = (task_ctx.transfer.up_bytes / task_ctx.transfer.total_size) * 100
-                elif task_ctx.transfer.down_bytes > 0 and task_ctx.transfer.total_size > 0:
+                u_bytes = sum(task_ctx.transfer.up_bytes) if isinstance(task_ctx.transfer.up_bytes, list) else task_ctx.transfer.up_bytes
+                d_bytes = sum(task_ctx.transfer.down_bytes) if isinstance(task_ctx.transfer.down_bytes, list) else task_ctx.transfer.down_bytes
+
+                if u_bytes > 0 and task_ctx.transfer.total_size > 0:
+                    percentage = (u_bytes / task_ctx.transfer.total_size) * 100
+                elif d_bytes > 0 and task_ctx.transfer.total_size > 0:
                     percentage = task_ctx.transfer.get_percentage()
                 
                 # Use standard bar for manager view
                 bar = ProgressBar.generate(percentage, 8, "ascii")
                 
-                line_icon = "⬆️" if task_ctx.transfer.up_bytes > 0 else "⬇️"
+                line_icon = "⬆️" if u_bytes > 0 else "⬇️"
                 summary_text += f"<b>├ {idx}. {line_icon} {escape(filename)}</b>\n"
                 summary_text += f"<b>│</b>  <code>[{bar}] {percentage:.1f}%</code>\n"
             
@@ -193,12 +198,15 @@ async def update_summary_dashboard(
             summary_text += f"<code>ID: {escape(short_id)}</code>\n\n"
 
             # Calculate progress
-            if task_ctx.transfer.up_bytes > 0:
+            u_bytes = sum(task_ctx.transfer.up_bytes) if isinstance(task_ctx.transfer.up_bytes, list) else task_ctx.transfer.up_bytes
+            d_bytes = sum(task_ctx.transfer.down_bytes) if isinstance(task_ctx.transfer.down_bytes, list) else task_ctx.transfer.down_bytes
+
+            if u_bytes > 0:
                 speed = task_ctx.transfer.get_speed()
                 uploaded = _format_bytes(task_ctx.transfer.up_bytes)
                 percentage = 0.0
                 if task_ctx.transfer.total_size > 0:
-                    percentage = min(100.0, (task_ctx.transfer.up_bytes / task_ctx.transfer.total_size) * 100)
+                    percentage = min(100.0, (u_bytes / task_ctx.transfer.total_size) * 100)
                     total = _format_bytes(task_ctx.transfer.total_size)
                 else:
                     total = "Unknown"
@@ -212,7 +220,7 @@ async def update_summary_dashboard(
                     f"<b>└📦 Total »</b> <code>{total}</code>"
                 )
 
-            elif task_ctx.transfer.down_bytes > 0:
+            elif d_bytes > 0:
                 # Check for archiving/extracting
                 is_proc = False
                 status_label = "Downloading ⬇️"

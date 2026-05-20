@@ -1729,7 +1729,8 @@ async def handle_url(client: Client, message: Message):
 
                 # Wrap entire download process in try/finally for proper cleanup
                 try:
-                    TARGET_BATCH_SIZE = 800 * 1024 * 1024  # 800MB target (safer than 950MB)
+                    # Default batch size target: 1GB (Enforced as hard limit in downloader)
+                    TARGET_BATCH_SIZE = 1024 * 1024 * 1024 
                     total_urls = len(urls)
                     current_urls = urls
                     part_num = 1

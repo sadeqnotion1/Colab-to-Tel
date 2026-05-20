@@ -1858,7 +1858,13 @@ async def status_bar(
                 elif ' B' in done:
                     done_bytes = int(float(done.replace(' B', '').strip()))
 
-                task_ctx.transfer.down_bytes = done_bytes
+                # Update appropriate bytes based on engine (Upload vs Download)
+                is_upload = any(x in engine.lower() for x in ["upload", "up", "mirror", "gdrive"])
+                
+                if is_upload:
+                    task_ctx.transfer.up_bytes = [done_bytes]
+                else:
+                    task_ctx.transfer.down_bytes = [done_bytes]
 
                 # Parse total_size string to bytes for dashboard display
                 total_bytes = 0
@@ -1900,8 +1906,31 @@ async def status_bar(
 
                 # Also update speed for dashboard display
                 task_ctx.transfer.last_speed = speed
+                
+                # Parse speed string back to bytes for aggregate calculations
+                try:
+                    if speed and speed != "N/A":
+                        speed_parts = speed.split()[0]
+                        unit = speed.split()[1].replace('/s', '')
+                        speed_val = float(speed_parts)
+                        
+                        multipliers = {'B': 1, 'KiB': 1024, 'MiB': 1024**2, 'GiB': 1024**3}
+                        # Also handle KB, MB, GB from other downloaders
+                        multipliers.update({'KB': 1024, 'MB': 1024**2, 'GB': 1024**3})
+                        
+                        task_ctx.transfer.last_speed_bytes = speed_val * multipliers.get(unit, 1)
+                    else:
+                        task_ctx.transfer.last_speed_bytes = 0.0
+                except (IndexError, ValueError):
+                    task_ctx.transfer.last_speed_bytes = 0.0
             except (ValueError, AttributeError) as e:
-                task_ctx.transfer.down_bytes = 1  # Set to non-zero to indicate download started
+                # Use engine to decide which one to set to 1
+                is_upload = any(x in engine.lower() for x in ["upload", "up", "mirror", "gdrive"])
+                if is_upload:
+                    task_ctx.transfer.up_bytes = [1]
+                else:
+                    task_ctx.transfer.down_bytes = [1]
+                
                 log.warning(
                     f"Failed to parse download size '{done}' or total size '{total_size}': {e}")
             log.debug(

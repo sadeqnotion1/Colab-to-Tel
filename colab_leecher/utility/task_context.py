@@ -83,6 +83,7 @@ class TaskTransfer:
     start_time: float = field(default_factory=lambda: time.time())
     # Last recorded download/upload speed (for dashboard display)
     last_speed: str = "0 B/s"
+    last_speed_bytes: float = 0.0
 
     def reset(self):
         """Reset transfer statistics"""
@@ -95,20 +96,24 @@ class TaskTransfer:
         self.start_time = time.time()
         self.last_speed = "0 B/s"
 
+    def get_current_bytes(self) -> int:
+        """Get current transferred bytes (max of down or up)"""
+        d_bytes = sum(self.down_bytes) if isinstance(self.down_bytes, list) else self.down_bytes
+        u_bytes = sum(self.up_bytes) if isinstance(self.up_bytes, list) else self.up_bytes
+        return max(d_bytes, u_bytes)
+
     def get_percentage(self, total_size: int = 0) -> float:
-        """Calculate download percentage"""
+        """Calculate transfer percentage"""
         size_to_use = total_size if total_size > 0 else self.total_size
         if size_to_use == 0:
             return 0.0
         
-        # Handle both int and list for down_bytes
-        current_bytes = sum(self.down_bytes) if isinstance(self.down_bytes, list) else self.down_bytes
+        current_bytes = self.get_current_bytes()
         return min(100.0, (current_bytes / size_to_use) * 100)
 
     def get_eta(self) -> float:
         """Calculate ETA in seconds based on current speed"""
-        # Handle both int and list for down_bytes
-        current_bytes = sum(self.down_bytes) if isinstance(self.down_bytes, list) else self.down_bytes
+        current_bytes = self.get_current_bytes()
         
         if self.total_size == 0 or current_bytes == 0:
             return 0.0
@@ -131,12 +136,8 @@ class TaskTransfer:
         if elapsed < 0.01:  # Less than 10ms
             return "0 B/s"
 
-        # Handle both int and list
-        d_bytes = sum(self.down_bytes) if isinstance(self.down_bytes, list) else self.down_bytes
-        u_bytes = sum(self.up_bytes) if isinstance(self.up_bytes, list) else self.up_bytes
-        
-        total_bytes = max(d_bytes, u_bytes)
-        speed = total_bytes / elapsed
+        current_bytes = self.get_current_bytes()
+        speed = current_bytes / elapsed
 
         # Format speed
         if speed < 1024:

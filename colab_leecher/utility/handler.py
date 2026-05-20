@@ -736,8 +736,8 @@ async def Zip_Handler(
     log.info(f"Zip Handler started for: {down_path}")
     try:
         # Convert is_split boolean to max_split_size_bytes
-        # Default split size: 2000MB (2GB) if splitting enabled, 0 if not
-        max_split_size = (2000 * 1024 * 1024) if is_split else 0
+        # Default split size: 1000MB (1GB) if splitting enabled, 0 if not
+        max_split_size = (1000 * 1024 * 1024) if is_split else 0
         # Fixed parameter order
         await archive(down_path, remove, max_split_size, task_ctx)
         # Check if archive function set _task_error

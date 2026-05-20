@@ -270,6 +270,13 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
     cmd_args = ["7z", "a", compression_level, archive_format_param]
     if pswd_arg:
         cmd_args.append(pswd_arg)
+    
+    # NEW: Add splitting support if max_split_size_bytes is provided
+    if max_split_size_bytes and max_split_size_bytes > 0:
+        # Convert to string with 'b' suffix for bytes
+        cmd_args.append(f"-v{max_split_size_bytes}b")
+        log.info(f"Splitting enabled: {sizeUnit(max_split_size_bytes)} per part.")
+
     cmd_args.extend(["-bsp1", archive_out_path, path])
     masked_cmd = ["***" if arg.startswith("-p") else arg for arg in cmd_args]
     log.info(f"Running 7z command: {' '.join(masked_cmd)}")
@@ -842,8 +849,8 @@ async def sizeChecker(
         log.info("sizeChecker() using global state (single-task mode)")
 
     log.info(f"sizeChecker started for: {ospath.basename(file_path)}")
-    max_size_bytes = 1900 * 1024 * 1024
-    target_video_split_mb = 1500
+    max_size_bytes = 1000 * 1024 * 1024
+    target_video_split_mb = 1000
 
     file_size = 0
     try:
@@ -2203,7 +2210,7 @@ async def splitVideo(
         return False
 
     # --- Calculate Segment Duration ---
-    MAX_SPLIT_SIZE_BYTES = 1.5 * 1024 * 1024 * 1024  # 1.5 GiB
+    MAX_SPLIT_SIZE_BYTES = 1000 * 1024 * 1024  # 1000 MiB (Strict < 1GB)
 
     # Priority 1: If file size requires splitting, use that calculation
     if total_file_size > MAX_SPLIT_SIZE_BYTES:
