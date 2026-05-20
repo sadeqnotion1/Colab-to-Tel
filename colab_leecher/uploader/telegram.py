@@ -69,6 +69,12 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
 
     # --- Thumbnail, duration, dimension, caption logic ---
     thumb_path = None # Initialize to None, will be set later
+    
+    # PRIORITY #1: Custom Thumbnail set by user via /setthumb or by sending a photo
+    if BOT.Setting.thumbnail and ospath.exists(Paths.THMB_PATH):
+        thumb_path = Paths.THMB_PATH
+        log.info(f"Using custom thumbnail for upload {task_id_str}: {thumb_path}")
+
     duration = 0
     width = 0
     height = 0
@@ -81,7 +87,8 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
         # Check if it's a split file part
         if helper.is_split_file(actual_upload_filename):
             log.info(f"Split file detected: {actual_upload_filename}, using default thumbnail and duration 0.")
-            thumb_path = Paths.DEFAULT_HERO # Use default thumb path initially
+            if not thumb_path:
+                thumb_path = Paths.DEFAULT_HERO # Use default thumb path initially if no custom
             duration = 0
         else:
             # Not a split file, try extracting duration and thumbnail separately
@@ -93,21 +100,28 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
             height = metadata["height"]
             log.debug(f"Metadata extraction complete. Duration: {duration}, WxH: {width}x{height}")
 
-            log.debug(f"Attempting thumbnail generation for video: {actual_upload_filename}")
-            # Define a temporary directory for thumbs (ensure it exists and is writable)
-            # Using /tmp is common, but adjust if needed for your environment
-            temp_thumb_dir = "/tmp/colab_leecher_thumbs"
-            thumb_path = await helper.get_video_thumbnail(file_path, output_dir=temp_thumb_dir) # Call new thumb function
-            log.debug(f"Thumbnail generation attempt complete. Raw thumb path: {thumb_path}")
-
-            # If thumb generation failed, fall back to default path
+            # Only generate video thumbnail if no custom thumbnail is set
             if not thumb_path:
-                log.warning(f"Thumbnail generation failed for {actual_upload_filename}, using default path.")
-                thumb_path = Paths.DEFAULT_HERO
+                log.debug(f"Attempting thumbnail generation for video: {actual_upload_filename}")
+                # Define a temporary directory for thumbs (ensure it exists and is writable)
+                # Using /tmp is common, but adjust if needed for your environment
+                temp_thumb_dir = "/tmp/colab_leecher_thumbs"
+                thumb_path = await helper.get_video_thumbnail(file_path, output_dir=temp_thumb_dir) # Call new thumb function
+                log.debug(f"Thumbnail generation attempt complete. Raw thumb path: {thumb_path}")
+
+                # If thumb generation failed, fall back to default path
+                if not thumb_path:
+                    log.warning(f"Thumbnail generation failed for {actual_upload_filename}, using default path.")
+                    thumb_path = Paths.DEFAULT_HERO
+            else:
+                log.info(f"Skipping video thumbnail generation as custom thumbnail is already set: {thumb_path}")
             
     # --- Logic for Photos (Thumb is the photo itself) ---
     elif is_photo:
-         thumb_path = file_path # Use the photo itself as the thumbnail for send_document fallback
+         # For photos, we usually prefer the photo itself as thumb, 
+         # unless a custom thumb is explicitly enabled and exists
+         if not thumb_path:
+            thumb_path = file_path # Use the photo itself as the thumbnail for send_document fallback
 
     # --- Common Thumbnail Processing & Final Validation (for Videos and Photos) ---
     # Applies conversion/validation if a thumb_path was determined above
