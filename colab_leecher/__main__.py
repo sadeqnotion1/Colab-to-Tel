@@ -2232,8 +2232,23 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
     log.info(f"Handling callback query: {query_data} from user {user_id}")
 
     try: # Main try block starts here
-        # === NEW: Handle Parallel Download Choice ===
-        if query_data.startswith("parallel_"):
+        # === NEW: Handle Dashboard Pagination ===
+        if query_data.startswith("dash_page:"):
+            await callback_query.answer()
+            try:
+                page_num = int(query_data.split(":")[1])
+                TASK_QUEUE.dashboard_page = page_num
+                from colab_leecher.utility.task_dashboard import force_update_summary
+                await force_update_summary(client)
+            except Exception as e:
+                log.error(f"Dashboard page update error: {e}")
+            return
+
+        if query_data == "dash_refresh":
+            await callback_query.answer("Refreshing Dashboard... 🔄")
+            from colab_leecher.utility.task_dashboard import force_update_summary
+            await force_update_summary(client)
+            return
             await callback_query.answer()  # Acknowledge
             parts = query_data.split(":", 1)
             if len(parts) != 2:

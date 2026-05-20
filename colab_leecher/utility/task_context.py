@@ -365,7 +365,9 @@ class TaskQueue:
         # Last rendered summary text (for no-op updates)
         self.last_summary_text: str = ""
         # Last keyboard signature (for no-op updates)
-        self.last_summary_keyboard_signature: str = ""
+        self.last_summary_keyboard_signature = ""
+        self.dashboard_page = 0  # 0: Global Manager, 1+: Specific Task Details
+
         self.last_summary_update: float = 0  # Last time summary was updated
         self.summary_update_interval: float = 5.0  # Update summary every 5 seconds
         # Minimum 1 second between forced updates (debounce)

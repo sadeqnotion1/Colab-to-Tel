@@ -127,25 +127,9 @@ async def update_summary_dashboard(
             return None
 
         # --- Build summary text ---
-        has_photo = False
-        if TASK_QUEUE.summary_msg and hasattr(
-                TASK_QUEUE.summary_msg, 'photo') and TASK_QUEUE.summary_msg.photo:
-            has_photo = True
-        elif not TASK_QUEUE.summary_msg:
-            first_task = next(iter(tasks.values()), None) if tasks else None
-            thumbnail_path = None
-            if first_task and hasattr(
-                    first_task, 'hero_image') and first_task.hero_image and os.path.exists(
-                    first_task.hero_image):
-                thumbnail_path = first_task.hero_image
-            elif os.path.exists(Paths.DEFAULT_HERO):
-                thumbnail_path = Paths.DEFAULT_HERO
-            if thumbnail_path:
-                has_photo = True
-
-        # Limits: Caption=1024, Text=4096. Reserve chars for header/footer.
-        CHAR_LIMIT = 900 if has_photo else 3800
-
+        header_icon = "🛠️" if TASK_QUEUE.dashboard_page == 0 else "📊"
+        header_title = "Global Manager" if TASK_QUEUE.dashboard_page == 0 else "Task Details"
+        
         # FIX: Build aggregate speed string for header
         total_speed_str = ""
         try:
@@ -155,155 +139,148 @@ async def update_summary_dashboard(
                 if raw and isinstance(raw, (int, float)) and raw > 0:
                     speed_values.append(raw)
             if speed_values:
-                total_speed_str = f"  \u26a1 <b>{SizeFormatter.format_speed(sum(speed_values))}</b>"
+                total_speed_str = f"  ⚡️ <b>{SizeFormatter.format_speed(sum(speed_values))}</b>"
         except Exception:
             pass
 
         header = (
-            f"<b>\U0001f680 Active Tasks</b> \u2022 <b>{len(tasks)}</b> running{total_speed_str}\n\n"
+            f"<b>{header_icon} {header_title}</b> \u2022 <b>{len(tasks)}</b> running{total_speed_str}\n\n"
         )
         summary_text = header
-        tasks_shown = 0
+        tasks_list = list(tasks.values())
+        total_pages = len(tasks_list) + 1 # Page 0 + one page per task
+        
+        # Ensure dashboard_page is within bounds
+        if TASK_QUEUE.dashboard_page >= total_pages:
+            TASK_QUEUE.dashboard_page = 0
 
-        for idx, (task_id, task_ctx) in enumerate(tasks.items(), 1):
+        if TASK_QUEUE.dashboard_page == 0:
+            # --- PAGE 0: GLOBAL MANAGER VIEW ---
+            summary_text += "<b>┌── Active Tasks Summary ──</b>\n"
+            for idx, task_ctx in enumerate(tasks_list, 1):
+                short_id = task_ctx.get_short_id()
+                raw_name = task_ctx.messages.download_name if task_ctx.messages else None
+                filename = summarize_task_name(raw_name, None, max_length=30)
+                
+                percentage = 0.0
+                if task_ctx.transfer.up_bytes > 0 and task_ctx.transfer.total_size > 0:
+                    percentage = (task_ctx.transfer.up_bytes / task_ctx.transfer.total_size) * 100
+                elif task_ctx.transfer.down_bytes > 0 and task_ctx.transfer.total_size > 0:
+                    percentage = task_ctx.transfer.get_percentage()
+                
+                # Use standard bar for manager view
+                bar = ProgressBar.generate(percentage, 8, "ascii")
+                
+                line_icon = "⬆️" if task_ctx.transfer.up_bytes > 0 else "⬇️"
+                summary_text += f"<b>├ {idx}. {line_icon} {escape(filename)}</b>\n"
+                summary_text += f"<b>│</b>  <code>[{bar}] {percentage:.1f}%</code>\n"
+            
+            summary_text += "<b>└── End of List ──</b>\n\n"
+            summary_text += f"<i>Use the buttons below to view details for each task.</i>"
+            
+        else:
+            # --- PAGE 1+: SPECIFIC TASK DETAIL VIEW ---
+            task_idx = TASK_QUEUE.dashboard_page - 1
+            task_ctx = tasks_list[task_idx]
             short_id = task_ctx.get_short_id()
-
+            
             source_url = task_ctx.source_urls[0] if task_ctx.source_urls else None
             raw_name = task_ctx.messages.download_name if task_ctx.messages else None
-            if not raw_name and source_url and (
-                "/play?" in source_url or "/play#" in source_url
-            ):
-                raw_name = "NZBCloud File"
-            filename = summarize_task_name(
-                raw_name,
-                source_url,
-                fallback="Unknown",
-                max_length=42,
-            )
+            filename = summarize_task_name(raw_name, source_url, max_length=42)
+            
+            # Use the new beautiful modern block style
+            summary_text += f"<b>Task: {escape(filename)}</b>\n"
+            summary_text += f"<code>ID: {escape(short_id)}</code>\n\n"
 
             # Calculate progress
             if task_ctx.transfer.up_bytes > 0:
-                speed = task_ctx.transfer.last_speed
-                if not speed or speed == "0 B/s":
-                    speed = task_ctx.transfer.get_speed()
-                uploaded_count = len(task_ctx.transfer.sent_file_names)
+                speed = task_ctx.transfer.get_speed()
                 uploaded = _format_bytes(task_ctx.transfer.up_bytes)
-
-                status_label = "\U0001f4e4 Uploading"
+                percentage = 0.0
                 if task_ctx.transfer.total_size > 0:
-                    percentage = min(
-                        100.0, (task_ctx.transfer.up_bytes / task_ctx.transfer.total_size) * 100)
+                    percentage = min(100.0, (task_ctx.transfer.up_bytes / task_ctx.transfer.total_size) * 100)
                     total = _format_bytes(task_ctx.transfer.total_size)
-                    progress_bar = _progress_bar(percentage, length=10)
-                    status_detail = f"{progress_bar} {percentage:.1f}%\n{uploaded}/{total} \u2022 {speed} \u2022 {uploaded_count} file(s)"
                 else:
-                    status_detail = f"{uploaded} \u2022 {speed} \u2022 {uploaded_count} file(s)"
+                    total = "Unknown"
+                
+                bar = "█" * int(percentage/5) + "▒" * (20 - int(percentage/5))
+                summary_text += (
+                    f"<b>┌「{bar}」 » {percentage:.1f}%</b>\n"
+                    f"<b>├⚡️ Speed »</b> <code>{escape(speed)}</code>\n"
+                    f"<b>├⚙️ Status »</b> <code>Uploading ⬆️</code>\n"
+                    f"<b>├✅ Done »</b> <code>{uploaded}</code>\n"
+                    f"<b>└📦 Total »</b> <code>{total}</code>"
+                )
 
             elif task_ctx.transfer.down_bytes > 0:
-                is_archiving = False
-                is_extracting = False
+                # Check for archiving/extracting
+                is_proc = False
+                status_label = "Downloading ⬇️"
                 if task_ctx.messages and task_ctx.messages.status_head:
-                    status_head_lower = task_ctx.messages.status_head.lower()
-                    is_archiving = any(
-                        keyword in status_head_lower for keyword in [
-                            'archiving', 'zipping', 'creating archive', 'compressing'])
-                    is_extracting = any(
-                        keyword in status_head_lower for keyword in [
-                            'extracting', 'unzipping', 'decompressing', 'unpacking'])
-
-                if is_archiving or is_extracting:
-                    elapsed = task_ctx.get_elapsed_time()
-                    elapsed_str = getTime(elapsed) if elapsed > 0 else "0s"
-                    status_label = "\U0001f4c2 Extracting" if is_extracting else "\U0001f5dc\ufe0f Archiving"
-
-                    details = []
+                    sh = task_ctx.messages.status_head.lower()
+                    if any(k in sh for k in ['archiving', 'zipping', 'compressing']):
+                        status_label = "Archiving 🗜️"
+                        is_proc = True
+                    elif any(k in sh for k in ['extracting', 'unzipping', 'unpacking']):
+                        status_label = "Extracting 📦"
+                        is_proc = True
+                
+                if is_proc:
+                    percentage = 0.0
                     if task_ctx.messages.total_files > 0:
-                        files_done = task_ctx.messages.files_processed
-                        total = task_ctx.messages.total_files
-                        file_pct = (files_done / total * 100) if total > 0 else 0
-                        progress_bar = _progress_bar(file_pct, length=8)
-                        details.append(f"{progress_bar} {files_done}/{total} files")
-
-                    if task_ctx.messages.archive_size > 0:
-                        archive_size = _format_bytes(task_ctx.messages.archive_size)
-                        details.append(archive_size)
-
-                    if task_ctx.messages.current_file:
-                        current = task_ctx.messages.current_file
-                        if len(current) > 20:
-                            current = current[:17] + "..."
-                        details.append(f"'{current}'")
-
-                    details.append(elapsed_str)
-                    status_detail = " \u2022 ".join(details) if details else elapsed_str
-
+                        percentage = (task_ctx.messages.files_processed / task_ctx.messages.total_files) * 100
+                    
+                    bar = "█" * int(percentage/5) + "▒" * (20 - int(percentage/5))
+                    elapsed = getTime(task_ctx.get_elapsed_time())
+                    summary_text += (
+                        f"<b>┌「{bar}」 » {percentage:.1f}%</b>\n"
+                        f"<b>├⚙️ Status »</b> <code>{status_label}</code>\n"
+                        f"<b>├⏱️ Elapsed »</b> <code>{elapsed}</code>\n"
+                        f"<b>└📦 Files »</b> <code>{task_ctx.messages.files_processed}/{task_ctx.messages.total_files}</code>"
+                    )
                 else:
-                    speed = task_ctx.transfer.last_speed
-                    if not speed or speed == "0 B/s":
-                        speed = task_ctx.transfer.get_speed()
-
-                    if task_ctx.transfer.total_size > 0:
-                        percentage = task_ctx.transfer.get_percentage()
-                        downloaded = _format_bytes(task_ctx.transfer.down_bytes)
-                        total = _format_bytes(task_ctx.transfer.total_size)
-                        eta = task_ctx.transfer.get_eta()
-                        eta_str = getTime(eta) if eta > 0 else "?"
-
-                        progress_bar = _progress_bar(percentage, length=10)
-
-                        server_info = ""
-                        if task_ctx.service_type:
-                            server_info = f"{task_ctx.service_type.upper()} \u2022 "
-
-                        status_label = "\U0001f4e5 Downloading"
-                        status_detail = f"{progress_bar} {percentage:.1f}%\n{server_info}{downloaded}/{total} \u2022 {speed} \u2022 ETA: {eta_str}"
-                    else:
-                        elapsed = task_ctx.get_elapsed_time()
-                        elapsed_str = getTime(elapsed) if elapsed > 0 else "0s"
-                        downloaded = _format_bytes(
-                            task_ctx.transfer.down_bytes) if task_ctx.transfer.down_bytes > 0 else "?"
-                        status_label = "\U0001f4e5 Downloading"
-                        status_detail = f"{downloaded} \u2022 {speed} \u2022 {elapsed_str}"
+                    speed = task_ctx.transfer.get_speed()
+                    percentage = task_ctx.transfer.get_percentage()
+                    downloaded = _format_bytes(task_ctx.transfer.down_bytes)
+                    total = _format_bytes(task_ctx.transfer.total_size) if task_ctx.transfer.total_size > 0 else "Unknown"
+                    eta = task_ctx.transfer.get_eta()
+                    eta_str = getTime(eta) if eta > 0 else "?"
+                    
+                    bar = "█" * int(percentage/5) + "▒" * (20 - int(percentage/5))
+                    summary_text += (
+                        f"<b>┌「{bar}」 » {percentage:.1f}%</b>\n"
+                        f"<b>├⚡️ Speed »</b> <code>{escape(speed)}</code>\n"
+                        f"<b>├⚙️ Status »</b> <code>{status_label}</code>\n"
+                        f"<b>├⏳ ETA »</b> <code>{eta_str}</code>\n"
+                        f"<b>├✅ Done »</b> <code>{downloaded}</code>\n"
+                        f"<b>└📦 Total »</b> <code>{total}</code>"
+                    )
             else:
-                status_label = "\U0001f4dd Initializing"
-                status_detail = ""
+                summary_text += "<b>Status:</b> <code>Initializing... ⏳</code>"
 
-            status_line = f"<b>{status_label}</b>"
-            if status_detail:
-                status_line += f"\n{escape(status_detail)}"
+        # --- NAVIGATION BUTTONS ---
+        nav_buttons = []
+        if total_pages > 1:
+            prev_page = (TASK_QUEUE.dashboard_page - 1) % total_pages
+            next_page = (TASK_QUEUE.dashboard_page + 1) % total_pages
+            nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"dash_page:{prev_page}"))
+            nav_buttons.append(InlineKeyboardButton(f"Page {TASK_QUEUE.dashboard_page + 1}/{total_pages}", callback_data="dash_refresh"))
+            nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"dash_page:{next_page}"))
 
-            task_line = (
-                f"<b>{idx}. {escape(filename)}</b>\n"
-                f"<code>ID: {escape(short_id)}</code>\n"
-                f"{status_line}\n\n"
-            )
-
-            if len(summary_text) + len(task_line) > CHAR_LIMIT:
-                remaining_count = len(tasks) - tasks_shown
-                summary_text += (
-                    f"<i>+ {remaining_count} more task(s) not shown</i>\n"
-                )
-                break
-
-            summary_text += task_line
-            tasks_shown += 1
-
-        # Create cancel buttons for each shown task
+        # Create buttons list
         buttons = []
-        for task_id, task_ctx in list(tasks.items())[:tasks_shown]:
-            short_id = task_ctx.get_short_id()
-            download_name = task_ctx.messages.download_name if task_ctx.messages else None
-            source_url = task_ctx.source_urls[0] if task_ctx.source_urls else None
-            buttons.append([InlineKeyboardButton(
-                build_cancel_task_button_label(download_name, source_url, short_id),
-                callback_data=f"cancel:{short_id}"
-            )])
-
-        if len(tasks) > 1:
-            buttons.append([InlineKeyboardButton(
-                "\u274c Cancel All Tasks",
-                callback_data="cancel_all_tasks"
-            )])
+        if nav_buttons:
+            buttons.append(nav_buttons)
+            
+        # Add Cancel button for specific task page
+        if TASK_QUEUE.dashboard_page > 0:
+            task_idx = TASK_QUEUE.dashboard_page - 1
+            if task_idx < len(tasks_list):
+                task_ctx = tasks_list[task_idx]
+                short_id = task_ctx.get_short_id()
+                buttons.append([InlineKeyboardButton("❌ Cancel This Task", callback_data=f"cancel:{short_id}")])
+        elif tasks_list:
+            buttons.append([InlineKeyboardButton("❌ Cancel All Tasks", callback_data="cancel_all_tasks")])
 
         keyboard = InlineKeyboardMarkup(buttons) if buttons else None
         keyboard_signature = _keyboard_signature(keyboard)
@@ -313,13 +290,17 @@ async def update_summary_dashboard(
             TASK_QUEUE.mark_summary_updated()
             return TASK_QUEUE.summary_msg
 
-        # Determine thumbnail
+        # Determine thumbnail (Priority: Custom > Task-specific > Default Hero)
         thumbnail_path = None
-        first_task = next(iter(tasks.values()), None) if tasks else None
-
-        if first_task and hasattr(first_task, 'hero_image') and first_task.hero_image:
-            if os.path.exists(first_task.hero_image):
-                thumbnail_path = first_task.hero_image
+        
+        if BOT.Setting.thumbnail and os.path.exists(Paths.THMB_PATH):
+            thumbnail_path = Paths.THMB_PATH
+        
+        if not thumbnail_path:
+            first_task = next(iter(tasks.values()), None) if tasks else None
+            if first_task and hasattr(first_task, 'hero_image') and first_task.hero_image:
+                if os.path.exists(first_task.hero_image):
+                    thumbnail_path = first_task.hero_image
 
         if not thumbnail_path and os.path.exists(Paths.DEFAULT_HERO):
             thumbnail_path = Paths.DEFAULT_HERO
