@@ -204,6 +204,66 @@ class TaskBotTimes:
         self.task_start = datetime.now()
 
 
+class _TaskOptions:
+    """Task-specific options that mirror global BOT.Options but can be overridden."""
+    def __init__(self, task_ctx):
+        self._task_ctx = task_ctx
+        from .variables import BOT
+        # Mirror all attributes from global BOT.Options
+        for attr in dir(BOT.Options):
+            if not attr.startswith('__'):
+                setattr(self, attr, getattr(BOT.Options, attr))
+        # Override task-specific options
+        if task_ctx.service_type:
+            self.service_type = task_ctx.service_type
+
+class _TaskBot:
+    """Proxy for global BOT object with task-specific Options."""
+    def __init__(self, task_ctx):
+        from .variables import BOT
+        self.SOURCE = BOT.SOURCE # Shared (read-only ideally)
+        self.TASK = BOT.TASK
+        self.Setting = BOT.Setting
+        self.Mode = BOT.Mode
+        self.State = BOT.State
+        self.Options = _TaskOptions(task_ctx)
+
+class _TaskPaths:
+    """Dynamic paths object that uses task-specific paths when available."""
+    def __init__(self, task_ctx):
+        self._task_ctx = task_ctx
+        from .variables import Paths
+        self._global_paths = Paths
+
+        # Task-specific paths
+        self.down_path = task_ctx.down_path if task_ctx.down_path else Paths.down_path
+        self.work_path = task_ctx.work_path if task_ctx.work_path else Paths.WORK_PATH
+        self.WORK_PATH = self.work_path # Alias for legacy code
+
+        # Generate task-specific temp paths
+        if task_ctx.work_path:
+            self.temp_zpath = f"{task_ctx.work_path}/temp_zip"
+            self.temp_unzip_path = f"{task_ctx.work_path}/temp_unzip"
+            self.temp_unzip = self.temp_unzip_path # Alias
+            self.temp_dirleech_path = f"{task_ctx.work_path}/dir_leech_temp"
+            self.temp_files_dir = f"{task_ctx.work_path}/leech_temp"
+        else:
+            self.temp_zpath = Paths.temp_zpath
+            self.temp_unzip_path = Paths.temp_unzip_path
+            self.temp_unzip = self.temp_unzip_path # Alias
+            self.temp_dirleech_path = Paths.temp_dirleech_path
+            self.temp_files_dir = Paths.temp_files_dir
+
+        # Use global paths for these (shared across tasks or static)
+        self.thumbnail_ytdl = Paths.thumbnail_ytdl
+        self.THMB_PATH = Paths.THMB_PATH
+        self.VIDEO_FRAME = Paths.VIDEO_FRAME
+        self.HERO_IMAGE = Paths.HERO_IMAGE
+        self.DEFAULT_HERO = Paths.DEFAULT_HERO
+        self.MOUNTED_DRIVE = Paths.MOUNTED_DRIVE
+        self.mirror_dir = Paths.mirror_dir
+        self.access_token = Paths.access_token
+
 @dataclass
 class TaskContext:
     """
@@ -264,8 +324,10 @@ class TaskContext:
     is_cancelled: bool = False
     is_completed: bool = False
 
-    # Arbitrary metadata for specialized task types
-    metadata: Dict[str, any] = field(default_factory=dict)
+    # Internal overrides for backward compatibility
+    _bot_override: Any = field(default=None, init=False, repr=False, compare=False)
+    _paths_override: Any = field(default=None, init=False, repr=False, compare=False)
+    _msg_override: Any = field(default=None, init=False, repr=False, compare=False)
 
     def get_short_id(self) -> str:
         """Get shortened task ID for display (first 8 chars)"""
@@ -299,11 +361,13 @@ class TaskContext:
 
     @property
     def bot(self):
-        """Backward compatibility: Return global BOT for archive/Leech functions"""
+        """
+        Backward compatibility: Return dynamic bot proxy for archive/Leech functions.
+        Isolates Options per task to prevent parallel task interference.
+        """
         if getattr(self, '_bot_override', None) is not None:
             return self._bot_override
-        from .variables import BOT
-        return BOT
+        return _TaskBot(self)
 
     @bot.setter
     def bot(self, value):
@@ -330,30 +394,6 @@ class TaskContext:
         """
         if getattr(self, '_paths_override', None) is not None:
             return self._paths_override
-        from .variables import Paths
-
-        class _TaskPaths:
-            """Dynamic paths object that uses task-specific paths when available"""
-
-            def __init__(self, task_ctx):
-                self._task_ctx = task_ctx
-                self._global_paths = Paths
-
-                # Task-specific paths
-                self.down_path = task_ctx.down_path if task_ctx.down_path else Paths.down_path
-                self.work_path = task_ctx.work_path if task_ctx.work_path else Paths.work_path
-
-                # Generate task-specific temp paths
-                if task_ctx.work_path:
-                    self.temp_zpath = f"{task_ctx.work_path}/temp_zip"
-                    self.temp_unzip_path = f"{task_ctx.work_path}/temp_unzip"
-                else:
-                    self.temp_zpath = Paths.temp_zpath
-                    self.temp_unzip_path = Paths.temp_unzip_path
-
-                # Use global paths for these (shared across tasks)
-                self.thumbnail_ytdl = Paths.thumbnail_ytdl
-
         return _TaskPaths(self)
 
     @paths.setter
