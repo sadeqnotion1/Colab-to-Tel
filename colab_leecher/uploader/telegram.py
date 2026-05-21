@@ -6,6 +6,7 @@ import os
 import asyncio 
 import socket 
 import aiohttp 
+from html import escape
 from PIL import Image
 from os import path as ospath
 from datetime import datetime
