@@ -70,7 +70,27 @@ async def Leech(path: str, remove_source: bool, task_ctx: TaskContext = None):
                 item) for item in natsorted(
                 os.listdir(path))]
     elif ospath.isfile(path):
-        items_to_process = [path]
+        # Check if it's the first part of a split archive (.001)
+        if path.lower().endswith(".001"):
+            dirname = ospath.dirname(path)
+            filename = ospath.basename(path)
+            # "Archive.7z.001" -> "Archive.7z"
+            base_archive_name = filename[:-4] 
+            log.info(f"Split archive detected starting with {filename}. Collecting all parts...")
+            
+            # Find all parts with the same base name (e.g., .001, .002, etc.)
+            parts = []
+            for f in natsorted(os.listdir(dirname)):
+                if f.startswith(base_archive_name) and re.search(r'\.[0-9]{3}$', f):
+                    parts.append(ospath.join(dirname, f))
+            
+            if parts:
+                items_to_process = parts
+                log.info(f"Found {len(parts)} parts for split archive.")
+            else:
+                items_to_process = [path]
+        else:
+            items_to_process = [path]
     else:
         log.error(
             f"Leech Error: Source path is neither file nor directory: {path}")

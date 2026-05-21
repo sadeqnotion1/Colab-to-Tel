@@ -158,17 +158,36 @@ def YouTubeDL(url):
             logging.info(d)
 
     ydl_opts = {
-        # Format selection - better quality/size balance
+        # Format selection - better quality/size balance with MP4 preference
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "merge_output_format": "mp4",
+
+        # Browser Impersonation - Bypasses bot detection (requires curl_cffi)
+        "impersonate": "chrome",
+
+        # Cookies - Load automatically if file exists
+        "cookiefile": "cookies.txt" if ospath.exists("cookies.txt") else None,
+
+        # Extractor Tuning - Fixes for specific sites like TikTok
+        "extractor_args": {
+            "tiktok": {"webpage_download": True},
+            "youtube": {"skip": ["hls", "dash"]}
+        },
 
         # Performance improvements
-        "concurrent_fragment_downloads": 4,  # FIXED: Was --concurrent-fragments
+        "concurrent_fragment_downloads": 10,
         "http_chunk_size": 10485760,  # 10MB chunks for better speed
+        "updatetime": False,         # Equivalent to --no-mtime
 
         # Retry configuration for reliability
         "retries": 10,
         "fragment_retries": 10,
         "skip_unavailable_fragments": True,
+        "ignoreerrors": True,        # Don't crash entire batch on one error
+        "no_abort_on_error": True,
+
+        # Persistence - Avoid re-downloading same files
+        "download_archive": "downloaded_archive.txt",
 
         # Subtitle improvements
         "writesubtitles": True,
@@ -206,12 +225,17 @@ def YouTubeDL(url):
         try:
             info_dict = ydl.extract_info(url, download=False)
             YTDL.header = "⌛ __Please WAIT a bit...__"
+            
+            # Sophisticated Output Template for better organization
+            # Format: extractor/uploader/date_title_id.ext
+            template_str = f"{Paths.down_path}/%(extractor_key,unknown_site)s/%(uploader,unknown_uploader)s/%(upload_date>%Y-%m-%d,unknown_date)s_%(title,id)s.%(ext)s"
+            
             if "_type" in info_dict and info_dict["_type"] == "playlist":
                 playlist_name = info_dict["title"] 
                 if not ospath.exists(ospath.join(Paths.down_path, playlist_name)):
                     makedirs(ospath.join(Paths.down_path, playlist_name))
                 ydl_opts["outtmpl"] = {
-                    "default": f"{Paths.down_path}/{playlist_name}/%(title)s.%(ext)s",
+                    "default": template_str,
                     "thumbnail": f"{Paths.thumbnail_ytdl}/%(id)s.%(ext)s",
                 }
                 for entry in info_dict["entries"]:
@@ -228,7 +252,7 @@ def YouTubeDL(url):
             else:
                 YTDL.header = ""
                 ydl_opts["outtmpl"] = {
-                    "default": f"{Paths.down_path}/%(id)s.%(ext)s",
+                    "default": template_str,
                     "thumbnail": f"{Paths.thumbnail_ytdl}/%(id)s.%(ext)s",
                 }
                 try:
