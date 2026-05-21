@@ -294,6 +294,7 @@ class TaskContext:
     # Source data
     source_urls: List[str] = field(default_factory=list)
     filenames: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     # Per-task file paths (unique to avoid collisions)
     work_path: str = ""  # e.g., /content/Telegram-Leecher/BOT_WORK/{task_id}

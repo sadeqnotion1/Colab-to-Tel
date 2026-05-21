@@ -1754,7 +1754,8 @@ async def handle_url(client: Client, message: Message):
                 downloader = TikTokBulkDownloader(client, message, task_ctx)
 
                 # Fetch URLs from Gist (or use pre-split chunk)
-                chunk = task_ctx.metadata.get('tiktok_chunk')
+                metadata = getattr(task_ctx, 'metadata', {})
+                chunk = metadata.get('tiktok_chunk')
                 if chunk:
                     urls = chunk
                     is_subtask = True

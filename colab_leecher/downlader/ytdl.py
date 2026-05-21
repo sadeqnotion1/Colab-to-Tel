@@ -28,7 +28,7 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
 
     for attempt in range(max_retries):
         try:
-            name = await get_YT_Name(link)
+            name = await get_YT_Name(link, task_ctx)
             Messages.status_head = f"<b>📥 DOWNLOADING FROM » </b><i>🔗Link {str(num).zfill(2)}</i>\n\n<code>{name}</code>\n"
 
             if attempt > 0:
@@ -98,11 +98,11 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
                 await sleep(5)  # Wait 5 seconds before retry
             else:
                 log.error(f"Download failed after {max_retries} attempts: {e}")
-                await cancelTask(f"Download failed after {max_retries} attempts: {str(e)[:100]}")
+                await cancelTask(f"Download failed after {max_retries} attempts: {str(e)[:100]}", task_ctx)
 
         except Exception as e:
             log.error(f"Unexpected error in YTDL_Status: {e}", exc_info=True)
-            await cancelTask(f"YouTube download error: {str(e)[:100]}")
+            await cancelTask(f"YouTube download error: {str(e)[:100]}", task_ctx)
             break  # Don't retry on unexpected errors
 
 
@@ -157,13 +157,20 @@ def YouTubeDL(url):
         else:
             logging.info(d)
 
+    # Check for curl_cffi availability for impersonation
+    try:
+        import curl_cffi
+        has_impersonate = True
+    except ImportError:
+        has_impersonate = False
+
     ydl_opts = {
         # Format selection - better quality/size balance with MP4 preference
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "merge_output_format": "mp4",
 
         # Browser Impersonation - Bypasses bot detection (requires curl_cffi)
-        "impersonate": "chrome",
+        "impersonate": "chrome" if has_impersonate else None,
 
         # Cookies - Load automatically if file exists
         "cookiefile": "cookies.txt" if ospath.exists("cookies.txt") else None,
@@ -268,7 +275,7 @@ def YouTubeDL(url):
             logging.error(f"YTDL ERROR: {e}")
 
 
-async def get_YT_Name(link):
+async def get_YT_Name(link, task_ctx=None):
     with yt_dlp.YoutubeDL({"logger": MyLogger()}) as ydl:
         try:
             info = ydl.extract_info(link, download=False)
@@ -277,5 +284,5 @@ async def get_YT_Name(link):
             else:
                 return "UNKNOWN DOWNLOAD NAME"
         except Exception as e:
-            await cancelTask(f"Can't Download from this link. Because: {str(e)}")
+            await cancelTask(f"Can't Download from this link. Because: {str(e)}", task_ctx)
             return "UNKNOWN DOWNLOAD NAME"
