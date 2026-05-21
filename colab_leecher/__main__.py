@@ -1907,7 +1907,8 @@ async def handle_url(client: Client, message: Message):
                         log.info(f"TikTok Bulk part {part_num-1} done: {all_successful} total succeeded so far")
 
                     # Final summary report
-                    if not is_subtask and 'tiktok_chunk' not in task_ctx.metadata:
+                    metadata = getattr(task_ctx, 'metadata', {})
+                    if not is_subtask and 'tiktok_chunk' not in metadata:
                         # Original parent task
                         report = "🚀 <b>Turbo Mode Activated</b>\n\n"
                         report += f"<b>Total URLs:</b> <code>{total_urls}</code>\n"
@@ -4662,5 +4663,8 @@ if __name__ == "__main__":
           try:
               colab_bot.run()
           except Exception as run_err: log.critical(f"Bot crashed during run: {run_err}", exc_info=True)
+
+
+    except Exception as run_err: log.critical(f"Bot crashed during run: {run_err}", exc_info=True)
 
 
