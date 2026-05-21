@@ -30,6 +30,7 @@ from .helper import (
     clean_filename)
 from .task_context import TaskContext
 from .reply_state import set_password_reply_waiting
+from .ui_components import ProgressBar
 from .ui_copy import (
     build_archiver_progress_text,
     build_archiver_verification_text,
@@ -386,7 +387,18 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                                             elapsed_time_text=elapsed_time_str,
                                             source_size_text=total_in_unit,
                                         )
-                                        await status_bar(status_text, "N/A", 0, "N/A", "N/A", "N/A", "Archiver (7z) 🗜️", use_custom_text=True, task_ctx=task_ctx, force_update=True)
+                                        # PASS REAL VALUES to status_bar for dashboard tracking
+                                        await status_bar(
+                                            status_text, 
+                                            speed_text, 
+                                            percentage, 
+                                            eta_text, 
+                                            total_in_unit, 
+                                            "Archiver (7z) 🗜️", 
+                                            use_custom_text=True, 
+                                            task_ctx=task_ctx, 
+                                            force_update=True
+                                        )
                                 except ValueError:
                                     log.warning(
                                         f"Could not convert 7z percentage '{match.group(1)}' to int.")

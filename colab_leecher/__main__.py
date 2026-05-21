@@ -1906,13 +1906,21 @@ async def handle_url(client: Client, message: Message):
                         log.info(f"TikTok Bulk part {part_num-1} done: {all_successful} total succeeded so far")
 
                     # Final summary report
-                    report = "<b>TikTok Bulk Download Complete</b>\n\n"
-                    report += f"<b>Total URLs:</b> <code>{total_urls}</code>\n"
-                    report += f"<b>Downloaded:</b> <code>{all_successful}</code>\n"
-                    if all_failed:
-                        report += f"<b>Failed:</b> <code>{all_failed}</code>\n"
-                    if part_num > 2:
-                        report += f"<b>Parts uploaded:</b> <code>{part_num - 1}</code>\n"
+                    if not is_subtask and 'tiktok_chunk' not in task_ctx.metadata:
+                        # Original parent task
+                        report = "🚀 <b>Turbo Mode Activated</b>\n\n"
+                        report += f"<b>Total URLs:</b> <code>{total_urls}</code>\n"
+                        report += f"<b>Workers Spawned:</b> <code>{num_workers if 'num_workers' in locals() else 'N/A'}</code>\n\n"
+                        report += "<i>Progress for each worker is shown separately in the dashboard.</i>"
+                    else:
+                        # Worker task (or non-split task)
+                        report = "<b>TikTok Bulk Download Complete</b>\n\n"
+                        report += f"<b>Total URLs:</b> <code>{total_urls}</code>\n"
+                        report += f"<b>Downloaded:</b> <code>{all_successful}</code>\n"
+                        if all_failed:
+                            report += f"<b>Failed:</b> <code>{all_failed}</code>\n"
+                        if part_num > 2:
+                            report += f"<b>Parts uploaded:</b> <code>{part_num - 1}</code>\n"
 
                     await _safe_edit(report)
 

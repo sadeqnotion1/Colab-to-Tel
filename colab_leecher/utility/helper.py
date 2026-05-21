@@ -1831,32 +1831,30 @@ async def status_bar(
                 # Parse size string to bytes for dashboard to detect download
                 # progress
                 done_bytes = 0
+                # Helper to extract numeric value from string like "✅ Downloaded 252 videos (484.19 MiB)"
+                def extract_size_from_str(s: str, unit: str) -> float:
+                    try:
+                        # Find numeric value before the unit
+                        match = re.search(r"(\d+\.?\d*)\s*" + unit, s)
+                        if match:
+                            return float(match.group(1))
+                        return 0.0
+                    except:
+                        return 0.0
+
+                done_bytes = 0
                 if ' GiB' in done:
-                    done_bytes = int(
-                        float(
-                            done.replace(
-                                ' GiB',
-                                '').strip()) *
-                        1024 *
-                        1024 *
-                        1024)
+                    val = extract_size_from_str(done, 'GiB')
+                    done_bytes = int(val * 1024 * 1024 * 1024)
                 elif ' MiB' in done:
-                    done_bytes = int(
-                        float(
-                            done.replace(
-                                ' MiB',
-                                '').strip()) *
-                        1024 *
-                        1024)
+                    val = extract_size_from_str(done, 'MiB')
+                    done_bytes = int(val * 1024 * 1024)
                 elif ' KiB' in done:
-                    done_bytes = int(
-                        float(
-                            done.replace(
-                                ' KiB',
-                                '').strip()) *
-                        1024)
+                    val = extract_size_from_str(done, 'KiB')
+                    done_bytes = int(val * 1024)
                 elif ' B' in done:
-                    done_bytes = int(float(done.replace(' B', '').strip()))
+                    val = extract_size_from_str(done, ' B')
+                    done_bytes = int(val)
 
                 # Update appropriate bytes based on engine (Upload vs Download)
                 is_upload = any(x in engine.lower() for x in ["upload", "up", "mirror", "gdrive"])
@@ -1933,14 +1931,56 @@ async def status_bar(
                 
                 log.warning(
                     f"Failed to parse download size '{done}' or total size '{total_size}': {e}")
+            
+            # --- NEW: Dashboard Support for Archiving ---
+            if use_custom_text:
+                if percentage > 0:
+                    base_size = task_ctx.transfer.total_size or 1000000
+                    est_bytes = int(base_size * (percentage / 100))
+                    task_ctx.transfer.down_bytes = [est_bytes]
+                
+                if speed and speed != "N/A":
+                    task_ctx.transfer.last_speed = speed
+                    try:
+                         val = float(speed.split()[0])
+                         task_ctx.transfer.last_speed_bytes = val * 1024 
+                    except: pass
+
             log.debug(
                 f"📉 status_bar {task_id_str}: Parallel mode - Updated stats: {done} / {total_size} ({task_ctx.transfer.down_bytes} / {task_ctx.transfer.total_size} bytes), speed: {speed}"
             )
 
-            # Trigger dashboard update to show archiving progress (lazy import
-            # to avoid circular dependency)
+            # Trigger dashboard update
             from .task_dashboard import try_update_summary
             await try_update_summary()
+
+            # Handle Telegram message update for custom text
+            if use_custom_text:
+                curr_t = time()
+                if not force_update and curr_t - task_ctx.last_status_update < 2.5:
+                    return
+                task_ctx.last_status_update = curr_t
+                
+                if task_ctx.status_msg:
+                    try:
+                        final_text = done + sysINFO()
+                        if task_ctx.status_msg.photo:
+                            await task_ctx.status_msg.edit_caption(
+                                caption=final_text,
+                                reply_markup=keyboard(task_ctx.task_id),
+                                parse_mode=enums.ParseMode.HTML
+                            )
+                        else:
+                            await task_ctx.status_msg.edit_text(
+                                text=final_text,
+                                reply_markup=keyboard(task_ctx.task_id),
+                                parse_mode=enums.ParseMode.HTML,
+                                disable_web_page_preview=True
+                            )
+                    except Exception as e:
+                        if "message is not modified" not in str(e).lower():
+                            log.warning(f"Failed to update custom status: {e}")
+            
             return
     # ===== END PARALLEL MODE CHECK =====
 
