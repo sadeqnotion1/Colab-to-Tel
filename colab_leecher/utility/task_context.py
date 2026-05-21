@@ -15,7 +15,7 @@ import asyncio
 from dataclasses import dataclass, field
 from collections import deque
 from datetime import datetime
-from typing import Dict, Optional, List, Set, Deque
+from typing import Dict, Optional, List, Set, Deque, Any
 from pyrogram.types import Message
 from .ui_copy import build_health_summary_text
 
@@ -263,6 +263,9 @@ class TaskContext:
     # State flags
     is_cancelled: bool = False
     is_completed: bool = False
+
+    # Arbitrary metadata for specialized task types
+    metadata: Dict[str, any] = field(default_factory=dict)
 
     def get_short_id(self) -> str:
         """Get shortened task ID for display (first 8 chars)"""

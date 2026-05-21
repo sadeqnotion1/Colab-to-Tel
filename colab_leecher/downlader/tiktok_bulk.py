@@ -486,6 +486,8 @@ class TikTokBulkDownloader(BaseDownloader):
                     status_text = f"{processed_count}/{total_videos} videos ({len(session_successful)} OK, {len(self.failed_downloads)} failed)"
                     status_text += f" | {sizeUnit(current_batch_size)}/{sizeUnit(size_limit)}"
                     
+                    # Store current size for status bar
+                    self.total_size = current_batch_size
                     await self.update_progress_bar(percentage, status_text, engine="TikTok Bulk", force_update=True)
 
                 # Check if we just hit the limit after these tasks finished
@@ -585,6 +587,11 @@ class TikTokBulkDownloader(BaseDownloader):
                 zip_name = f"TikTok_Bulk_{timestamp}.zip"
 
             log.info(f"Creating ZIP archive: {zip_name}")
+            
+            # Set total size for archive progress bar
+            if self.task_ctx:
+                self.task_ctx.transfer.total_size = self.total_size
+                
             await self.update_progress_bar(95.0, "Creating ZIP archive...", engine="TikTok Bulk")
 
             # Use the existing archive() function from converters.py
