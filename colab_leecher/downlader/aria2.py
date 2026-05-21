@@ -7,6 +7,7 @@ import subprocess
 import asyncio 
 from datetime import datetime
 from ..utility.helper import sizeUnit, status_bar, clean_filename, apply_dot_style, getTime, is_google_drive, is_mega, getSize # Import getTime if used by status_bar
+from ..utility.message_safety import escape_html
 from ..utility.variables import BOT, Aria2c, Paths, Messages, BotTimes, TaskError, TRANSFER # Import TaskError & TRANSFER
 
 log = logging.getLogger(__name__)
@@ -147,7 +148,7 @@ async def on_output(output: str, current_filename: str, task_ctx=None):
 
     # --- Status Update Section ---
     if percentage is not None and downloaded_bytes and total_size and eta:
-        _messages.status_head = f"<b>Downloading</b>\n\n<b>Name:</b> <code>{current_filename}</code>\n"
+        _messages.status_head = f"<b>Downloading</b>\n\n<b>Name:</b> <code>{escape_html(current_filename)}</code>\n"
 
         # Manual speed calculation only if regex somehow failed to capture speed
         if speed_string is None or speed_string == "N/A":
@@ -178,7 +179,7 @@ async def on_output(output: str, current_filename: str, task_ctx=None):
             clean_eta = eta.removesuffix(']') # Ensure trailing ']' is removed
             await status_bar(
                 _messages.status_head, speed_string, int(percentage), clean_eta,
-                downloaded_bytes, total_size, "Aria2c 🧨",
+                downloaded_bytes, total_size, engine="Aria2c 🧨",
                 task_ctx=task_ctx  # Pass task_ctx for per-task progress tracking
             )
             # Update parallel dashboard if task is in queue
@@ -272,7 +273,7 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
 
     log.info(f"Starting Aria2c download for link index {num} (Expecting: '{expected_filename}')")
     _bot_times.task_start = datetime.now()
-    _messages.status_head = f"<b>Downloading</b> <i>Link {str(num).zfill(2)}</i>\n\n<b>Name:</b> <code>{display_name_for_status}</code>\n"
+    _messages.status_head = f"<b>Downloading</b> <i>Link {str(num).zfill(2)}</i>\n\n<b>Name:</b> <code>{escape_html(display_name_for_status)}</code>\n"
 
     try:
         os.makedirs(_paths.down_path, exist_ok=True)
@@ -445,7 +446,7 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
         try:
             file_path = os.path.join(_paths.down_path, expected_filename)
             download_start_time = time.time()
-            _messages.status_head = f"<b>Downloading</b> <i>Link {str(num).zfill(2)}</i>\n\n<b>Name:</b> <code>{display_name_for_status}</code>\n"
+            _messages.status_head = f"<b>Downloading</b> <i>Link {str(num).zfill(2)}</i>\n\n<b>Name:</b> <code>{escape_html(display_name_for_status)}</code>\n"
 
             timeout = aiohttp.ClientTimeout(total=None, connect=180, sock_read=600)
             connector = aiohttp.TCPConnector(limit=10, limit_per_host=5, ttl_dns_cache=300)

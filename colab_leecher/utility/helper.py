@@ -1798,7 +1798,7 @@ async def status_bar(
         eta,
         done,
         total_size,
-        engine,
+        engine: str = "Unknown",
         use_custom_text: bool = False,
         task_ctx: TaskContext = None,
         force_update: bool = False):

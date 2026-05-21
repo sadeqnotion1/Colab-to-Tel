@@ -79,9 +79,10 @@ class SABnzbdDownloader:
             elapsed_str = time.strftime('%M:%S', time.gmtime(elapsed))
 
             # Create status header
+            from ..utility.message_safety import escape_html
             status_head = (
                 f"<b>📦 NZB Download (SABnzbd) »</b>\n\n"
-                f"<b>📄 File » </b><code>{self.current_filename}</code>\n"
+                f"<b>📄 File » </b><code>{escape_html(self.current_filename)}</code>\n"
             )
 
             # Use standard status_bar function

@@ -261,7 +261,7 @@ if valid_creds and ipython:
          try:
              # Install SABnzbd system dependencies
              log.info("Installing SABnzbd system dependencies...")
-             cmd_apt_sabnzbd = "apt-get update -qq && apt-get install -y -qq python3-pip python3-dev par2 unrar unzip p7zip-full"
+             cmd_apt_sabnzbd = "apt-get update -qq && apt-get install -y -qq python3-dev par2 unrar unzip p7zip-full"
              proc_apt_sab = subprocess.run(cmd_apt_sabnzbd, shell=True, capture_output=True, text=True)
              if proc_apt_sab.returncode != 0:
                  log.warning(f"SABnzbd apt install issues:\n{proc_apt_sab.stderr}")

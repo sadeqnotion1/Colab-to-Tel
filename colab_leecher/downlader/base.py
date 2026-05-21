@@ -13,6 +13,7 @@ from pyrogram.types import Message
 from colab_leecher.utility.variables import Paths, MSG
 from colab_leecher.utility.helper import status_bar, getTime
 from colab_leecher.utility.task_context import TaskContext
+from colab_leecher.utility.message_safety import escape_html
 
 log = logging.getLogger(__name__)
 
@@ -107,9 +108,9 @@ class BaseDownloader:
             )
 
             # Build status header
-            status_head = f"<b>{stream_emoji} {engine} Download{task_id_str} »</b>\n\n"
+            status_head = f"<b>{stream_emoji} {escape_html(engine)} Download{task_id_str} »</b>\n\n"
             if self.current_stream_type:
-                status_head += f"<b>🎯 Stream » </b><code>{self.current_stream_type.capitalize()}</code>\n"
+                status_head += f"<b>🎯 Stream » </b><code>{escape_html(self.current_stream_type.capitalize())}</code>\n"
 
             # Calculate total size string
             if self.total_size > 0:

@@ -8,6 +8,7 @@ from .. import colab_bot
 from ..utility.handler import cancelTask, TaskContext
 from ..utility.variables import Paths, Messages, BotTimes, TRANSFER, MSG, TaskError
 from ..utility.helper import speedETA, getTime, sizeUnit, status_bar, getSize, clean_filename 
+from ..utility.message_safety import escape_html
 import time
 
 # Setup logger
@@ -92,7 +93,7 @@ async def TelegramDownload(link, num, task_ctx: TaskContext = None) -> bool:
 
     _messages.status_head = (
         f"<b>DOWNLOADING FROM TG</b> <i>Link {str(num).zfill(2)}</i>\n\n"
-        f"<code>{name}</code>\n"
+        f"<code>{escape_html(name)}</code>\n"
     )
     log.info(f"Starting TG download: {name} (Size: {sizeUnit(file_size)})")
     os.makedirs(_paths.down_path, exist_ok=True)

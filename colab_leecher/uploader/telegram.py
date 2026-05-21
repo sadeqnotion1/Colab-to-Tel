@@ -103,9 +103,9 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
             # Only generate video thumbnail if no custom thumbnail is set
             if not thumb_path:
                 log.debug(f"Attempting thumbnail generation for video: {actual_upload_filename}")
-                # Define a temporary directory for thumbs (ensure it exists and is writable)
-                # Using /tmp is common, but adjust if needed for your environment
-                temp_thumb_dir = "/tmp/colab_leecher_thumbs"
+                # Define a temporary directory for thumbs (portable across OS)
+                import tempfile
+                temp_thumb_dir = ospath.join(tempfile.gettempdir(), "colab_leecher_thumbs")
                 thumb_path = await helper.get_video_thumbnail(file_path, output_dir=temp_thumb_dir) # Call new thumb function
                 log.debug(f"Thumbnail generation attempt complete. Raw thumb path: {thumb_path}")
 
@@ -201,7 +201,7 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
                 total_str = helper.sizeUnit(total)
                 eta_str = helper.getTime(eta_seconds)
 
-                status_head = f"<b>Uploading{' ' + task_id_str if task_ctx else ''}</b>\n\n<b>Name:</b> <code>{base_upload_name}</code>\n"
+                status_head = f"<b>Uploading{' ' + task_id_str if task_ctx else ''}</b>\n\n<b>Name:</b> <code>{escape(base_upload_name)}</code>\n"
                 log.debug(f"up_progress {task_id_str}: Calling status_bar. Speed='{speed_string}', Pct={percentage:.1f}, ETA='{eta_str}', Done='{done_str}', Total='{total_str}'")
                 # NEW: Pass task_ctx to status_bar for per-task progress tracking
                 await helper.status_bar(status_head, speed_string, percentage, eta_str, done_str, total_str, "TG Upload 🚀", task_ctx=task_ctx)

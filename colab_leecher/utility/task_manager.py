@@ -41,7 +41,10 @@ def _load_thumbnail_urls():
     _file = ospath.join(ospath.dirname(__file__), "thumbnail_urls.txt")
     if ospath.exists(_file):
         with open(_file, "r", encoding="utf-8") as f:
-            return [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+            urls = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+            log.info(f"Loaded {len(urls)} thumbnail URLs from {_file}")
+            return urls
+    log.warning(f"Thumbnail URL file not found: {_file}")
     return []
 
 thumbnail_urls = _load_thumbnail_urls()

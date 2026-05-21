@@ -16,6 +16,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 from ..utility.handler import cancelTask, TaskContext # Relative
 from ..utility.helper import sizeUnit, getTime, speedETA, status_bar, clean_filename # Relative, added clean_filename
+from ..utility.message_safety import escape_html
 # --- MODIFICATION: Import TRANSFER instance ---
 from ..utility.variables import Gdrive, Messages, Paths, BotTimes, TRANSFER, TaskError # Import TRANSFER instance
 # from ..utility.transfer_state import Transfer # Remove class import
@@ -73,7 +74,7 @@ async def g_DownLoad(link, num, task_ctx: TaskContext = None):
         return
         
     display_name = _messages.download_name if _messages.download_name else "GDrive Download"
-    status_header = f"<b>Google Drive Download</b> <i>Link {str(num).zfill(2)}</i>\n\n<b>Name:</b> <code>{display_name}</code>\n"
+    status_header = f"<b>Google Drive Download</b> <i>Link {str(num).zfill(2)}</i>\n\n<b>Name:</b> <code>{escape_html(display_name)}</code>\n"
     
     try:
         file_id = await getIDFromURL(link, task_ctx)
@@ -84,7 +85,7 @@ async def g_DownLoad(link, num, task_ctx: TaskContext = None):
         os.makedirs(_paths.down_path, exist_ok=True)
         if meta.get("mimeType") == "application/vnd.google-apps.folder":
             log.info(f"GDrive Folder: {meta.get('name')}")
-            _messages.status_head = f"<b>Google Drive Folder</b>\n\n<b>Folder:</b> <code>{meta.get('name', file_id)}</code>\n"
+            _messages.status_head = f"<b>Google Drive Folder</b>\n\n<b>Folder:</b> <code>{escape_html(meta.get('name', file_id))}</code>\n"
             await gDownloadFolder(file_id, _paths.down_path, task_ctx)
         else:
             log.info(f"GDrive File: {meta.get('name')}")

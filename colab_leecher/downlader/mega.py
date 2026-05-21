@@ -8,6 +8,7 @@ import shutil
 from datetime import datetime
 from colab_leecher.utility.helper import status_bar, getTime
 from colab_leecher.utility.variables import BotTimes, Messages, Paths, TaskError, TRANSFER 
+from colab_leecher.utility.message_safety import escape_html
 from pymegatools import Megatools, MegaError
 import os 
 
@@ -424,7 +425,7 @@ async def pro_for_mega(stream, process, task_ctx=None):
     _messages.download_name = file_name
     _messages.status_head = (
         f"<b>DOWNLOADING FROM MEGA</b>\n\n"
-        f"<b>Name</b> <code>{file_name}</code>\n"
+        f"<b>Name</b> <code>{escape_html(file_name)}</code>\n"
     )
 
     await status_bar(

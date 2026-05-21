@@ -227,7 +227,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
 
     archive_out_path = ospath.join(_paths.temp_zpath, archive_out_final_name)
     _messages.download_name = archive_out_final_name
-    _messages.status_head = f"<b>🔐 ARCHIVING ({format_display} via 7z) » </b>\n\n<code>{archive_out_final_name}</code>\n"
+    _messages.status_head = f"<b>🔐 ARCHIVING ({format_display} via 7z) » </b>\n\n<code>{escape(archive_out_final_name)}</code>\n"
 
     # Get task_start from task context
     if task_ctx:
@@ -393,8 +393,9 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                                             speed_text, 
                                             percentage, 
                                             eta_text, 
-                                            total_in_unit, 
-                                            "Archiver (7z) 🗜️", 
+                                            status_text, # Use status_text as 'done' for custom text mode
+                                            total_in_unit, # total_size
+                                            engine="Archiver (7z) 🗜️", 
                                             use_custom_text=True, 
                                             task_ctx=task_ctx, 
                                             force_update=True
@@ -1070,7 +1071,7 @@ async def extract(zip_filepath, remove: bool, task_ctx: TaskContext = None):
         return False
 
     dir_path, filename = ospath.split(zip_filepath)
-    _messages.status_head = f"<b>📂 EXTRACTING »</b>\n\n<code>{filename}</code>\n"
+    _messages.status_head = f"<b>📂 EXTRACTING »</b>\n\n<code>{escape(filename)}</code>\n"
 
     password = _bot.Options.unzip_pswd  # Get potential password
 
@@ -2079,7 +2080,7 @@ async def splitArchive(
                 # --- Status Update Logic ---
                 speed_string, eta, percentage = speedETA(
                     _task_start, bytes_written, total_size)
-                await status_bar(_messages.status_head, speed_string, percentage, getTime(eta), sizeUnit(bytes_written), total_size_str, "Splitter ✂️",)
+                await status_bar(_messages.status_head, speed_string, percentage, getTime(eta), sizeUnit(bytes_written), total_size_str, engine="Splitter ✂️")
                 # --- End Status Update ---
                 part_num += 1
                 await asyncio.sleep(0.1)
@@ -2346,7 +2347,7 @@ async def splitVideo(
     ]
 
     log.info(f"Executing ffmpeg split: {' '.join(cmd_split_args)}")
-    _messages.status_head = f"<b>✂️ SPLITTING » </b>\n\n<code>{filename}</code>\n"
+    _messages.status_head = f"<b>✂️ SPLITTING » </b>\n\n<code>{escape(filename)}</code>\n"
 
     # Get task_start from task context
     if task_ctx:

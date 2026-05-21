@@ -221,11 +221,10 @@ class TikTokBulkDownloader(BaseDownloader):
                 )
 
                 if result['success']:
-                    # Find any newly created file in the download directory
-                    # Since we use a subfolder per uploader, we search recursively
-                    file_path = self._find_latest_file(self.download_dir)
+                    # Use the file_path returned by yt-dlp
+                    file_path = result.get('file_path')
 
-                    if file_path:
+                    if file_path and os.path.exists(file_path):
                         file_size = os.path.getsize(file_path)
                         log.info(f"✅ Downloaded {video_num}/{total_videos}: {file_path} ({sizeUnit(file_size)})")
 
@@ -238,7 +237,7 @@ class TikTokBulkDownloader(BaseDownloader):
                             'video_num': video_num
                         }
                     else:
-                        error_msg = "File not found after download"
+                        error_msg = f"File not found after download: {file_path}"
                         log.error(f"❌ Video {video_num}: {error_msg}")
                         return {
                             'success': False,
@@ -274,12 +273,24 @@ class TikTokBulkDownloader(BaseDownloader):
             ydl_opts: yt-dlp options
 
         Returns:
-            Dict with success status and error if any
+            Dict with success status, error, and file_path if successful
         """
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-            return {'success': True, 'error': None}
+                # Use extract_info with download=True to get the final info dict including filename
+                info = ydl.extract_info(url, download=True)
+                file_path = ydl.prepare_filename(info)
+                
+                # Double-check existence (sometimes extensions change during post-processing)
+                if not os.path.exists(file_path):
+                    # Check for common extensions if the exact path doesn't exist
+                    base_path = os.path.splitext(file_path)[0]
+                    for ext in ['.mp4', '.mkv', '.webm', '.m4a']:
+                        if os.path.exists(base_path + ext):
+                            file_path = base_path + ext
+                            break
+                            
+            return {'success': True, 'error': None, 'file_path': file_path}
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
@@ -343,32 +354,6 @@ class TikTokBulkDownloader(BaseDownloader):
         sanitized = sanitized.strip('. ')
 
         return sanitized if sanitized else "video"
-
-    def _find_latest_file(self, directory: str) -> Optional[str]:
-        """
-        Recursively find the most recently created file in the directory
-
-        Args:
-            directory: Root directory to search
-
-        Returns:
-            Path to the latest file or None
-        """
-        latest_file = None
-        latest_time = 0
-
-        for root, dirs, files in os.walk(directory):
-            for file in files:
-                file_path = os.path.join(root, file)
-                try:
-                    mtime = os.path.getmtime(file_path)
-                    if mtime > latest_time:
-                        latest_time = mtime
-                        latest_file = file_path
-                except OSError:
-                    continue
-
-        return latest_file
 
     def _find_downloaded_file(self, base_filename: str) -> Optional[str]:
         """

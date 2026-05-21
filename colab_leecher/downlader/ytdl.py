@@ -29,7 +29,8 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
     for attempt in range(max_retries):
         try:
             name = await get_YT_Name(link, task_ctx)
-            Messages.status_head = f"<b>📥 DOWNLOADING FROM » </b><i>🔗Link {str(num).zfill(2)}</i>\n\n<code>{name}</code>\n"
+            from ..utility.message_safety import escape_html
+            Messages.status_head = f"<b>📥 DOWNLOADING FROM » </b><i>🔗Link {str(num).zfill(2)}</i>\n\n<code>{escape_html(name)}</code>\n"
 
             if attempt > 0:
                 log.info(f"Retry attempt {attempt + 1}/{max_retries} for link {num}")
@@ -72,7 +73,7 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
                             percentage=float(YTDL.percentage),
                             eta=YTDL.eta,
                             done=YTDL.done,
-                            left=YTDL.left,
+                            total_size=YTDL.left,
                             engine="Xr-YtDL 🏮",
                         )
                     except (MessageNotModified, RPCError, AttributeError, TypeError, ValueError) as status_bar_err:

@@ -585,10 +585,11 @@ class NZBDownloader:
                 eta_str = "N/A"
 
             # Format status header
+            from ..utility.message_safety import escape_html
             provider_name = BOT.Setting.nzb_active_provider or "Usenet"
             status_head = (
                 f"<b>📰 NZB Download ({provider_name}) »</b>\n\n"
-                f"<b>📄 File » </b><code>{self.current_file}</code>\n"
+                f"<b>📄 File » </b><code>{escape_html(self.current_file)}</code>\n"
             )
 
             # Build status text

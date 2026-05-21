@@ -30,7 +30,6 @@ def setup_sabnzbd_for_colab() -> bool:
             "install",
             "-y",
             "-qq",
-            "python3-pip",
             "python3-dev",
             "par2",
             "unrar",

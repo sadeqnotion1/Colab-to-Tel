@@ -92,10 +92,10 @@ async def http_download_logic(url: str, file_path: str, display_name: str, heade
 
                                 if total_size > 0 :
                                     speed_string, eta, percentage = speedETA(download_start_time, downloaded_size, total_size)
-                                    await status_bar(_messages.status_head, speed_string, percentage, getTime(eta), sizeUnit(current_total_downloaded), sizeUnit(approx_total_project_size), "aiohttp 🌐", task_ctx=task_ctx)
+                                    await status_bar(_messages.status_head, speed_string, percentage, getTime(eta), sizeUnit(current_total_downloaded), sizeUnit(approx_total_project_size), engine="aiohttp 🌐", task_ctx=task_ctx)
                                 else: 
                                     speed = downloaded_size / (now - download_start_time) if (now - download_start_time) > 0 else 0
-                                    await status_bar(_messages.status_head, f"{sizeUnit(speed)}/s", 0, "N/A", sizeUnit(current_total_downloaded), "Unknown", "aiohttp 🌐", task_ctx=task_ctx)
+                                    await status_bar(_messages.status_head, f"{sizeUnit(speed)}/s", 0, "N/A", sizeUnit(current_total_downloaded), "Unknown", engine="aiohttp 🌐", task_ctx=task_ctx)
 
                 log.info(f"Download complete: {display_name}")
                 _transfer.down_bytes.append(downloaded_size)

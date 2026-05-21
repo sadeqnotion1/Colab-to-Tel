@@ -2277,14 +2277,13 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
     chat_id = message.chat.id if message and hasattr(message, 'chat') and message.chat else OWNER # Default to OWNER if chat missing
 
     # Authorization Checks (ensure correct indentation)
+    # Note: Cancel actions are authorized inside the specific handlers below to allow users to cancel their own tasks.
     if user_id != OWNER and (
-        query_data == "cancel"
-        or query_data.startswith("cancel:")
-        or query_data == "cancel_all_tasks"
+        query_data == "cancel_all_tasks"
         or query_data == "cancel_all_tasks_confirm"
         or query_data == "cancel_all_tasks_abort"
     ):
-        await callback_query.answer("Only owner can cancel.", show_alert=True)
+        await callback_query.answer("Only owner can cancel all.", show_alert=True)
         return
     # Assuming settings callbacks start with "setting_" or similar prefixes handled later
     # Example check (adjust if needed):

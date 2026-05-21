@@ -41,7 +41,6 @@ class SABnzbdManager:
 
             # Install dependencies
             deps = [
-                "python3-pip",
                 "python3-dev",
                 "par2",
                 "unrar",

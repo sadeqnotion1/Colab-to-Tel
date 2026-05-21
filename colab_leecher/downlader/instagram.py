@@ -72,7 +72,8 @@ async def instagram_download(link: str, num: int) -> bool:
 
     name = await get_instagram_title(link)
     Messages.download_name = name
-    Messages.status_head = f"<b>📥 DOWNLOADING FROM INSTAGRAM » </b><i>🔗Link {str(num).zfill(2)}</i>\n\n<code>{name}</code>\n"
+    from ..utility.message_safety import escape_html
+    Messages.status_head = f"<b>📥 DOWNLOADING FROM INSTAGRAM » </b><i>🔗Link {str(num).zfill(2)}</i>\n\n<code>{escape_html(name)}</code>\n"
 
     log.info(f"Starting Instagram download for link {num}: {link}")
 
@@ -103,7 +104,7 @@ async def instagram_download(link: str, num: int) -> bool:
                     percentage=float(_instagram_state.percentage),
                     eta=_instagram_state.eta,
                     done=_instagram_state.done,
-                    left=_instagram_state.left,
+                    total_size=_instagram_state.left,
                     engine="Instagram 📸",
                 )
             except Exception as status_bar_err:
@@ -542,7 +543,7 @@ async def instagram_profile_download(url: str, num: int, max_posts: int = 50) ->
                     percentage=float(_instagram_state.percentage),
                     eta=_instagram_state.eta,
                     done=_instagram_state.done,
-                    left=_instagram_state.left,
+                    total_size=_instagram_state.left,
                     engine="Instagram 📸",
                 )
             except Exception as status_bar_err:
