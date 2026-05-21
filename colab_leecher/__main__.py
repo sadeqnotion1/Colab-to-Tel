@@ -951,6 +951,7 @@ async def run_parallel_task(client, message, task_ctx, skip_registration=False):
         # ===== END CLEANUP =====
 
         # Update dashboard
+        await TASK_QUEUE.remove_task(task_ctx.task_id)
         await force_update_summary()
 
         log.info(f"Task {task_id_str} cleanup complete")
