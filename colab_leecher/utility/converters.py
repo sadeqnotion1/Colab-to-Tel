@@ -657,7 +657,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
         except Exception as rm_err:
             log.warning(f"Failed to remove original source '{path}': {rm_err}")
 
-    return archive_out_path, final_archive_size
+    return actual_archive_path, final_archive_size
 # ----- END OF archive function definition -----
 
 
@@ -934,7 +934,8 @@ async def sizeChecker(
             ".tgz",
             ".tbz",
             ".tbz2",
-            ".txz"}
+            ".txz",
+            ".001"}
 
         if ext_lower in archive_exts:
             log.info(

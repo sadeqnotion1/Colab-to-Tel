@@ -826,6 +826,15 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
             task_ctx.messages.src_link = gist_url if not is_subtask else "TikTok Sub-task"
 
             zip_success, zip_path = await downloader.create_zip_archive(zip_name)
+            
+            # Check for ZIP existence (handle .001 split suffix)
+            if zip_success and zip_path and not os.path.exists(zip_path):
+                if os.path.exists(zip_path + ".001"):
+                    zip_path = zip_path + ".001"
+                    log.info(f"Using split volume for upload: {zip_path}")
+                else:
+                    log.warning(f"ZIP path reported by downloader doesn't exist: {zip_path}")
+
             if not zip_success or not zip_path or not os.path.exists(zip_path):
                 await _safe_edit(f"<b>ZIP Creation Failed (Batch {part_num})</b>")
                 part_num += 1
