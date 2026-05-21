@@ -67,6 +67,14 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
         return False
 
     log.info(f"Preparing to upload {task_id_str}: {actual_upload_filename} (Display Name: {base_upload_name}) Size: {helper.sizeUnit(file_size)}")
+    
+    # NEW: Set total size for dashboard tracking
+    if transfer_obj:
+        transfer_obj.total_size = file_size
+        if isinstance(transfer_obj.up_bytes, list) and len(transfer_obj.up_bytes) > 0:
+            transfer_obj.up_bytes[0] = 0 # Reset current upload progress
+        elif not isinstance(transfer_obj.up_bytes, list):
+            transfer_obj.up_bytes = 0
 
     # --- Thumbnail, duration, dimension, caption logic ---
     thumb_path = None # Initialize to None, will be set later
@@ -198,6 +206,19 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
             last_progress_time = now
             try:
                 speed_string, eta_seconds, percentage = helper.speedETA(upload_start_time, current, total)
+                
+                # NEW: Update transfer object for real-time dashboard tracking
+                if transfer_obj:
+                    if isinstance(transfer_obj.up_bytes, list) and len(transfer_obj.up_bytes) > 0:
+                        transfer_obj.up_bytes[0] = current
+                    elif not isinstance(transfer_obj.up_bytes, list):
+                        transfer_obj.up_bytes = current
+                    transfer_obj.last_speed = speed_string
+                    # Extract numeric speed if possible for dashboard sorting/agg
+                    try:
+                        transfer_obj.last_speed_bytes = current / (now - upload_start_time) if (now - upload_start_time) > 0 else 0
+                    except: pass
+                
                 done_str = helper.sizeUnit(current)
                 total_str = helper.sizeUnit(total)
                 eta_str = helper.getTime(eta_seconds)
