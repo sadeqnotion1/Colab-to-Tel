@@ -168,8 +168,8 @@ if valid_creds and ipython:
 
     # Install dependencies
     if Working and os.path.exists(repo_path):
-        log.info("Installing OS packages...")
-        cmd_apt = "apt-get update -qq && apt-get install -y -qq ffmpeg aria2 megatools"
+        log.info("📦 Installing system packages (ffmpeg, aria2)...")
+        cmd_apt = "add-apt-repository -y universe && apt-get update -qq && apt-get install -y -qq ffmpeg aria2 megatools"
         proc_apt = subprocess.run(cmd_apt, shell=True, capture_output=True, text=True)
         if proc_apt.returncode != 0:
             log.warning(f"Apt install issues:\n{proc_apt.stderr}")
