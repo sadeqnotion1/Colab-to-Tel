@@ -605,10 +605,12 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
     # FIX #2: was markdown-styled failure/cancel text rendered incorrectly in HTML mode.
     # Markdown ** renders as literal asterisks in HTML-mode messages.
     final_summary_header = "<b>\u274c Task Failed!</b>" if task_failed else "<b>\U0001f6d1 Task Cancelled by User</b>"
+    # FIX: Escape final_reason to prevent HTML parsing errors
+    safe_reason = escape_html(final_reason)
     final_summary_text = (
         f"{final_summary_header}\n"
         f"Task ID: {task_ctx.get_short_id()}\n"
-        f"Reason: {final_reason}\n"
+        f"Reason: {safe_reason}\n"
         f"Elapsed: {time_spent}\n"
     )
     if report_saved:

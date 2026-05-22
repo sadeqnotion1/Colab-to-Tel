@@ -180,10 +180,14 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
     # --- Define Caption ---
     # Ensure caption is defined *after* all thumbnail logic
     try:
-         caption = f"<code>{BOT.Setting.prefix or ''}{base_upload_name}{BOT.Setting.suffix or ''}</code>"
+         # FIX: Escape prefix, suffix and filename to prevent HTML parsing errors
+         safe_prefix = escape(BOT.Setting.prefix or '')
+         safe_suffix = escape(BOT.Setting.suffix or '')
+         safe_filename = escape(base_upload_name)
+         caption = f"<code>{safe_prefix}{safe_filename}{safe_suffix}</code>"
     except Exception as cap_err:
          log.error(f"Error formatting caption: {cap_err}. Using default.")
-         caption = f"<code>{base_upload_name}</code>" # Basic fallback caption
+         caption = f"<code>{escape(base_upload_name)}</code>" # Basic fallback caption
 
     # --- Initialize Upload State Variables ---
     # ** This block MUST be indented correctly **

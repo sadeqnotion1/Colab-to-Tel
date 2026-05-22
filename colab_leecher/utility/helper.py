@@ -25,6 +25,14 @@ from .ui_copy import build_settings_text
 log = logging.getLogger(__name__)
 
 
+async def _edit_status_message(msg, text: str, reply_markup, parse_mode):
+    """Unified message editor — uses edit_caption if message has a photo, else edit_text."""
+    if msg.photo:
+        await msg.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
+    else:
+        await msg.edit_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=True)
+
+
 async def get_video_metadata(file_path: str) -> dict:
     """
     Extracts video metadata (duration, width, height) using ffprobe.
@@ -719,238 +727,6 @@ async def extract_filename_from_url(url: str) -> str | None:
     return None  # Return None on complete failure
 
 
-# --- End of function ---
-    # 1. Try HEAD request for Content-Disposition header first (fast)
-    log.debug(f"Attempting HEAD request for {url}...")
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.head(url, headers=browser_headers, timeout=15, allow_redirects=True) as response:
-                log.info(
-                    f"HEAD request for {url} completed with status: {response.status}")
-
-                # Check if successful
-                if response.status < 400:
-                    # Try Content-Disposition header
-                    content_disposition = response.headers.get(
-                        'Content-Disposition')
-                    filename = extract_from_content_disposition(
-                        content_disposition)
-                    if filename:
-                        return filename
-
-                    # Also check Content-Type for clues (like PDFs)
-                    content_type = response.headers.get(
-                        'Content-Type', '').lower()
-                    if content_type and '/' in content_type and not content_type.startswith(
-                            ('text/html', 'application/xhtml')):
-                        log.debug(f"Found content-type: {content_type}")
-                        # This is likely a direct file download, use path
-                        # extraction
-                        parsed_url = urllib.parse.urlparse(url)
-                        path = urllib.parse.unquote(
-                            parsed_url.path, encoding='utf-8', errors='replace')
-                        if path and '/' in path:
-                            basename = os.path.basename(path)
-                            if basename and '.' in basename and not basename.startswith(
-                                    '.'):
-                                cleaned = clean_filename(basename)
-                                if cleaned:
-                                    log.info(
-                                        f"Using filename from path (content-type hint): {cleaned}")
-                                    return cleaned
-
-    except Exception as head_err:
-        log.warning(f"HEAD request failed for {url}: {head_err}")
-
-    # 2. Try GET request (some servers only set headers on actual GET)
-    log.debug(f"Attempting GET request for {url}...")
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=browser_headers, timeout=15, allow_redirects=True) as response:
-                log.info(
-                    f"GET request for {url} completed with status: {response.status}")
-
-                # Try Content-Disposition header again
-                content_disposition = response.headers.get(
-                    'Content-Disposition')
-                filename = extract_from_content_disposition(
-                    content_disposition)
-                if filename:
-                    return filename
-
-                # For HTML responses, try to extract title as filename
-                content_type = response.headers.get('Content-Type', '').lower()
-                if content_type.startswith(('text/html', 'application/xhtml')):
-                    try:
-                        # Read first chunk to check for <title> tag (limit to
-                        # avoid large downloads)
-                        # Read ~50KB
-                        html_content = await response.content.read(50000)
-                        html_str = html_content.decode(
-                            'utf-8', errors='replace')
-
-                        # Extract title
-                        title_match = re.search(
-                            r'<title[^>]*>(.*?)</title>', html_str, re.IGNORECASE | re.DOTALL)
-                        if title_match:
-                            title = title_match.group(1).strip()
-                            if title:
-                                # Clean and ensure it has an extension for HTML
-                                title_clean = clean_filename(title)
-                                if title_clean:
-                                    if not title_clean.lower().endswith(('.html', '.htm')):
-                                        title_clean += '.html'
-                                    log.info(
-                                        f"Using filename from HTML title: {title_clean}")
-                                    return title_clean
-                    except Exception as html_err:
-                        log.warning(
-                            f"Failed to extract HTML title: {html_err}")
-
-    except Exception as get_err:
-        log.warning(f"GET request failed for {url}: {get_err}")
-
-    # 3. Parse URL path
-    log.debug("Falling back to URL Path extraction...")
-    try:
-        parsed_url = urllib.parse.urlparse(url)
-        path_decoded = urllib.parse.unquote(
-            parsed_url.path, encoding='utf-8', errors='replace')
-        filename_from_path = os.path.basename(path_decoded.strip('/'))
-
-        # Check if this looks like a valid filename with extension
-        if filename_from_path and '.' in filename_from_path and not filename_from_path.startswith(
-                '.'):
-            name_part, ext_part = os.path.splitext(filename_from_path)
-            if name_part and ext_part:  # Ensure both parts exist
-                cleaned_from_path = clean_filename(filename_from_path)
-                if cleaned_from_path:
-                    log.info(
-                        f"Using filename from URL Path: {cleaned_from_path}")
-                    return cleaned_from_path
-    except Exception as path_err:
-        log.warning(f"Error parsing URL path for filename: {path_err}")
-
-    # 4. Try Query Parameters - extended to check more possible parameter names
-    log.debug("Trying Query Parameter extraction...")
-    try:
-        parsed_url = urllib.parse.urlparse(url)
-        query_params = urllib.parse.parse_qs(parsed_url.query)
-
-        # Common parameters that might contain filenames (expanded from
-        # original)
-        filename_params = [
-            'filename',
-            'file',
-            'name',
-            'title',
-            'fn',
-            'download',
-            'id',
-            'attachment',
-            'f',
-            'document',
-            'doc',
-            'pdf',
-            'media',
-            'video',
-            'audio',
-            'track',
-            'image',
-            'img',
-            'photo',
-            'picture',
-            'source',
-            'src',
-            'destination',
-            'output',
-            'out',
-            'export',
-            'path',
-            'target']
-
-        for param in filename_params:
-            if param in query_params and query_params[param][0]:
-                param_value = query_params[param][0]
-                # Skip very short or unlikely filename values
-                if len(param_value) > 3 and '.' in param_value:
-                    cleaned = clean_filename(
-                        urllib.parse.unquote(
-                            param_value,
-                            encoding='utf-8',
-                            errors='replace'))
-                    if cleaned:
-                        log.info(
-                            f"Using filename from Query Parameter ('{param}'): {cleaned}")
-                        return cleaned
-    except Exception as query_err:
-        log.warning(
-            f"Error parsing query parameters for filename: {query_err}")
-
-    # 5. Try URL fragment (after #)
-    log.debug("Trying URL fragment extraction...")
-    try:
-        parsed_url = urllib.parse.urlparse(url)
-        if parsed_url.fragment:
-            fragment = urllib.parse.unquote(
-                parsed_url.fragment, encoding='utf-8', errors='replace')
-            # Only use if it looks like a filename (has extension and NOT a parameter like "t=0.00")
-            # Skip fragments that contain "=" as they're likely query
-            # parameters
-            if '.' in fragment and not fragment.startswith(
-                    '.') and '=' not in fragment:
-                cleaned = clean_filename(fragment)
-                if cleaned:
-                    log.info(f"Using filename from URL fragment: {cleaned}")
-                    return cleaned
-    except Exception as frag_err:
-        log.warning(f"Error parsing URL fragment for filename: {frag_err}")
-
-    # 6. Domain + path slugified as last resort
-    log.debug("Using domain+path as last resort...")
-    try:
-        parsed_url = urllib.parse.urlparse(url)
-        domain = parsed_url.netloc.split(':')[0]  # Remove port if present
-
-        # Get last meaningful path segment
-        path_parts = [p for p in parsed_url.path.split('/') if p]
-        path_part = path_parts[-1] if path_parts else ''
-
-        if domain:
-            if path_part and len(
-                    path_part) > 2 and not path_part.startswith('.'):
-                # Use domain + path segment
-                fallback_name = f"{domain}-{path_part}"
-            else:
-                # Just domain + timestamp
-                from datetime import datetime
-                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                fallback_name = f"{domain}-{timestamp}"
-
-            # Add appropriate extension based on Content-Type if we did a GET
-            if 'content_type' in locals() and content_type:
-                ext = mimetypes.guess_extension(
-                    content_type.split(';')[0].strip())
-                if ext:
-                    fallback_name += ext
-                elif fallback_name.endswith(('.html', '.htm')):
-                    pass  # Already has extension
-                else:
-                    fallback_name += '.html'  # Default to HTML
-
-            cleaned = clean_filename(fallback_name)
-            if cleaned:
-                log.info(f"Using fallback domain+path name: {cleaned}")
-                return cleaned
-    except Exception as fallback_err:
-        log.warning(f"Error creating fallback filename: {fallback_err}")
-
-    # If ALL methods failed
-    log.error(
-        f"Failed to extract a valid filename using any method for URL: {url}")
-    return None
-
-
 def apply_dot_style(filename):
     """Replaces common separators with dots and cleans up."""
     # Replace spaces, underscores, hyphens, plus signs with dots
@@ -1473,6 +1249,17 @@ def isTimeOver(interval=2.5):
         return True
     return False
 
+
+def is_task_time_over(task_ctx, interval: float = 2.5) -> bool:
+    """Per-task throttle check — parallel-safe. Falls back to global isTimeOver if no task_ctx."""
+    if task_ctx is None:
+        return isTimeOver(interval)
+    now = time()
+    if now - task_ctx.last_status_update >= interval:
+        task_ctx.last_status_update = now
+        return True
+    return False
+
 # --- Thumbnail Management ---
 
 
@@ -1539,6 +1326,54 @@ def is_split_file(filename):
         re.search(
             r'\.(part\d+|[0-9]{3,}|z[0-9]{2,}|zip\.\d+)$',
             filename.lower()))
+
+def thumbMaintainer(file_path):
+    """
+    Synchronous function to generate/validate a thumbnail for a given file.
+    Designed to be run in an executor.
+    
+    Returns:
+        (thumb_path, duration) or (None, 0)
+    """
+    global log, Paths
+    try:
+        if not ospath.exists(file_path):
+            return None, 0
+
+        f_type = fileType(file_path)
+        thumb_path = None
+        duration = 0
+
+        if f_type == "video":
+            # 1. Get Duration
+            metadata = asyncio.run(get_video_metadata(file_path))
+            duration = metadata.get("duration", 0)
+            
+            # 2. Generate Thumbnail
+            import tempfile
+            temp_thumb_dir = ospath.join(tempfile.gettempdir(), "colab_leecher_thumbs")
+            thumb_path = asyncio.run(get_video_thumbnail(file_path, output_dir=temp_thumb_dir))
+            
+        elif f_type == "photo":
+            thumb_path = file_path
+            duration = 0
+            
+        # Final validation/conversion using existing convertIMG
+        if thumb_path and ospath.exists(thumb_path):
+            valid_thumb = convertIMG(thumb_path)
+            if valid_thumb:
+                return valid_thumb, duration
+        
+        # Fallback to default HERO if available
+        if ospath.exists(Paths.DEFAULT_HERO):
+            return Paths.DEFAULT_HERO, duration
+            
+        return None, duration
+
+    except Exception as e:
+        log.error(f"Error in thumbMaintainer for {file_path}: {e}")
+        return None, 0
+
 
 # Add a timeout wrapper for thumbMaintainer
 
@@ -1815,12 +1650,24 @@ async def status_bar(
 
     from html import escape
 
-    # Debug logging added as requested
+    # Resolve core variables at top to ensure consistency across branches
+    _status_msg = task_ctx.status_msg if task_ctx else MSG.status_msg
+    _kb_markup = keyboard(task_ctx.get_short_id()) if task_ctx else keyboard()
+
+    # Debug logging
     task_id_str = f"[{task_ctx.get_short_id()}]" if task_ctx else "[legacy]"
     log.info(
         f"📊 status_bar {task_id_str} called. Pct={percentage}%, Speed={speed}")
 
-    # ===== PARALLEL MODE: Skip individual status updates, use dashboard inste
+    # Unified throttling logic: ALWAYS use per-task timer if available, otherwise global
+    if not force_update:
+        if not is_task_time_over(task_ctx, 2.5):
+            log.info(f"⏱️ status_bar {task_id_str}: Throttled, skipping.")
+            return
+
+    log.info(f"✅ status_bar {task_id_str}: Timer OK, proceeding.")
+
+    # ===== PARALLEL MODE: Skip individual status updates, use dashboard instead
     if task_ctx and not force_update:
         from .task_context import TASK_QUEUE
         if await TASK_QUEUE.has_task(task_ctx.task_id):
@@ -1956,27 +1803,11 @@ async def status_bar(
 
             # Handle Telegram message update for custom text
             if use_custom_text:
-                curr_t = time()
-                if not force_update and curr_t - task_ctx.last_status_update < 2.5:
-                    return
-                task_ctx.last_status_update = curr_t
-                
-                if task_ctx.status_msg:
+                # Throttling logic already handled at top
+                if _status_msg:
                     try:
                         final_text = done + sysINFO()
-                        if task_ctx.status_msg.photo:
-                            await task_ctx.status_msg.edit_caption(
-                                caption=final_text,
-                                reply_markup=keyboard(task_ctx.task_id),
-                                parse_mode=enums.ParseMode.HTML
-                            )
-                        else:
-                            await task_ctx.status_msg.edit_text(
-                                text=final_text,
-                                reply_markup=keyboard(task_ctx.task_id),
-                                parse_mode=enums.ParseMode.HTML,
-                                disable_web_page_preview=True
-                            )
+                        await _edit_status_message(_status_msg, final_text, _kb_markup, enums.ParseMode.HTML)
                     except Exception as e:
                         if "message is not modified" not in str(e).lower():
                             log.warning(f"Failed to update custom status: {e}")
@@ -1984,31 +1815,7 @@ async def status_bar(
             return
     # ===== END PARALLEL MODE CHECK =====
 
-    # Throttle updates using per-task timing (parallel-safe) or global timing
-    # (legacy)
-    current_time = time()
-    if task_ctx:
-        # Multi-task mode: Use per-task timer (parallel-safe!)
-        if current_time - task_ctx.last_status_update < 2.5:
-            log.info(
-                f"⏱️ status_bar {task_id_str}: Throttled (per-task timer), skipping.")
-            return
-        task_ctx.last_status_update = current_time
-        log.info(
-            f"✅ status_bar {task_id_str}: Timer OK, will update Telegram message")
-    else:
-        # Legacy single-task mode: Use global timer
-        if not isTimeOver(2.5):
-            log.info(
-                f"⏱️ status_bar {task_id_str}: Throttled (global timer), skipping.")
-            return
-        log.info(f"status_bar {task_id_str}: Global timer OK, will update")
-
-    # NEW: Use task_ctx.status_msg if available, otherwise fall back to global
-    # MSG
-    status_msg = task_ctx.status_msg if task_ctx else MSG.status_msg
-
-    if status_msg and hasattr(status_msg, 'edit_text'):
+    if _status_msg and hasattr(_status_msg, 'edit_text'):
         final_text = ""
         try:
             if use_custom_text:
@@ -2020,7 +1827,7 @@ async def status_bar(
             else:
                 # Standard formatting mode
                 log.debug("status_bar using standard formatting mode.")
-                bar_length = 20  # Length of the progress bar (Increased to 20 for better granularity)
+                bar_length = 20  # Length of the progress bar
 
                 # Ensure percentage is treated as a number for calculation
                 try:
@@ -2036,14 +1843,12 @@ async def status_bar(
                         0, int(
                             percentage_float / 100 * bar_length)))
                 
-                # Enhanced visual bar style (Beautiful/Modern)
-                # Using █ for filled and ▒ for remaining (richer texture)
+                # Enhanced visual bar style
                 bar = "█" * filled_length + "▒" * (bar_length - filled_length)
 
-                eta_str = eta  # Use eta string passed directly
+                eta_str = eta
 
-                # NEW: Calculate elapsed time from task_ctx if available,
-                # otherwise use global
+                # Calculate elapsed time from task_ctx if available
                 if task_ctx and task_ctx.started_at:
                     elapsed_seconds = (
                         datetime.now() - task_ctx.started_at).seconds
@@ -2052,7 +1857,7 @@ async def status_bar(
                         datetime.now() - BotTimes.task_start).seconds
                 elapsed_str = getTime(elapsed_seconds)
 
-                # Format the main body of the status message (Modern UI)
+                # Format the main body of the status message
                 text_body = (
                     f"\n<b>┌「{bar}」 » {percentage_float:.1f}%</b>"
                     f"\n<b>├⚡️ Speed »</b> <code>{escape(str(speed))}</code>"
@@ -2067,40 +1872,25 @@ async def status_bar(
                 final_text = down_msg + text_body + sysINFO()
 
             # --- Edit the Telegram message ---
-            # Get the cancel keyboard with task ID
-            kb_markup = keyboard(
-                task_ctx.get_short_id()) if task_ctx else keyboard()
-            log.debug(f"Attempting to edit status message {status_msg.id}")
-
-            # Check if message is a photo (has thumbnail) or plain text
-            if hasattr(status_msg, 'photo') and status_msg.photo:
-                # Message has a photo/thumbnail - edit caption to preserve
-                # thumbnail
-                await status_msg.edit_caption(caption=final_text, reply_markup=kb_markup, parse_mode=enums.ParseMode.HTML)
-                log.debug("Status message caption edited (thumbnail preserved).")
-            else:
-                # Plain text message - edit text normally
-                await status_msg.edit_text(text=final_text, disable_web_page_preview=True, reply_markup=kb_markup, parse_mode=enums.ParseMode.HTML)
-                log.debug("Status message text edited.")
+            log.debug(f"Attempting to edit status message {_status_msg.id}")
+            await _edit_status_message(_status_msg, final_text, _kb_markup, enums.ParseMode.HTML)
+            log.debug("Status message updated.")
 
         except MessageNotModified:
-            # This is expected if the message content hasn't changed, ignore it
-            # silently
             log.debug("Status message content hasn't changed, skipping edit.")
             pass
         except Exception as e:
-            # Log other errors during message editing
             if "Message to edit not found" not in str(
                     e):  # Avoid logging if message was deleted
                 log.warning(f"Status bar update failed: {str(e)}")
 
     else:
         # Log if the status message object is missing or invalid
-        if not status_msg:
-            log.debug(f"status_bar {task_id_str}: status_msg is not set.")
-        elif not hasattr(status_msg, 'edit_text'):
+        if not _status_msg:
+            log.debug(f"status_bar {task_id_str}: _status_msg is not set.")
+        elif not hasattr(_status_msg, 'edit_text'):
             log.debug(
-                f"status_bar {task_id_str}: status_msg object lacks 'edit_text' method.")
+                f"status_bar {task_id_str}: _status_msg object lacks 'edit_text' method.")
 
 
 def multipartArchive(path: str, archive_type: str, remove_parts: bool):

@@ -144,8 +144,17 @@ def _initialize_runtime() -> None:
     API_ID = credentials.get("API_ID")
     API_HASH = credentials.get("API_HASH")
     BOT_TOKEN = credentials.get("BOT_TOKEN")
-    OWNER = credentials.get("USER_ID")
-    DUMP_ID = credentials.get("DUMP_ID")
+    
+    # Explicitly cast OWNER and DUMP_ID to int for reliable authorization checks
+    try:
+        OWNER = int(credentials.get("USER_ID")) if credentials.get("USER_ID") else None
+    except (ValueError, TypeError):
+        OWNER = credentials.get("USER_ID")
+        
+    try:
+        DUMP_ID = int(credentials.get("DUMP_ID")) if credentials.get("DUMP_ID") else None
+    except (ValueError, TypeError):
+        DUMP_ID = credentials.get("DUMP_ID")
 
     required = {
         "API_ID": API_ID,
