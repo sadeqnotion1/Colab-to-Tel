@@ -672,7 +672,9 @@ slog = get_logger(__name__)
 async def _execute_tiktok_bulk(client, message, task_ctx):
     """Internal execution logic for TikTok Bulk download (parent and workers)"""
     from colab_leecher.downlader.tiktok_bulk import TikTokBulkDownloader
-    from colab_leecher.utility.handler import Leech
+    from colab_leecher.utility.handler import Leech, SendLogs
+    from colab_leecher.utility.enhanced_status import CompletionMessage, StatusDisplay
+    from colab_leecher.utility.ui_components import Emoji, Box
     from datetime import datetime
 
     # Helper function to safely update status message (text or photo caption)
@@ -690,7 +692,8 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
                 await task_ctx.status_msg.edit_text(
                     text=text,
                     parse_mode=enums.ParseMode.HTML,
-                    reply_markup=keyboard(task_ctx.task_id)
+                    reply_markup=keyboard(task_ctx.task_id),
+                    disable_web_page_preview=True
                 )
         except Exception as edit_err:
             if "message is not modified" not in str(edit_err).lower():
@@ -701,6 +704,27 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
         metadata = getattr(task_ctx, 'metadata', {})
         chunk = metadata.get('tiktok_chunk')
         gist_url = message.text.strip() if message.text else ""
+        
+        # Determine if this is a sub-task (worker)
+        is_subtask = bool(chunk)
+
+        # Initialize dump channel message if not a subtask
+        if not is_subtask and DUMP_ID:
+            try:
+                from colab_leecher.utility.ui_copy import get_src_text
+                
+                src_link = gist_url
+                task_ctx.messages.src_link = src_link
+                src_text = get_src_text(src_link)
+                
+                task_ctx.sent_msg = await colab_bot.send_message(
+                    chat_id=DUMP_ID,
+                    text=src_text[0],
+                    disable_web_page_preview=True
+                )
+                log.info(f"Initialized dump channel message for TikTok Bulk: {task_ctx.get_short_id()}")
+            except Exception as dump_err:
+                log.error(f"Failed to initialize dump channel for TikTok Bulk: {dump_err}")
 
         # Get thumbnail path
         if BOT.Setting.thumbnail and os.path.exists(Paths.THMB_PATH):
@@ -712,43 +736,15 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
 
         # If it's a sub-task or doesn't have a status message yet, create one
         if not task_ctx.status_msg:
-            status_text = (
-                f"<b>TikTok Bulk Download</b>\n\n"
-                f"<b>Task ID:</b> <code>{task_ctx.get_short_id()}</code>\n"
-                "<b>Status:</b> Initializing...\n\n"
-                "<i>Starting download worker...</i>"
-            )
-            if thumb_path and os.path.exists(thumb_path):
-                task_ctx.status_msg = await message.reply_photo(
-                    photo=thumb_path,
-                    caption=status_text,
-                    parse_mode=enums.ParseMode.HTML,
-                    reply_markup=keyboard(task_ctx.task_id)
-                )
-            else:
-                task_ctx.status_msg = await message.reply_text(
-                    status_text,
-                    parse_mode=enums.ParseMode.HTML,
-                    reply_markup=keyboard(task_ctx.task_id)
-                )
-
-        # Create downloader instance
-        downloader = TikTokBulkDownloader(client, message, task_ctx)
-
-        if chunk:
-            urls = chunk
-            is_subtask = True
-            log.info(f"TikTok sub-task {task_ctx.get_short_id()} starting with {len(urls)} URLs")
-        else:
-            is_subtask = False
+            # ... (rest of the code) ...
             if not gist_url:
-                await _safe_edit("❌ Error: No Gist URL provided.")
+                await _safe_edit(f"{Emoji.ERROR} Error: No Gist URL provided.")
                 return
 
             success, urls = await downloader.fetch_gist_urls(gist_url)
             if not success or not urls:
                 await _safe_edit(
-                    "<b>TikTok Bulk Download Failed</b>\n\n"
+                    f"<b>{Emoji.ERROR} TikTok Bulk Download Failed</b>\n\n"
                     "Could not fetch TikTok URLs from the gist."
                 )
                 return
@@ -767,22 +763,63 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
                     start = end
                 
                 log.info(f"Splitting TikTok Bulk ({len(urls)} URLs) into {num_workers} parallel workers")
-                await _safe_edit(f"🚀 <b>Turbo Mode:</b> Splitting work into {num_workers} parallel workers...")
+                await _safe_edit(f"{Emoji.ROCKET} <b>Turbo Mode:</b> Splitting work into {num_workers} parallel workers...")
                 await asyncio.sleep(1.5)
                 
+                worker_tasks = []
+                sub_contexts = []
                 for i, chunk_urls in enumerate(chunks):
                     sub_ctx = create_task_context(message.from_user.id, message.chat.id, mode="leech")
                     sub_ctx.service_type = "tiktokbulk"
                     sub_ctx.metadata['tiktok_chunk'] = chunk_urls
                     sub_ctx.messages.download_name = f"{task_ctx.messages.download_name or 'TikTok'}_Worker{i+1}"
+                    sub_contexts.append(sub_ctx)
                     
-                    TASK_QUEUE.create_background_task(
+                    worker_task = TASK_QUEUE.create_background_task(
                         run_parallel_task(client, message, sub_ctx),
                         name=f"tiktok-worker-{sub_ctx.get_short_id()}"
                     )
+                    worker_tasks.append(worker_task)
                 
-                await _safe_edit(f"✅ Created {num_workers} parallel workers. Tracking progress in dashboard.")
-                await asyncio.sleep(2)
+                await _safe_edit(f"{Emoji.SUCCESS} <b>Turbo Mode Active:</b> Running {num_workers} parallel workers. Tracking progress in dashboard.")
+                
+                # Wait for all workers to complete
+                await asyncio.gather(*worker_tasks)
+                
+                # Consolidate results
+                total_success = 0
+                total_failed = 0
+                for s_ctx in sub_contexts:
+                    total_success += s_ctx.metadata.get('success_count', 0)
+                    total_failed += s_ctx.metadata.get('failed_count', 0)
+                    # Merge transfer stats for SendLogs
+                    task_ctx.transfer.sent_file.extend(s_ctx.transfer.sent_file)
+                    task_ctx.transfer.sent_file_names.extend(s_ctx.transfer.sent_file_names)
+                    if isinstance(s_ctx.transfer.up_bytes, list):
+                        if isinstance(task_ctx.transfer.up_bytes, list):
+                            task_ctx.transfer.up_bytes.extend(s_ctx.transfer.up_bytes)
+                        else:
+                            task_ctx.transfer.up_bytes = [task_ctx.transfer.up_bytes] + s_ctx.transfer.up_bytes
+                    else:
+                        if isinstance(task_ctx.transfer.up_bytes, list):
+                            task_ctx.transfer.up_bytes.append(s_ctx.transfer.up_bytes)
+                        else:
+                            task_ctx.transfer.up_bytes += s_ctx.transfer.up_bytes
+
+                report = CompletionMessage.task_complete(
+                    "TikTok Bulk Complete",
+                    {
+                        "Total URLs": str(len(urls)),
+                        "Success": str(total_success),
+                        "Failed": str(total_failed),
+                        "Workers": str(num_workers)
+                    },
+                    hashtag="#TIKTOK_BULK"
+                )
+                await _safe_edit(report)
+                
+                # Call SendLogs for final summary (bot + dump channel)
+                await SendLogs(is_leech=True, task_ctx=task_ctx)
                 return
 
         # Main Download Loop
@@ -803,11 +840,12 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
                 _shutil.rmtree(downloader.download_dir)
             os.makedirs(downloader.download_dir, exist_ok=True)
 
-            await _safe_edit(
-                f"<b>Downloading TikTok Videos - Part {part_num}</b>\n\n"
-                f"<b>Target Size:</b> <code>{sizeUnit(TARGET_BATCH_SIZE)}</code>\n"
-                f"<b>Remaining:</b> <code>{len(current_urls)}</code> URLs"
+            status_text = (
+                f"<b>{Emoji.DOWNLOAD} Downloading TikTok - Batch {part_num}</b>\n"
+                f"{Box.TOP_LEFT}{Emoji.SIZE} <b>Target:</b> <code>{sizeUnit(TARGET_BATCH_SIZE)}</code>\n"
+                f"{Box.BOTTOM_LEFT}{Emoji.INFO} <b>Remaining:</b> <code>{len(current_urls)}</code> URLs"
             )
+            await _safe_edit(status_text)
 
             download_success, summary, current_urls = await downloader.download_bulk(current_urls, size_limit=TARGET_BATCH_SIZE)
 
@@ -816,7 +854,7 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
                 break
 
             if not download_success:
-                await _safe_edit(f"<b>Batch Failed (Part {part_num})</b>\n\n{summary}\n\nSkipping...")
+                await _safe_edit(f"<b>{Emoji.ERROR} Batch Failed (Part {part_num})</b>\n\n{summary}\n\nSkipping...")
                 part_num += 1
                 continue
 
@@ -836,12 +874,18 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
                     log.warning(f"ZIP path reported by downloader doesn't exist: {zip_path}")
 
             if not zip_success or not zip_path or not os.path.exists(zip_path):
-                await _safe_edit(f"<b>ZIP Creation Failed (Batch {part_num})</b>")
+                await _safe_edit(f"<b>{Emoji.ERROR} ZIP Creation Failed (Batch {part_num})</b>")
                 part_num += 1
                 continue
 
             user_summary = downloader.get_batch_user_summary()
-            await _safe_edit(f"<b>Uploading to Telegram - Batch {part_num}</b>\n\n<b>ZIP:</b> <code>{zip_name}</code>")
+            zip_size = os.path.getsize(zip_path)
+            status_text = (
+                f"<b>{Emoji.UPLOAD} Uploading Batch {part_num}</b>\n"
+                f"{Box.TOP_LEFT}{Emoji.ARCHIVE} <b>ZIP:</b> <code>{zip_name}</code>\n"
+                f"{Box.BOTTOM_LEFT}{Emoji.INFO} <b>Size:</b> <code>{sizeUnit(zip_size)}</code>"
+            )
+            await _safe_edit(status_text)
 
             await Leech(path=zip_path, remove_source=False, task_ctx=task_ctx)
             all_successful = len(downloader.successful_downloads)
@@ -849,16 +893,30 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
             part_num += 1
 
         # Final Summary
-        if not is_subtask:
-            report = f"🚀 <b>Turbo Mode Complete</b>\n\n<b>Total URLs:</b> <code>{total_urls}</code>"
+        if is_subtask:
+            # Subtasks store results and finish silently
+            task_ctx.metadata['success_count'] = all_successful
+            task_ctx.metadata['failed_count'] = all_failed
+            log.info(f"Subtask {task_ctx.get_short_id()} finished. S:{all_successful} F:{all_failed}")
+            return
         else:
-            report = f"<b>TikTok Download Complete</b>\n\n<b>Total:</b> <code>{total_urls}</code>\n<b>Success:</b> <code>{all_successful}</code>"
-            if all_failed: report += f"\n<b>Failed:</b> <code>{all_failed}</code>"
+            # Single non-turbo task completion
+            report = CompletionMessage.task_complete(
+                "TikTok Bulk Complete",
+                {
+                    "Total URLs": str(total_urls),
+                    "Success": str(all_successful),
+                    "Failed": str(all_failed)
+                },
+                hashtag="#TIKTOK_BULK"
+            )
+            await _safe_edit(report)
+            
+            # Call SendLogs for final summary (bot + dump channel)
+            await SendLogs(is_leech=True, task_ctx=task_ctx)
 
-        await _safe_edit(report)
-
-        # Upload failed log
-        if all_failed:
+        # Upload failed log if any
+        if all_failed and not is_subtask:
             failed_log = downloader.get_failed_urls_log()
             if failed_log:
                 log_path = os.path.join(downloader.download_dir, "failed_urls.txt")
@@ -868,7 +926,7 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
 
     except Exception as e:
         log.exception(f"Critical error in _execute_tiktok_bulk: {e}")
-        await _safe_edit(f"❌ <b>Critical Error:</b> {str(e)[:100]}")
+        await _safe_edit(f"{Emoji.ERROR} <b>Critical Error:</b> {str(e)[:100]}")
 
 @timed_operation("parallel_task")
 async def run_parallel_task(client, message, task_ctx, skip_registration=False):

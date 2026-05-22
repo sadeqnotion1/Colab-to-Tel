@@ -414,6 +414,7 @@ class TikTokBulkDownloader(BaseDownloader):
             
             pending_urls = urls.copy()
             active_tasks = set()
+            last_update_time = 0
             
             while (pending_urls or active_tasks) and not (self.task_ctx and self.task_ctx.is_cancelled):
                 # Start new downloads if we have room and haven't hit the limit
@@ -466,14 +467,23 @@ class TikTokBulkDownloader(BaseDownloader):
                     else:
                         self.failed_downloads.append(result)
 
-                    # Update progress for EACH video
-                    percentage = (processed_count / total_videos) * 90
-                    status_text = f"{processed_count}/{total_videos} videos ({len(session_successful)} OK, {len(self.failed_downloads)} failed)"
-                    status_text += f" | {sizeUnit(current_batch_size)}/{sizeUnit(size_limit)}"
-                    
-                    # Store current size for status bar
-                    self.total_size = current_batch_size
-                    await self.update_progress_bar(percentage, status_text, engine="TikTok Bulk", force_update=True)
+                    # Update progress - Throttle updates to Telegram (every 3s or every 5 videos)
+                    now = time.time()
+                    if now - last_update_time > 3.0 or processed_count % 5 == 0 or processed_count == total_videos:
+                        percentage = (processed_count / total_videos) * 90
+                        status_text = f"{processed_count}/{total_videos} videos ({len(session_successful)} OK, {len(self.failed_downloads)} failed)"
+                        status_text += f" | {sizeUnit(current_batch_size)}/{sizeUnit(size_limit)}"
+                        
+                        # Store current size for status bar
+                        self.total_size = current_batch_size
+                        await self.update_progress_bar(percentage, status_text, engine="TikTok Bulk", force_update=True)
+                        last_update_time = now
+
+            # Store counts in task_ctx for consolidation if available
+            if self.task_ctx:
+                self.task_ctx.metadata['success_count'] = len(self.successful_downloads)
+                self.task_ctx.metadata['failed_count'] = len(self.failed_downloads)
+
 
                 # Check if we just hit the limit after these tasks finished
                 if current_batch_size >= size_limit and pending_urls:
