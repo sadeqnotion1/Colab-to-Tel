@@ -742,9 +742,9 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
         # If it's a sub-task or doesn't have a status message yet, create one
         if not task_ctx.status_msg:
             # Create status message
-            status_text = f"{Emoji.WAIT} <b>Initializing TikTok Bulk...</b>"
+            status_text = f"{Emoji.LOADING} <b>Initializing TikTok Bulk...</b>"
             if is_subtask:
-                status_text = f"{Emoji.WAIT} <b>Initializing TikTok Worker...</b>"
+                status_text = f"{Emoji.LOADING} <b>Initializing TikTok Worker...</b>"
 
             try:
                 if thumb_path:
