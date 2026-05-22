@@ -677,6 +677,9 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
     from colab_leecher.utility.ui_components import Emoji, Box
     from datetime import datetime
 
+    # Initialize downloader
+    downloader = TikTokBulkDownloader(client, message, task_ctx)
+
     # Helper function to safely update status message (text or photo caption)
     async def _safe_edit(text: str):
         try:
@@ -707,6 +710,8 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
         
         # Determine if this is a sub-task (worker)
         is_subtask = bool(chunk)
+        urls = chunk if is_subtask else []
+        success = True  # Default to True for subtasks (urls already provided)
 
         # Initialize dump channel message if not a subtask
         if not is_subtask and DUMP_ID:
@@ -736,12 +741,43 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
 
         # If it's a sub-task or doesn't have a status message yet, create one
         if not task_ctx.status_msg:
-            # ... (rest of the code) ...
-            if not gist_url:
-                await _safe_edit(f"{Emoji.ERROR} Error: No Gist URL provided.")
-                return
+            # Create status message
+            status_text = f"{Emoji.WAIT} <b>Initializing TikTok Bulk...</b>"
+            if is_subtask:
+                status_text = f"{Emoji.WAIT} <b>Initializing TikTok Worker...</b>"
 
-            success, urls = await downloader.fetch_gist_urls(gist_url)
+            try:
+                if thumb_path:
+                    task_ctx.status_msg = await client.send_photo(
+                        chat_id=message.chat.id,
+                        photo=thumb_path,
+                        caption=status_text,
+                        reply_markup=keyboard(task_ctx.task_id)
+                    )
+                else:
+                    task_ctx.status_msg = await client.send_message(
+                        chat_id=message.chat.id,
+                        text=status_text,
+                        reply_markup=keyboard(task_ctx.task_id)
+                    )
+            except Exception as msg_err:
+                log.error(f"Failed to create status message: {msg_err}")
+                # Fallback: if send_photo fails, try send_message
+                if thumb_path:
+                    try:
+                        task_ctx.status_msg = await client.send_message(
+                            chat_id=message.chat.id,
+                            text=status_text,
+                            reply_markup=keyboard(task_ctx.task_id)
+                        )
+                    except: pass
+
+            if not is_subtask:
+                if not gist_url:
+                    await _safe_edit(f"{Emoji.ERROR} Error: No Gist URL provided.")
+                    return
+
+                success, urls = await downloader.fetch_gist_urls(gist_url)
             if not success or not urls:
                 await _safe_edit(
                     f"<b>{Emoji.ERROR} TikTok Bulk Download Failed</b>\n\n"

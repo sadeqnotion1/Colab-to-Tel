@@ -181,6 +181,11 @@ def build_raw_gist_warning() -> str:
     )
 
 
+def get_src_text(src_link: str) -> list[str]:
+    """Build text for dump channel message."""
+    return [f"<b>TikTok Bulk Source:</b>\n<code>{escape(src_link)}</code>"]
+
+
 def build_usenet_not_configured_error() -> str:
     """Build NZB provider-missing error text."""
     return (
