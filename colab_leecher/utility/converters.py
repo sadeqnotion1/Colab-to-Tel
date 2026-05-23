@@ -268,7 +268,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
         _task_error.text = "Invalid characters in archive paths."
         return None, 0
 
-    cmd_args = ["7z", "a", compression_level, archive_format_param]
+    cmd_args = ["7z", "a", compression_level, archive_format_param, "-y"]
     if pswd_arg:
         cmd_args.append(pswd_arg)
     
@@ -293,6 +293,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
 
         proc = await asyncio.create_subprocess_exec(
             *cmd_args,
+            stdin=asyncio.subprocess.DEVNULL,  # CRITICAL: Prevent hanging on stdin
             stdout=asyncio.subprocess.PIPE,  # Capture stdout for progress
             stderr=asyncio.subprocess.PIPE,
             limit=10 * 1024 * 1024  # 10MB buffer: prevents LimitOverrunError on long 7z output lines
@@ -388,6 +389,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                                             source_size_text=total_in_unit,
                                         )
                                         # PASS REAL VALUES to status_bar for dashboard tracking
+                                        # Throttle updates in progress loops (force_update=False) to prevent Telegram FloodWait & pipe deadlocks!
                                         await status_bar(
                                             status_text, 
                                             speed_text, 
@@ -398,7 +400,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                                             engine="Archiver (7z) 🗜️", 
                                             use_custom_text=True, 
                                             task_ctx=task_ctx, 
-                                            force_update=True
+                                            force_update=False
                                         )
                                 except ValueError:
                                     log.warning(
@@ -500,6 +502,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
 
                         test_proc = await asyncio.create_subprocess_exec(
                             *test_cmd_args,
+                            stdin=asyncio.subprocess.DEVNULL,  # CRITICAL: Prevent hanging on stdin
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE
                         )
@@ -1455,6 +1458,7 @@ async def extract_zip_streaming(
                     status_text = f"Extracting file {idx}/{total_to_extract}: {member.filename}"
                     log.info(f"[{percentage:.1f}%] {status_text}")
 
+                    # Throttle updates in progress loops to prevent Telegram FloodWait & pipe deadlocks
                     await status_bar(
                         down_msg=_messages.status_head,
                         speed="N/A",
@@ -1464,7 +1468,7 @@ async def extract_zip_streaming(
                         total_size=zip_size_str,
                         engine="Streaming Extractor (zipfile)",
                         task_ctx=task_ctx,
-                        force_update=True
+                        force_update=False
                     )
 
                     # Create target path
@@ -1855,6 +1859,7 @@ async def extract_rar_streaming(
                 status_text = f"Extracting file {files_extracted + idx}/{total_files}: {member.filename}"
                 log.info(f"[{percentage:.1f}%] {status_text}")
 
+                # Throttle updates in progress loops to prevent Telegram FloodWait & pipe deadlocks
                 await status_bar(
                     down_msg=_messages.status_head,
                     speed="N/A",
@@ -1864,7 +1869,7 @@ async def extract_rar_streaming(
                     total_size=rar_size_str,
                     engine="Streaming Extractor (rarfile)",
                     task_ctx=task_ctx,
-                    force_update=True
+                    force_update=False
                 )
 
                 # Check memory usage every 10 files (if monitoring available)
