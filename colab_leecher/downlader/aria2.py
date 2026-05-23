@@ -546,7 +546,7 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
     if success and expected_filename:
         try:
             dl_size = file_size if file_size > 0 else os.path.getsize(final_filepath_on_disk)
-            _transfer.down_bytes += dl_size  # Add to total bytes downloaded
+            _transfer.down_bytes.append(dl_size)  # Add to total bytes downloaded
             _transfer.successful_downloads.append({'url': link, 'filename': expected_filename})
             log.debug(f"✅ Recorded download: {expected_filename} ({dl_size} bytes)")
         except Exception as report_err: log.error(f"Error getting size/reporting success for {expected_filename}: {report_err}")

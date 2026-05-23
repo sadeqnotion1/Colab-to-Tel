@@ -499,7 +499,14 @@ async def try_update_summary(client=None):
     """
     Update summary dashboard only if throttle interval has passed.
     Use this in progress update loops to avoid spamming updates.
+
+    CRITICAL FIX: If the summary lock is already held (e.g. during a FloodWait sleep),
+    return immediately instead of blocking the caller. This prevents deadlocks
+    in upload/download progress callbacks.
     """
+    if TASK_QUEUE._summary_lock.locked():
+        log.debug("try_update_summary: Summary lock is held. Skipping to prevent blocking.")
+        return
     await update_summary_dashboard(client, force=False)
 
 
