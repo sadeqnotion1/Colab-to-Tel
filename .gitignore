@@ -123,6 +123,7 @@ tests/debug/*.py
 # ===================================
 # Media/Binary (Large Files)
 # ===================================
+cli_windows_x64.exe
 *.mp4
 *.mkv
 *.avi
@@ -142,4 +143,6 @@ dashboard_debug.txt
 archive/
 *.session*
 *.log
+.antigravitycli/
+.claude/
 

@@ -126,8 +126,8 @@ async def taskScheduler(task_ctx: TaskContext):
     is_unzip = (_bot.Mode.type == "unzip")
     # NEW: Streaming extract+upload for large archives
     is_stream_unzip = (_bot.Mode.type == "stream_unzip")
-    is_zip = (_bot.Mode.type == "zip")
     current_mode = _bot.Mode.mode
+    is_zip = (_bot.Mode.type == "zip") or (current_mode in ["leech", "dir-leech"] and _bot.Mode.type == "normal")
     is_dir = (current_mode == "dir-leech")
 
     # Store original download path in case it's modified (e.g., for zip mode)

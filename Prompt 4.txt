@@ -1,0 +1,37 @@
+You are a senior Pyrogram bot engineer.
+
+CONTEXT: In `colab_leecher/utility/helper.py`, inside `status_bar`, the code decides whether to call `status_msg.edit_caption()` or `status_msg.edit_text()` based on `hasattr(status_msg, 'photo') and status_msg.photo`. This is fragile — a Pyrogram `Message` object ALWAYS has a `.photo` attribute (it's just `None` when absent), so `hasattr` is always True. The real check should be truthiness of `status_msg.photo`.
+
+Additionally, the same `edit_caption` vs `edit_text` branch is duplicated in the parallel-mode early-return block for `use_custom_text`, creating two places that can go out of sync.
+
+TASK:
+1. Read `colab_leecher/utility/helper.py`.
+
+2. Create a small helper function near the top of the file (after imports):
+   ```python
+   async def _edit_status_message(msg, text: str, reply_markup, parse_mode):
+       """Unified message editor — uses edit_caption if message has a photo, else edit_text."""
+       if msg.photo:
+           await msg.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
+       else:
+           await msg.edit_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=True)
+   ```
+
+3. In `status_bar`, find ALL places where the code does:
+   ```python
+   if hasattr(status_msg, 'photo') and status_msg.photo:
+       await status_msg.edit_caption(...)
+   else:
+       await status_msg.edit_text(...)
+   ```
+   and also the similar block inside the `use_custom_text` parallel branch with `task_ctx.status_msg`.
+   
+   Replace EACH occurrence with:
+   ```python
+   await _edit_status_message(_status_msg, final_text, _kb_markup, enums.ParseMode.HTML)
+   ```
+   (Use whatever the local resolved message variable is called — `_status_msg` from Prompt 2, or `task_ctx.status_msg` / `MSG.status_msg` if Prompt 2 wasn't applied yet.)
+
+4. Wrap each call site in the existing `try/except` block that catches `MessageNotModified`.
+
+5. Write the changes back to `helper.py`.

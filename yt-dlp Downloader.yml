@@ -1,0 +1,237 @@
+name: yt-dlp Download & Release
+
+on:
+  push:
+    branches:
+      - "**"
+
+concurrency:
+  group: ytdlp-download-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  download-and-release:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg zip
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --upgrade curl_cffi
+          # Install yt-dlp nightly for latest extractor fixes
+          sudo curl -L https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
+          echo "yt-dlp version: $(yt-dlp --version)"
+
+      - name: Parse commit message
+        id: parse
+        shell: bash
+        run: |
+          set -u
+
+          MSG_FILE="$(mktemp)"
+          git log -1 --pretty=%B > "$MSG_FILE"
+
+          echo "===== Commit message ====="
+          cat "$MSG_FILE"
+          echo "=========================="
+
+          COMMAND="$(
+            grep -Eim1 '^[[:space:]]*(download-zip|download|tiktok-zip|tiktok-download):' "$MSG_FILE" \
+              | sed -E 's/^[[:space:]]*([^:]+):.*/\1/I' \
+              | tr '[:upper:]' '[:lower:]' || true
+          )"
+
+          if [ -z "$COMMAND" ]; then
+            echo "No supported download command found. Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          case "$COMMAND" in
+            download-zip|tiktok-zip) MODE="zip" ;;
+            download|tiktok-download) MODE="normal" ;;
+            *)
+              echo "Unsupported command: $COMMAND"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          URLS="$(
+            awk '
+              BEGIN { capture = 0 }
+              /^[[:space:]]*(download-zip|download|tiktok-zip|tiktok-download):[[:space:]]*/ && capture == 0 {
+                capture = 1
+                line = $0
+                sub(/^[[:space:]]*(download-zip|download|tiktok-zip|tiktok-download):[[:space:]]*/, "", line)
+                print line
+                next
+              }
+              capture == 1 { print $0 }
+            ' "$MSG_FILE" \
+              | grep -Eo 'https?://[^[:space:]<>"]+' \
+              | sed 's/[),.;]*$//' \
+              | sort -u || true
+          )"
+
+          if [ -z "$URLS" ]; then
+            echo "No URLs found. Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "urls<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$URLS" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Download media
+        if: steps.parse.outputs.skip != 'true'
+        shell: bash
+        env:
+          YTDLP_COOKIES_B64: ${{ secrets.YTDLP_COOKIES_B64 }}
+          MODE: ${{ steps.parse.outputs.mode }}
+          URLS: ${{ steps.parse.outputs.urls }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p tmp_downloads
+          touch downloaded_archive.txt
+
+          COOKIES_ARGS=()
+          if [ -n "${YTDLP_COOKIES_B64:-}" ]; then
+            echo "Using cookies."
+            echo "$YTDLP_COOKIES_B64" | base64 -d > cookies.txt
+            chmod 600 cookies.txt
+            COOKIES_ARGS=(--cookies cookies.txt)
+          fi
+
+          YTDLP_HAS_ERRORS=0
+
+          while IFS= read -r URL; do
+            [ -z "$URL" ] && continue
+            echo ""
+            echo "⬇️  Downloading: $URL"
+            yt-dlp \
+              --ignore-errors \
+              --no-abort-on-error \
+              --no-mtime \
+              --download-archive downloaded_archive.txt \
+              --format "bv*+ba/b" \
+              --merge-output-format mp4 \
+              --impersonate chrome \
+              --extractor-args "tiktok:webpage_download=True" \
+              --no-warnings \
+              "${COOKIES_ARGS[@]}" \
+              --paths "tmp_downloads" \
+              -o "%(extractor_key,unknown_site)s/%(uploader,unknown_uploader)s/%(upload_date>%Y-%m-%d,unknown_date)s_%(title,id)s.80B_%(id)s.%(ext)s" \
+              "$URL" || YTDLP_HAS_ERRORS=1
+          done <<< "$URLS"
+
+          TOTAL_FILES=$(find tmp_downloads -type f | wc -l)
+          echo "Total files downloaded: $TOTAL_FILES"
+
+          if [ "$TOTAL_FILES" -eq 0 ]; then
+            echo "No files downloaded."
+            [ "$YTDLP_HAS_ERRORS" -eq 1 ] && exit 1
+            exit 0
+          fi
+
+      - name: Pack into 950MB release parts
+        if: steps.parse.outputs.skip != 'true'
+        id: pack
+        shell: bash
+        env:
+          MODE: ${{ steps.parse.outputs.mode }}
+        run: |
+          set -euo pipefail
+
+          TOTAL_FILES=$(find tmp_downloads -type f 2>/dev/null | wc -l)
+          if [ "$TOTAL_FILES" -eq 0 ]; then
+            echo "skip_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mkdir -p release_parts
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          ARCHIVE_NAME="media_${TIMESTAMP}"
+
+          if [ "$MODE" = "zip" ]; then
+            echo "📦 ZIP mode: creating zip split at 950MB..."
+            (
+              cd tmp_downloads
+              zip -r -s 950m "../release_parts/${ARCHIVE_NAME}.zip" .
+            )
+          else
+            echo "📦 Normal mode: creating tar.gz split at 950MB..."
+            tar -czf - -C tmp_downloads . | split \
+              -b 950M \
+              -d \
+              -a 3 \
+              --numeric-suffixes=1 \
+              --additional-suffix=.tar.gz.part \
+              - "release_parts/${ARCHIVE_NAME}."
+          fi
+
+          echo "✅ Parts created:"
+          ls -lh release_parts/
+
+          echo "skip_release=false" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$ARCHIVE_NAME" >> "$GITHUB_OUTPUT"
+          echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
+
+      - name: Update archive log & push
+        if: steps.parse.outputs.skip != 'true' && steps.pack.outputs.skip_release != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add downloaded_archive.txt
+
+          if git diff --cached --quiet; then
+            echo "Archive log unchanged, nothing to commit."
+          else
+            git commit -m "Update download archive log [skip ci]"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          fi
+
+      - name: Create GitHub Release
+        if: steps.parse.outputs.skip != 'true' && steps.pack.outputs.skip_release != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: release-${{ steps.pack.outputs.timestamp }}
+          name: "Downloaded Media – ${{ steps.pack.outputs.timestamp }}"
+          body: |
+            Automated release triggered by commit `${{ github.sha }}`.
+
+            ## How to reassemble (tar.gz mode)
+            Download all `.tar.gz.part` files, then run:
+            ```bash
+            cat *.tar.gz.part | tar -xzf -
+            ```
+
+            ## ZIP mode
+            Download all `.zip` / `.z01` / `.z02` ... files and extract with any zip tool.
+          files: release_parts/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
