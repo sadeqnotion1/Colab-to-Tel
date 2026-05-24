@@ -408,9 +408,11 @@ class TaskQueue:
                 else:
                     self.metrics.record_completion(duration)
 
-                # Track data volume strictly as integers (no lists or isinstance checks)
-                self.metrics.total_bytes_downloaded += task_ctx.transfer.down_bytes
-                self.metrics.total_bytes_uploaded += task_ctx.transfer.up_bytes
+                # Track data volume (safely handle lists if TikTok bulk downloader set them)
+                down_b = sum(task_ctx.transfer.down_bytes) if isinstance(task_ctx.transfer.down_bytes, list) else task_ctx.transfer.down_bytes
+                up_b = sum(task_ctx.transfer.up_bytes) if isinstance(task_ctx.transfer.up_bytes, list) else task_ctx.transfer.up_bytes
+                self.metrics.total_bytes_downloaded += down_b
+                self.metrics.total_bytes_uploaded += up_b
 
                 log.info(
                     f"Task {task_ctx.get_short_id()} removed from queue. Remaining: {len(self.active_tasks)}"

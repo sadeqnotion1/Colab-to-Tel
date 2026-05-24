@@ -344,9 +344,9 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                                 try:
                                     percentage = int(match.group(1))
                                     current_time = datetime.now()
-                                    # Increased update frequency (1.5s instead of 2.5s) for a more "fluid" feel
-                                    if (percentage > last_reported_pct or (
-                                            current_time - last_update_time).total_seconds() >= 1.5):
+                                    # Use strict time-based throttling (3.0s) to avoid spamming the inner status_bar
+                                    # which could lead to its own debounce bugs or FloodWait.
+                                    if (current_time - last_update_time).total_seconds() >= 3.0 or percentage == 100:
 
                                         # Update throttle variables
                                         last_reported_pct = percentage
@@ -389,7 +389,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                                             source_size_text=total_in_unit,
                                         )
                                         # PASS REAL VALUES to status_bar for dashboard tracking
-                                        # Throttle updates in progress loops (force_update=False) to prevent Telegram FloodWait & pipe deadlocks!
+                                        # Force update since we are strictly throttling it here
                                         await status_bar(
                                             status_text, 
                                             speed_text, 
@@ -400,7 +400,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
                                             engine="Archiver (7z) 🗜️", 
                                             use_custom_text=True, 
                                             task_ctx=task_ctx, 
-                                            force_update=False
+                                            force_update=True
                                         )
                                 except ValueError:
                                     log.warning(

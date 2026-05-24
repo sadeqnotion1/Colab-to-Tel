@@ -354,7 +354,7 @@ async def try_update_summary(client=None, page: Optional[int] = None):
     await update_summary_dashboard(client, force=False, page=page)
 
 
-async def force_update_summary(client=None, page: Optional[int] = None):
+async def force_update_summary(client=None, page: Optional[int] = None, move_to_bottom: bool = True):
     """
     Force update summary dashboard with tracked debounce logic.
     Ensures bursts of task updates (e.g., bulk cancellations or fast downloads)
@@ -373,7 +373,7 @@ async def force_update_summary(client=None, page: Optional[int] = None):
         if _scheduled_update_task and not _scheduled_update_task.done():
             _scheduled_update_task.cancel()
             
-        await update_summary_dashboard(client, force=True, move_to_bottom=True, page=page)
+        await update_summary_dashboard(client, force=True, move_to_bottom=move_to_bottom, page=page)
         
     else:
         # Debouncing: If we are already waiting to push a delayed update, don't queue another
@@ -387,7 +387,7 @@ async def force_update_summary(client=None, page: Optional[int] = None):
                 global _last_force_time
                 _last_force_time = time.time()
                 
-                await update_summary_dashboard(client, force=True, move_to_bottom=True, page=page)
+                await update_summary_dashboard(client, force=True, move_to_bottom=move_to_bottom, page=page)
             except asyncio.CancelledError:
                 pass  # Task was interrupted by a new immediate update, safely exit
             except Exception as e:

@@ -2414,7 +2414,8 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 else:
                     await callback_query.answer()
                 
-                await force_update_summary(client, page=page_num)
+                # Use move_to_bottom=False to prevent photo re-uploading and session disconnects
+                await force_update_summary(client, page=page_num, move_to_bottom=False)
             except Exception as e:
                 log.error(f"Dashboard update error: {e}")
             return
