@@ -9,6 +9,8 @@ Updates periodically to show progress across parallel tasks.
 
 import logging
 import os
+import time
+import asyncio
 from html import escape
 from typing import Optional
 from pyrogram import enums
@@ -17,15 +19,16 @@ from .. import OWNER, colab_bot
 from .task_context import TASK_QUEUE
 from .helper import getTime
 from .variables import Paths, BOT
-# FIX: import shared utilities instead of duplicating them locally
 from .ui_components import SizeFormatter, ProgressBar
 from .ui_copy import build_cancel_task_button_label, summarize_task_name
 
-# Gate all debug file I/O behind BOT_DEBUG env var.
-# Set BOT_DEBUG=1 in your environment to enable.
 BOT_DEBUG = os.getenv("BOT_DEBUG", "0") == "1"
 
 log = logging.getLogger(__name__)
+
+# Track delayed forced updates to prevent API spam and task leaks
+_scheduled_update_task = None
+_last_force_time = 0.0
 
 
 def _format_bytes(x) -> str:
@@ -52,10 +55,26 @@ def _keyboard_signature(keyboard: Optional[InlineKeyboardMarkup]) -> str:
     return "|".join(rows)
 
 
+def _extract_page_from_msg(msg: Optional[Message]) -> int:
+    """Extract the current dashboard page statelessly from the message's callback data."""
+    if not msg or not getattr(msg, 'reply_markup', None):
+        return 0
+    
+    try:
+        for row in msg.reply_markup.inline_keyboard:
+            for btn in row:
+                if btn.callback_data and btn.callback_data.startswith("dash_refresh:"):
+                    return int(btn.callback_data.split(":")[1])
+    except Exception:
+        pass
+    return 0
+
+
 async def update_summary_dashboard(
         client=None,
         force: bool = False,
-        move_to_bottom: bool = False) -> Optional[Message]:
+        move_to_bottom: bool = False,
+        page: Optional[int] = None) -> Optional[Message]:
     """
     Update or create the summary dashboard showing all active tasks (thread-safe).
 
@@ -63,6 +82,8 @@ async def update_summary_dashboard(
         client: Pyrogram client instance
         force: If True, bypass throttling and update immediately
         move_to_bottom: If True, delete old message and send new one to keep it at bottom
+        page: Stateless indicator of which page to render (0=Global, 1+=Tasks). 
+              If None, it infers the page from the existing message.
 
     Returns:
         Updated/created summary message, or None if no tasks active
@@ -70,53 +91,24 @@ async def update_summary_dashboard(
     if not client:
         client = colab_bot
 
-    # Optimization: Fast fail check outside lock (read-only)
     if not force and not move_to_bottom and not TASK_QUEUE.should_update_summary():
         return TASK_QUEUE.summary_msg
 
-    # Use lock to prevent concurrent updates
     async with TASK_QUEUE._summary_lock:
-        # Check throttling (unless forced or moving)
+        # Re-check throttling inside lock
         if not force and not move_to_bottom and not TASK_QUEUE.should_update_summary():
             return TASK_QUEUE.summary_msg
 
-        # Even for forced updates, apply debouncing to prevent Telegram rate limits
         if force and not move_to_bottom:
-            import time
             time_since_last = time.time() - TASK_QUEUE.last_summary_update
             if time_since_last < TASK_QUEUE.min_forced_update_interval:
-                log.debug(
-                    f"Forced update debounced (last update {time_since_last:.1f}s ago)")
                 return TASK_QUEUE.summary_msg
 
         tasks = await TASK_QUEUE.get_all_tasks()
-        log.info(f"\U0001f4ca Dashboard update: Found {len(tasks)} active tasks")
+        
+        # Determine the current page entirely statelessly
+        current_page = page if page is not None else _extract_page_from_msg(TASK_QUEUE.summary_msg)
 
-        if BOT_DEBUG:
-            try:
-                from datetime import datetime
-                with open("dashboard_debug.txt", "a", encoding="utf-8") as f:
-                    f.write(f"\n{'=' * 80}\n")
-                    f.write(f"DASHBOARD UPDATE at {datetime.now()}\n")
-                    f.write(f"{'=' * 80}\n")
-                    f.write(f"Tasks found: {len(tasks)}\n")
-                    f.write(f"Force update: {force}\n")
-                    f.write(
-                        f"Summary message exists: {TASK_QUEUE.summary_msg is not None}\n")
-                    if TASK_QUEUE.summary_msg:
-                        f.write(
-                            f"Summary message ID: {TASK_QUEUE.summary_msg.id}\n")
-                    f.write("\nTask details:\n")
-                    for task_id, task_ctx in tasks.items():
-                        f.write(f"  - {task_ctx.get_short_id()}: ")
-                        f.write(
-                            f"down={task_ctx.transfer.down_bytes}, up={task_ctx.transfer.up_bytes}, ")
-                        f.write(f"total={task_ctx.transfer.total_size}\n")
-                    f.write("\n")
-            except Exception as debug_err:
-                log.warning(f"Debug file write failed: {debug_err}")
-
-        # If no active tasks, delete summary message if it exists
         if not tasks:
             if TASK_QUEUE.summary_msg:
                 try:
@@ -127,14 +119,12 @@ async def update_summary_dashboard(
                     TASK_QUEUE.summary_msg = None
                     TASK_QUEUE.last_summary_text = ""
                     TASK_QUEUE.last_summary_keyboard_signature = ""
-                    log.info("Summary dashboard cleared (no active tasks)")
             return None
 
         # --- Build summary text ---
-        header_icon = "🛠️" if TASK_QUEUE.dashboard_page == 0 else "📊"
-        header_title = "Global Manager" if TASK_QUEUE.dashboard_page == 0 else "Task Details"
+        header_icon = "🛠️" if current_page == 0 else "📊"
+        header_title = "Global Manager" if current_page == 0 else "Task Details"
         
-        # FIX: Build aggregate speed string for header
         total_speed_str = ""
         try:
             speed_values = []
@@ -147,18 +137,17 @@ async def update_summary_dashboard(
         except Exception:
             pass
 
-        header = (
-            f"<b>{header_icon} {header_title}</b> \u2022 <b>{len(tasks)}</b> running{total_speed_str}\n\n"
-        )
+        header = f"<b>{header_icon} {header_title}</b> \u2022 <b>{len(tasks)}</b> running{total_speed_str}\n\n"
         summary_text = header
-        tasks_list = list(tasks.values())
-        total_pages = len(tasks_list) + 1 # Page 0 + one page per task
         
-        # Ensure dashboard_page is within bounds
-        if TASK_QUEUE.dashboard_page >= total_pages:
-            TASK_QUEUE.dashboard_page = 0
+        tasks_list = list(tasks.values())
+        total_pages = len(tasks_list) + 1 
+        
+        # Fallback if a task finished and the requested page is now out of bounds
+        if current_page >= total_pages:
+            current_page = 0
 
-        if TASK_QUEUE.dashboard_page == 0:
+        if current_page == 0:
             # --- PAGE 0: GLOBAL MANAGER VIEW ---
             summary_text += "<b>┌── Active Tasks Summary ──</b>\n"
             for idx, task_ctx in enumerate(tasks_list, 1):
@@ -175,10 +164,9 @@ async def update_summary_dashboard(
                 elif d_bytes > 0 and task_ctx.transfer.total_size > 0:
                     percentage = task_ctx.transfer.get_percentage()
                 
-                # Use standard bar for manager view
                 bar = ProgressBar.generate(percentage, 8, "ascii")
-                
                 line_icon = "⬆️" if u_bytes > 0 else "⬇️"
+                
                 summary_text += f"<b>├ {idx}. {line_icon} {escape(filename)}</b>\n"
                 summary_text += f"<b>│</b>  <code>[{bar}] {percentage:.1f}%</code>\n"
             
@@ -187,7 +175,7 @@ async def update_summary_dashboard(
             
         else:
             # --- PAGE 1+: SPECIFIC TASK DETAIL VIEW ---
-            task_idx = TASK_QUEUE.dashboard_page - 1
+            task_idx = current_page - 1
             task_ctx = tasks_list[task_idx]
             short_id = task_ctx.get_short_id()
             
@@ -195,11 +183,9 @@ async def update_summary_dashboard(
             raw_name = task_ctx.messages.download_name if task_ctx.messages else None
             filename = summarize_task_name(raw_name, source_url, max_length=42)
             
-            # Use the new beautiful modern block style
             summary_text += f"<b>Task: {escape(filename)}</b>\n"
             summary_text += f"<code>ID: {escape(short_id)}</code>\n\n"
 
-            # Calculate progress
             u_bytes = sum(task_ctx.transfer.up_bytes) if isinstance(task_ctx.transfer.up_bytes, list) else task_ctx.transfer.up_bytes
             d_bytes = sum(task_ctx.transfer.down_bytes) if isinstance(task_ctx.transfer.down_bytes, list) else task_ctx.transfer.down_bytes
 
@@ -223,7 +209,6 @@ async def update_summary_dashboard(
                 )
 
             elif d_bytes > 0:
-                # Check for archiving/extracting
                 is_proc = False
                 status_label = "Downloading ⬇️"
                 if task_ctx.messages and task_ctx.messages.status_head:
@@ -271,20 +256,19 @@ async def update_summary_dashboard(
         # --- NAVIGATION BUTTONS ---
         nav_buttons = []
         if total_pages > 1:
-            prev_page = (TASK_QUEUE.dashboard_page - 1) % total_pages
-            next_page = (TASK_QUEUE.dashboard_page + 1) % total_pages
+            prev_page = (current_page - 1) % total_pages
+            next_page = (current_page + 1) % total_pages
             nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"dash_page:{prev_page}"))
-            nav_buttons.append(InlineKeyboardButton(f"Page {TASK_QUEUE.dashboard_page + 1}/{total_pages}", callback_data="dash_refresh"))
+            # Embed current page context in the refresh button statelessly
+            nav_buttons.append(InlineKeyboardButton(f"Page {current_page + 1}/{total_pages}", callback_data=f"dash_refresh:{current_page}"))
             nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"dash_page:{next_page}"))
 
-        # Create buttons list
         buttons = []
         if nav_buttons:
             buttons.append(nav_buttons)
             
-        # Add Cancel button for specific task page
-        if TASK_QUEUE.dashboard_page > 0:
-            task_idx = TASK_QUEUE.dashboard_page - 1
+        if current_page > 0:
+            task_idx = current_page - 1
             if task_idx < len(tasks_list):
                 task_ctx = tasks_list[task_idx]
                 short_id = task_ctx.get_short_id()
@@ -295,253 +279,122 @@ async def update_summary_dashboard(
         keyboard = InlineKeyboardMarkup(buttons) if buttons else None
         keyboard_signature = _keyboard_signature(keyboard)
 
-        # Skip edit if content unchanged
+        # Skip API hit if content is structurally identical
         if TASK_QUEUE.summary_msg and summary_text == TASK_QUEUE.last_summary_text and keyboard_signature == TASK_QUEUE.last_summary_keyboard_signature:
             TASK_QUEUE.mark_summary_updated()
             return TASK_QUEUE.summary_msg
 
-        # Determine thumbnail (Priority: Custom > Task-specific > Default Hero)
         thumbnail_path = None
-        
         if BOT.Setting.thumbnail and os.path.exists(Paths.THMB_PATH):
             thumbnail_path = Paths.THMB_PATH
-        
         if not thumbnail_path:
             first_task = next(iter(tasks.values()), None) if tasks else None
             if first_task and hasattr(first_task, 'hero_image') and first_task.hero_image:
                 if os.path.exists(first_task.hero_image):
                     thumbnail_path = first_task.hero_image
-
         if not thumbnail_path and os.path.exists(Paths.DEFAULT_HERO):
             thumbnail_path = Paths.DEFAULT_HERO
 
-        if not thumbnail_path:
-            log.warning("No valid thumbnail found for summary dashboard")
-
-        # Define tasks_shown for logging
-        tasks_shown = 1 if TASK_QUEUE.dashboard_page > 0 else len(tasks)
-
-        if BOT_DEBUG:
-            try:
-                from datetime import datetime
-                with open("dashboard_debug.txt", "a", encoding="utf-8") as f:
-                    f.write(
-                        f"Generated dashboard text ({len(summary_text)} chars, {tasks_shown} tasks shown):\n")
-                    f.write(f"{'-' * 80}\n")
-                    f.write(summary_text)
-                    f.write(f"\n{'-' * 80}\n\n")
-            except Exception as debug_err:
-                log.warning(f"Debug text dump failed: {debug_err}")
-
-        log.info(
-            f"\U0001f4ca Updating dashboard: {tasks_shown} tasks shown, message exists: {TASK_QUEUE.summary_msg is not None}, move_to_bottom: {move_to_bottom}")
-
         try:
-            # If move_to_bottom is requested, delete the old message first
             if move_to_bottom and TASK_QUEUE.summary_msg:
                 try:
-                    log.debug(f"Moving dashboard to bottom: Deleting old message {TASK_QUEUE.summary_msg.id}")
                     await TASK_QUEUE.summary_msg.delete()
-                except Exception as del_err:
-                    log.warning(f"Failed to delete old dashboard during move: {del_err}")
+                except Exception:
+                    pass
                 finally:
                     TASK_QUEUE.summary_msg = None
 
             if TASK_QUEUE.summary_msg:
-                log.debug(
-                    f"Editing existing summary message (ID: {TASK_QUEUE.summary_msg.id})")
                 try:
                     if hasattr(TASK_QUEUE.summary_msg, 'photo') and TASK_QUEUE.summary_msg.photo:
                         await TASK_QUEUE.summary_msg.edit_caption(
-                            summary_text,
-                            parse_mode=enums.ParseMode.HTML,
-                            reply_markup=keyboard
+                            summary_text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard
                         )
-                        log.debug(
-                            f"Summary dashboard caption updated ({tasks_shown}/{len(tasks)} tasks shown)")
                     else:
-                        log.debug(
-                            f"Editing text-only message with {len(summary_text)} chars")
                         await TASK_QUEUE.summary_msg.edit_text(
-                            summary_text,
-                            parse_mode=enums.ParseMode.HTML,
-                            disable_web_page_preview=True,
-                            reply_markup=keyboard
+                            summary_text, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True, reply_markup=keyboard
                         )
-                        log.info(
-                            f"\u2705 Summary dashboard text updated ({tasks_shown}/{len(tasks)} tasks shown)")
                 except Exception as edit_err:
-                    if BOT_DEBUG:
-                        try:
-                            import traceback
-                            with open("dashboard_debug.txt", "a", encoding="utf-8") as f:
-                                f.write("\u274c EDIT FAILED:\n")
-                                f.write(f"Exception type: {type(edit_err).__name__}\n")
-                                f.write(f"Exception message: {str(edit_err)}\n")
-                                f.write("Full traceback:\n")
-                                f.write(traceback.format_exc())
-                                f.write("\n")
-                        except Exception as debug_err2:
-                            log.warning(f"Debug exception dump failed: {debug_err2}")
-
                     error_msg = str(edit_err).lower()
-                    log.warning(
-                        f"\u26a0\ufe0f Edit failed: {type(edit_err).__name__}: {edit_err}")
-                    if "not modified" in error_msg or "message is not modified" in error_msg:
-                        log.debug(
-                            "Summary message unchanged, skipping update (content identical)")
+                    if "not modified" in error_msg:
                         TASK_QUEUE.last_summary_text = summary_text
                         TASK_QUEUE.last_summary_keyboard_signature = keyboard_signature
                         TASK_QUEUE.mark_summary_updated()
                         return TASK_QUEUE.summary_msg
-
-                    log.warning(
-                        f"Failed to edit summary: {type(edit_err).__name__}: {edit_err}")
-                    log.warning(
-                        "Attempting message recreation (clearing reference first)")
+                    
+                    # Recreate if edit fails
                     TASK_QUEUE.summary_msg = None
-                    try:
-                        if thumbnail_path and os.path.exists(thumbnail_path):
-                            TASK_QUEUE.summary_msg = await client.send_photo(
-                                OWNER,
-                                photo=thumbnail_path,
-                                caption=summary_text,
-                                parse_mode=enums.ParseMode.HTML,
-                                reply_markup=keyboard
-                            )
-                        else:
-                            TASK_QUEUE.summary_msg = await client.send_message(
-                                OWNER,
-                                text=summary_text,
-                                parse_mode=enums.ParseMode.HTML,
-                                disable_web_page_preview=True,
-                                reply_markup=keyboard
-                            )
-                    except FileNotFoundError:
-                        log.warning(
-                            f"Thumbnail {thumbnail_path} not found, creating text-only dashboard")
-                        TASK_QUEUE.summary_msg = await client.send_message(
-                            OWNER,
-                            text=summary_text,
-                            parse_mode=enums.ParseMode.HTML,
-                            disable_web_page_preview=True,
-                            reply_markup=keyboard
-                        )
-            else:
-                try:
                     if thumbnail_path and os.path.exists(thumbnail_path):
-                        TASK_QUEUE.summary_msg = await client.send_photo(
-                            OWNER,
-                            photo=thumbnail_path,
-                            caption=summary_text,
-                            parse_mode=enums.ParseMode.HTML,
-                            reply_markup=keyboard
-                        )
-                        log.info("Summary dashboard created with photo")
+                        TASK_QUEUE.summary_msg = await client.send_photo(OWNER, photo=thumbnail_path, caption=summary_text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard)
                     else:
-                        TASK_QUEUE.summary_msg = await client.send_message(
-                            OWNER,
-                            text=summary_text,
-                            parse_mode=enums.ParseMode.HTML,
-                            disable_web_page_preview=True,
-                            reply_markup=keyboard
-                        )
-                        log.info(
-                            "Summary dashboard created (text-only, no thumbnail)")
-                except FileNotFoundError:
-                    log.warning(
-                        f"Thumbnail {thumbnail_path} deleted during send, creating text-only")
-                    TASK_QUEUE.summary_msg = await client.send_message(
-                        OWNER,
-                        text=summary_text,
-                        parse_mode=enums.ParseMode.HTML,
-                        disable_web_page_preview=True,
-                        reply_markup=keyboard
-                    )
+                        TASK_QUEUE.summary_msg = await client.send_message(OWNER, text=summary_text, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True, reply_markup=keyboard)
+            else:
+                if thumbnail_path and os.path.exists(thumbnail_path):
+                    TASK_QUEUE.summary_msg = await client.send_photo(OWNER, photo=thumbnail_path, caption=summary_text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard)
+                else:
+                    TASK_QUEUE.summary_msg = await client.send_message(OWNER, text=summary_text, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True, reply_markup=keyboard)
 
             TASK_QUEUE.last_summary_text = summary_text
             TASK_QUEUE.last_summary_keyboard_signature = keyboard_signature
-
-            if BOT_DEBUG:
-                try:
-                    with open("dashboard_debug.txt", "a", encoding="utf-8") as f:
-                        f.write("\u2705 Dashboard update SUCCESS\n")
-                        f.write(
-                            f"   Message ID: {TASK_QUEUE.summary_msg.id if TASK_QUEUE.summary_msg else 'None'}\n")
-                        f.write(f"   Tasks shown: {tasks_shown}/{len(tasks)}\n\n")
-                except Exception:
-                    pass
-
             TASK_QUEUE.mark_summary_updated()
+            
             return TASK_QUEUE.summary_msg
 
         except Exception as e:
-            if BOT_DEBUG:
-                try:
-                    import traceback
-                    with open("dashboard_debug.txt", "a", encoding="utf-8") as f:
-                        f.write("\u274c\u274c\u274c CRITICAL DASHBOARD FAILURE \u274c\u274c\u274c\n")
-                        f.write(f"Exception type: {type(e).__name__}\n")
-                        f.write(f"Exception message: {str(e)}\n")
-                        f.write("Full traceback:\n")
-                        f.write(traceback.format_exc())
-                        f.write(f"\n{'=' * 80}\n\n")
-                except Exception:
-                    pass
-
-            log.error(
-                f"Failed to update summary dashboard: {e}",
-                exc_info=True)
+            log.error(f"Failed to update summary dashboard: {e}")
             return None
 
 
-async def try_update_summary(client=None):
+async def try_update_summary(client=None, page: Optional[int] = None):
     """
     Update summary dashboard only if throttle interval has passed.
-    Use this in progress update loops to avoid spamming updates.
-
-    CRITICAL FIX: If the summary lock is already held (e.g. during a FloodWait sleep),
-    return immediately instead of blocking the caller. This prevents deadlocks
-    in upload/download progress callbacks.
     """
     if TASK_QUEUE._summary_lock.locked():
-        log.debug("try_update_summary: Summary lock is held. Skipping to prevent blocking.")
         return
-    await update_summary_dashboard(client, force=False)
+    await update_summary_dashboard(client, force=False, page=page)
 
 
-_scheduled_update_task = None
-
-
-async def force_update_summary(client=None):
+async def force_update_summary(client=None, page: Optional[int] = None):
     """
-    Force update summary dashboard immediately (bypasses throttling).
-    Use this when tasks start/complete/cancel.
-
-    Note: Debouncing is handled internally to prevent Telegram rate limits.
-    If debounced, a delayed update is scheduled to ensure final state consistency.
+    Force update summary dashboard with tracked debounce logic.
+    Ensures bursts of task updates (e.g., bulk cancellations or fast downloads)
+    don't slam the Telegram API with redundant move_to_bottom API calls.
     """
-    global _scheduled_update_task
+    global _scheduled_update_task, _last_force_time
 
-    if BOT_DEBUG:
-        try:
-            from datetime import datetime
-            with open("dashboard_debug.txt", "a", encoding="utf-8") as f:
-                f.write(f"\U0001f525 force_update_summary() CALLED at {datetime.now()}\n")
-                f.write(f"   Client provided: {client is not None}\n")
-                f.write(f"   Active tasks: {TASK_QUEUE.get_task_count()}\n\n")
-        except Exception:
-            pass
+    now = time.time()
+    time_since_last = now - _last_force_time
 
-    await update_summary_dashboard(client, force=True, move_to_bottom=True)
+    # If it's been more than 2 seconds since the last forced update, push immediately
+    if time_since_last >= 2.0:
+        _last_force_time = now
+        
+        # If there happens to be a pending delayed update, safely cancel it
+        if _scheduled_update_task and not _scheduled_update_task.done():
+            _scheduled_update_task.cancel()
+            
+        await update_summary_dashboard(client, force=True, move_to_bottom=True, page=page)
+        
+    else:
+        # Debouncing: If we are already waiting to push a delayed update, don't queue another
+        if _scheduled_update_task and not _scheduled_update_task.done():
+            return
+            
+        async def delayed_update():
+            try:
+                # Wait for the remainder of the throttle window to allow the burst to settle
+                await asyncio.sleep(2.0 - time_since_last)
+                global _last_force_time
+                _last_force_time = time.time()
+                
+                await update_summary_dashboard(client, force=True, move_to_bottom=True, page=page)
+            except asyncio.CancelledError:
+                pass  # Task was interrupted by a new immediate update, safely exit
+            except Exception as e:
+                log.error(f"Debounced background update failed: {e}")
 
-    if _scheduled_update_task and not _scheduled_update_task.done():
-        return
-
-    async def delayed_update():
-        import asyncio
-        await asyncio.sleep(2.0)
-        await update_summary_dashboard(client, force=True, move_to_bottom=True)
-
-    import asyncio
-    _scheduled_update_task = asyncio.create_task(delayed_update())
+        # Track the delayed task in the master system to prevent orphaned memory leaks
+        _scheduled_update_task = TASK_QUEUE.create_background_task(
+            delayed_update(), 
+            "debounced_dashboard_update"
+        )

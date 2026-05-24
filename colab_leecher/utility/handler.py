@@ -416,7 +416,7 @@ async def Unzip_Handler(
                 # Pass only the path to the (first) archive file and remove=False
                 # Password is handled inside 'extract' using
                 # BOT.Options.unzip_pswd
-                success = await extract(first_part_identifier, remove=False)
+                success = await extract(first_part_identifier, remove=False, task_ctx=task_ctx)
                 # --- End Corrected Call ---
 
                 if success:
@@ -488,23 +488,33 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
     )
     task_ctx.mark_cancelled()
 
-    # Avoid cancelling/awaiting the currently executing task to prevent
-    # self-deadlock.
+    # Avoid cancelling/awaiting the currently executing task to prevent self-deadlock.
     current_asyncio_task = asyncio.current_task()
     if (
         task_ctx.async_task
         and task_ctx.async_task is not current_asyncio_task
         and not task_ctx.async_task.done()
     ):
-        log.info(f"Cancelling asyncio task for {task_ctx.get_short_id()}")
-        task_ctx.async_task.cancel()
-        try:
-            await task_ctx.async_task
-        except asyncio.CancelledError:
-            log.info(f"Task {task_ctx.get_short_id()} successfully cancelled")
-        except Exception as e:
-            log.error(
-                f"Task {task_ctx.get_short_id()} raised exception during cancellation: {e}")
+        log.info(f"Requested graceful cancellation for {task_ctx.get_short_id()}. Waiting up to 5s for clean socket teardown...")
+        
+        # 2. WAIT FOR THE TASK TO GRACEFULLY SHUT DOWN
+        wait_time = 0.0
+        while not task_ctx.async_task.done() and wait_time < 5.0:
+            await asyncio.sleep(0.5)
+            wait_time += 0.5
+            
+        # 3. FALLBACK TO HARD CANCELLATION IF STILL RUNNING
+        if not task_ctx.async_task.done():
+            log.warning(f"Task {task_ctx.get_short_id()} did not cooperatively exit in time. Forcing hard cancellation.")
+            task_ctx.async_task.cancel()
+            try:
+                await task_ctx.async_task
+            except asyncio.CancelledError:
+                log.info(f"Task {task_ctx.get_short_id()} successfully hard-cancelled")
+            except Exception as e:
+                log.error(f"Task {task_ctx.get_short_id()} raised exception during hard cancellation: {e}")
+        else:
+            log.info(f"Task {task_ctx.get_short_id()} shut down gracefully.")
 
     try:
         time_spent = getTime((datetime.now() - start_time).seconds)
@@ -656,36 +666,53 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
             )
             status_msg = task_ctx.status_msg
 
-            if report_message_id_to_reply:
-                await colab_bot.send_message(
-                    OWNER,
-                    final_summary_text,
-                    reply_to_message_id=report_message_id_to_reply,
-                    reply_markup=final_markup,
-                    disable_web_page_preview=True,
-                )
-            elif status_msg:
-                try:
-                    await status_msg.reply_text(
-                        final_summary_text,
-                        quote=True,
-                        reply_markup=final_markup,
-                        disable_web_page_preview=True,
-                    )
-                except Exception:
+            # Use our new safety paginator to ensure this summary doesn't exceed 4096 chars or break HTML
+            summary_chunks = split_html_message(final_summary_text)
+            
+            for i, chunk in enumerate(summary_chunks):
+                # Only attach markup to the final chunk
+                current_markup = final_markup if i == len(summary_chunks) - 1 else None
+                
+                # First chunk replies to the document if available
+                if i == 0:
+                    if report_message_id_to_reply:
+                        await colab_bot.send_message(
+                            OWNER,
+                            chunk,
+                            reply_to_message_id=report_message_id_to_reply,
+                            reply_markup=current_markup,
+                            disable_web_page_preview=True,
+                        )
+                    elif status_msg:
+                        try:
+                            await status_msg.reply_text(
+                                chunk,
+                                quote=True,
+                                reply_markup=current_markup,
+                                disable_web_page_preview=True,
+                            )
+                        except Exception:
+                            await colab_bot.send_message(
+                                OWNER,
+                                chunk,
+                                reply_markup=current_markup,
+                                disable_web_page_preview=True,
+                            )
+                    else:
+                        await colab_bot.send_message(
+                            OWNER,
+                            chunk,
+                            reply_markup=current_markup,
+                            disable_web_page_preview=True,
+                        )
+                else:
+                    # Send subsequent chunks as regular follow-ups
                     await colab_bot.send_message(
                         OWNER,
-                        final_summary_text,
-                        reply_markup=final_markup,
+                        chunk,
                         disable_web_page_preview=True,
+                        reply_markup=current_markup
                     )
-            else:
-                await colab_bot.send_message(
-                    OWNER,
-                    final_summary_text,
-                    reply_markup=final_markup,
-                    disable_web_page_preview=True,
-                )
             log.info("Sent final cancellation/failure message to owner.")
         except Exception as send_err:
             log.error(
@@ -793,7 +820,7 @@ async def Zip_Handler(
     # if MSG.status_msg: await MSG.status_msg.edit_text(...) # Status handled
     # inside extract now
 
-    temp_unzip_path = Paths.temp_unzip_path  # Defined in variables
+    temp_unzip_path = _paths.temp_unzip_path  # Defined in variables
     supported_exts = [
         ".7z",
         ".gz",
@@ -813,11 +840,11 @@ async def Zip_Handler(
                 log.info(f"Attempting extract single file: {filename}")
                 # Assume extract returns success/fail status or sets TaskError
                 # Pass remove flag
-                extract_success = await extract(down_path, remove)
+                extract_success = await extract(down_path, remove, task_ctx=task_ctx)
                 if extract_success:
                     pass
                 else:
-                    TaskError.state = True  # Ensure state is set if extract fails silently
+                    _task_error.state = True  # Ensure state is set if extract fails silently
             else:
                 log.warning(
                     f"Single file '{filename}' is not a supported archive type for extraction.")
@@ -825,7 +852,7 @@ async def Zip_Handler(
                 # consistency
                 makedirs(temp_unzip_path, exist_ok=True)
                 shutil.copy2(down_path, temp_unzip_path)
-                Messages.download_name = ospath.basename(
+                _messages.download_name = ospath.basename(
                     down_path)  # Set name context
                 if remove:
                     os.remove(down_path)  # Remove original if requested
@@ -842,15 +869,15 @@ async def Zip_Handler(
                     log.info(
                         f"Attempting extract archive within dir: {filename}")
                     # Pass remove flag
-                    extract_success = await extract(f_path, remove)
+                    extract_success = await extract(f_path, remove, task_ctx=task_ctx)
                     if extract_success:
                         any_extracted_in_dir = True
                     else:
-                        TaskError.state = True
+                        _task_error.state = True
                         # Stop if any extraction fails? Or continue? Let's
                         # stop.
                         break
-            if TaskError.state:
+            if _task_error.state:
                 return  # Exit if extraction failed mid-directory
 
             # If no archives were found/extracted in directory, copy original
@@ -900,6 +927,63 @@ async def Zip_Handler(
         if TaskError:
             TaskError.state = True
             TaskError.text = f"Unzip Handler Error: {unzip_err}"
+
+
+def split_html_message(text: str, limit: int = 4096) -> list:
+    """
+    Splits an HTML string into chunks safe for Telegram's message limits.
+    Ensures no HTML tags are left open at chunk boundaries.
+    """
+    chunks = []
+    current_chunk = ""
+    open_tags = []
+    
+    # Matches opening tags (e.g., <a href="...">, <b>) and closing tags (e.g., </a>, </b>)
+    tag_pattern = re.compile(r'(</?([a-zA-Z0-9]+)[^>]*>)')
+    
+    # Split by newlines to prefer breaking at clean boundaries
+    lines = text.split('\n')
+    
+    for idx, line in enumerate(lines):
+        line_suffix = '\n' if idx < len(lines) - 1 else ''
+        line_text = line + line_suffix
+        
+        # Calculate length of the closing tags needed for the current state
+        closing_tags_str = "".join(f"</{tag}>" for tag, _ in reversed(open_tags))
+        closing_length = len(closing_tags_str)
+        
+        # If adding this line exceeds the limit (reserving space to cleanly close open tags)
+        if len(current_chunk) + len(line_text) + closing_length > limit and current_chunk:
+            # Close tags for the current chunk and save it
+            current_chunk += closing_tags_str
+            chunks.append(current_chunk.strip())
+            
+            # Start new chunk and re-open previously open tags to maintain formatting
+            current_chunk = "".join(full_tag for _, full_tag in open_tags)
+
+        # Update the state of open tags based on the current line
+        for match in tag_pattern.finditer(line_text):
+            full_tag = match.group(1)
+            tag_name = match.group(2).lower()
+            is_closing = full_tag.startswith("</")
+            
+            if is_closing:
+                # Find and remove the most recent matching open tag
+                for i in range(len(open_tags) - 1, -1, -1):
+                    if open_tags[i][0] == tag_name:
+                        open_tags.pop(i)
+                        break
+            else:
+                open_tags.append((tag_name, full_tag))
+                
+        current_chunk += line_text
+        
+    # Close any remaining open tags for the final chunk
+    if current_chunk.strip():
+        current_chunk += "".join(f"</{tag}>" for tag, _ in reversed(open_tags))
+        chunks.append(current_chunk.strip())
+        
+    return chunks if chunks else [""]
 
 
 # --- SendLogs Function (Ensure it exists and is correct) ---
@@ -1005,8 +1089,7 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
                         f"Edited final status text for owner {task_id_str}.")
 
                 if is_leech and file_count > 0:
-                    log_texts = []
-                    current_log_text = f"<b>Uploaded Files Log ({file_count}):</b>\n"
+                    full_log_text = f"<b>Uploaded Files Log ({file_count}):</b>\n"
                     for i in range(file_count):
                         try:
                             file_obj = transfer_obj.sent_file[i]
@@ -1020,26 +1103,23 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
                                 if hasattr(file_obj, "chat") and hasattr(file_obj.chat, "id")
                                 else None
                             )
-                            msg_id = file_obj.id if hasattr(
-                                file_obj, "id") else None
+                            msg_id = file_obj.id if hasattr(file_obj, "id") else None
                             file_link = f"https://t.me/c/{link_chat_id}/{msg_id}" if link_chat_id and msg_id else "N/A"
                             safe_file_name = escape_html(file_name)
                             safe_file_link = safe_href(file_link)
-                            file_text = (
-                                f"\n({str(i + 1).zfill(2)}) <a href='{escape_html(safe_file_link)}'>{safe_file_name}</a>"
-                                if safe_file_link
-                                else f"\n({str(i + 1).zfill(2)}) {safe_file_name} (Link Unavailable)"
-                            )
-                            if len(current_log_text + file_text) >= 4096:
-                                log_texts.append(current_log_text)
-                                current_log_text = file_text
+                            
+                            if safe_file_link:
+                                file_text = f"\n({str(i + 1).zfill(2)}) <a href='{escape_html(safe_file_link)}'>{safe_file_name}</a>"
                             else:
-                                current_log_text += file_text
+                                file_text = f"\n({str(i + 1).zfill(2)}) {safe_file_name} (Link Unavailable)"
+                            
+                            full_log_text += file_text
                         except Exception as log_build_err:
-                            log.error(
-                                f"Error building log entry {i + 1}: {log_build_err}")
-                            current_log_text += f"\n({str(i + 1).zfill(2)}) Error."
-                    log_texts.append(current_log_text)
+                            log.error(f"Error building log entry {i + 1}: {log_build_err}")
+                            full_log_text += f"\n({str(i + 1).zfill(2)}) Error."
+                    
+                    # Safely split HTML into Telegram-friendly chunks
+                    log_texts = split_html_message(full_log_text)
 
                     last_log_msg = status_msg
                     for fn_txt in log_texts:
@@ -1051,23 +1131,18 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
                             )
                             await asyncio.sleep(0.5)
                         except Exception as e:
-                            log.error(
-                                f"Error Sending log part {task_id_str}: {e}",
-                                exc_info=False)
+                            log.error(f"Error Sending log part {task_id_str}: {e}", exc_info=False)
                             if OWNER and colab_bot:
                                 await colab_bot.send_message(OWNER, fn_txt)
                             break
 
-                if hasattr(
-                        messages_obj,
-                        "uploaded_links") and messages_obj.uploaded_links:
+                # --- REFACTORED PORTION IN SendLogs (Google Drive Log) ---
+                if hasattr(messages_obj, "uploaded_links") and messages_obj.uploaded_links:
                     gdrive_links = messages_obj.uploaded_links
                     gdrive_count = len(gdrive_links)
-                    log.info(
-                        f"Formatting {gdrive_count} Google Drive upload links {task_id_str}...")
+                    log.info(f"Formatting {gdrive_count} Google Drive upload links {task_id_str}...")
 
-                    gdrive_log_texts = []
-                    current_gdrive_log = f"<b>Uploaded to Google Drive ({gdrive_count}):</b>\n"
+                    full_gdrive_log = f"<b>Uploaded to Google Drive ({gdrive_count}):</b>\n"
                     for i, item in enumerate(gdrive_links):
                         try:
                             file_name = item.get("name", "Unknown")
@@ -1075,21 +1150,19 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
                             file_size = sizeUnit(item.get("size", 0))
                             safe_file_name = escape_html(file_name)
                             safe_file_link = safe_href(file_link)
-                            gdrive_entry = (
-                                f"\n({str(i + 1).zfill(2)}) <a href='{escape_html(safe_file_link)}'>{safe_file_name}</a> ({file_size})"
-                                if safe_file_link
-                                else f"\n({str(i + 1).zfill(2)}) {safe_file_name} ({file_size}) (Link Unavailable)"
-                            )
-                            if len(current_gdrive_log + gdrive_entry) >= 4096:
-                                gdrive_log_texts.append(current_gdrive_log)
-                                current_gdrive_log = gdrive_entry
+                            
+                            if safe_file_link:
+                                gdrive_entry = f"\n({str(i + 1).zfill(2)}) <a href='{escape_html(safe_file_link)}'>{safe_file_name}</a> ({file_size})"
                             else:
-                                current_gdrive_log += gdrive_entry
+                                gdrive_entry = f"\n({str(i + 1).zfill(2)}) {safe_file_name} ({file_size}) (Link Unavailable)"
+                                
+                            full_gdrive_log += gdrive_entry
                         except Exception as gdrive_log_err:
-                            log.error(
-                                f"Error building GDrive log entry {i + 1}: {gdrive_log_err}")
-                            current_gdrive_log += f"\n({str(i + 1).zfill(2)}) Error."
-                    gdrive_log_texts.append(current_gdrive_log)
+                            log.error(f"Error building GDrive log entry {i + 1}: {gdrive_log_err}")
+                            full_gdrive_log += f"\n({str(i + 1).zfill(2)}) Error."
+                            
+                    # Safely split HTML into Telegram-friendly chunks
+                    gdrive_log_texts = split_html_message(full_gdrive_log)
 
                     last_gdrive_msg = status_msg
                     for gdrive_txt in gdrive_log_texts:
@@ -1101,9 +1174,7 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
                             )
                             await asyncio.sleep(0.5)
                         except Exception as e:
-                            log.error(
-                                f"Error sending GDrive log part {task_id_str}: {e}",
-                                exc_info=False)
+                            log.error(f"Error sending GDrive log part {task_id_str}: {e}", exc_info=False)
                             if OWNER and colab_bot:
                                 await colab_bot.send_message(OWNER, gdrive_txt, disable_web_page_preview=False)
                             break

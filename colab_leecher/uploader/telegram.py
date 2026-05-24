@@ -69,12 +69,9 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
     log.info(f"Preparing to upload {task_id_str}: {actual_upload_filename} (Display Name: {base_upload_name}) Size: {helper.sizeUnit(file_size)}")
     
     # NEW: Set total size for dashboard tracking
+    # We NO LONGER mutate or reset `up_bytes` to 0 here. It acts as a continuous cumulative integer.
     if transfer_obj:
         transfer_obj.total_size = file_size
-        if isinstance(transfer_obj.up_bytes, list) and len(transfer_obj.up_bytes) > 0:
-            transfer_obj.up_bytes[0] = 0 # Reset current upload progress
-        elif not isinstance(transfer_obj.up_bytes, list):
-            transfer_obj.up_bytes = 0
 
     # --- Thumbnail, duration, dimension, caption logic ---
     thumb_path = None # Initialize to None, will be set later
@@ -190,35 +187,44 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
          caption = f"<code>{escape(base_upload_name)}</code>" # Basic fallback caption
 
     # --- Initialize Upload State Variables ---
-    # ** This block MUST be indented correctly **
     upload_success = False
     sent_message = None
     last_progress_time = 0
     retry_count = 0
-    max_retries = 4 # Consider making this configurable
+    max_retries = 4 
     error_reason = "Upload Failed"
-    upload_start_time = 0 # Will be set before each attempt
+    upload_start_time = 0 
+    
+    # Delta tracker for safe continuous integer arithmetic
+    last_current = 0 
 
     # --- Define Progress Callback ---
-    # ** This 'async def' MUST be indented correctly **
     async def up_progress(current, total):
-        # Indentation here is relative to the 'async def' line
-        nonlocal last_progress_time, upload_start_time, base_upload_name # Ensure access to outer scope vars if needed
+        nonlocal last_progress_time, upload_start_time, base_upload_name, last_current 
+        
+        # 1. CHECK FOR GRACEFUL ABORT BEFORE PROCESSING CHUNK
+        if task_ctx and task_ctx.is_cancelled:
+            log.warning(f"Upload aborted gracefully via progress callback {task_id_str}")
+            # Raising an error here allows Pyrogram to catch it, send an abort signal 
+            # to Telegram, and propagate the error cleanly up to our try/except block.
+            raise asyncio.CancelledError("Graceful Upload Abort")
+
         now = time.time()
-        # Throttle progress updates
-        if now - last_progress_time > 2.5: # Update interval (e.g., 2.5 seconds)
+        
+        # Calculate delta and apply to the continuous integer
+        delta = current - last_current
+        last_current = current
+        
+        if transfer_obj:
+            transfer_obj.up_bytes += delta
+            
+        if now - last_progress_time > 2.5: 
             last_progress_time = now
             try:
                 speed_string, eta_seconds, percentage = helper.speedETA(upload_start_time, current, total)
                 
-                # NEW: Update transfer object for real-time dashboard tracking
                 if transfer_obj:
-                    if isinstance(transfer_obj.up_bytes, list) and len(transfer_obj.up_bytes) > 0:
-                        transfer_obj.up_bytes[0] = current
-                    elif not isinstance(transfer_obj.up_bytes, list):
-                        transfer_obj.up_bytes = current
                     transfer_obj.last_speed = speed_string
-                    # Extract numeric speed if possible for dashboard sorting/agg
                     try:
                         transfer_obj.last_speed_bytes = current / (now - upload_start_time) if (now - upload_start_time) > 0 else 0
                     except: pass
@@ -228,19 +234,21 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
                 eta_str = helper.getTime(eta_seconds)
 
                 status_head = f"<b>Uploading{' ' + task_id_str if task_ctx else ''}</b>\n\n<b>Name:</b> <code>{escape(base_upload_name)}</code>\n"
-                log.debug(f"up_progress {task_id_str}: Calling status_bar. Speed='{speed_string}', Pct={percentage:.1f}, ETA='{eta_str}', Done='{done_str}', Total='{total_str}'")
-                # NEW: Pass task_ctx to status_bar for per-task progress tracking
                 await helper.status_bar(status_head, speed_string, percentage, eta_str, done_str, total_str, "TG Upload 🚀", task_ctx=task_ctx)
             except Exception as progress_err:
                 log.warning(f"Error updating progress bar: {progress_err}")
 
     # --- Start Upload Attempt Loop ---
-    # ** This 'while' loop MUST be indented correctly **
     while retry_count <= max_retries:
-        # Indentation here is relative to the 'while' line
         try:
-            upload_start_time = time.time() # Reset timer for each attempt
-            last_progress_time = 0 # Reset progress throttle timer
+            upload_start_time = time.time() 
+            last_progress_time = 0 
+            
+            # CRITICAL: If Pyrogram retry triggered, we rollback the corrupted partial bytes 
+            # from the last failed attempt using our `last_current` state before restarting.
+            if transfer_obj and last_current > 0:
+                transfer_obj.up_bytes -= last_current
+            last_current = 0
 
             # Determine target chat ID (use DUMP_ID if set, otherwise OWNER)
             target_chat_id = DUMP_ID if DUMP_ID else OWNER
@@ -299,20 +307,22 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
             # --- Check Upload Result ---
             if sent_message:
                 log.info(f"Successfully uploaded {task_id_str} '{base_upload_name}' (File: {actual_upload_filename}) to chat {target_chat_id} - Msg ID: {sent_message.id}")
-                # NEW: Add to per-task transfer stats if available, otherwise global
                 try:
                     transfer_obj.sent_file.append(sent_message)
                     transfer_obj.sent_file_names.append(base_upload_name)
-                    # transfer_obj.up_bytes.append(file_size) # Moved after loop success
                 except AttributeError:
                     log.warning(f"Could not record sent file details {task_id_str}, transfer object might be missing attributes.")
                 upload_success = True
                 break # Exit retry loop on success
             else:
-                # This case should ideally not happen if Pyrogram raises exceptions on failure
                 log.error(f"Upload API call returned None for {actual_upload_filename} without throwing an exception.")
                 error_reason = "Upload API call returned None"
-                # Go directly to retry logic below
+
+        # 2. CATCH THE GRACEFUL ABORT AND BREAK THE LOOP
+        except asyncio.CancelledError:
+            log.warning(f"Upload task cooperatively cancelled for {actual_upload_filename}.")
+            error_reason = "Task gracefully cancelled by user."
+            break # Exit the loop immediately without retrying
 
         except RETRYABLE_EXCEPTIONS as wait_err:
             retry_count += 1
@@ -333,7 +343,6 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
             # Update status during wait
             status_head = f"<b>Uploading{' ' + task_id_str if task_ctx else ''}</b>\n\n<b>Name:</b> <code>{base_upload_name}</code>\n"
             try:
-                # NEW: Pass task_ctx to status_bar
                 await helper.status_bar(status_head, "N/A", 0, f"Waiting {wait_time}s", "N/A", helper.sizeUnit(file_size), f"TG {type(wait_err).__name__} ⏳", task_ctx=task_ctx)
             except Exception as status_err:
                 log.warning(f"Could not update status during wait {task_id_str}: {status_err}")
@@ -349,7 +358,6 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
     # --- After Retry Loop ---
     if not upload_success:
         log.error(f"Final upload status {task_id_str} for {actual_upload_filename}: FAILED. Reason: {error_reason}")
-        # NEW: Record failure in per-task error object if available, otherwise global
         failed_info = {"link": "N/A", "filename": base_upload_name, "index": "Upload", "reason": error_reason}
         try:
             if error_obj: error_obj.failed_links.append(failed_info)
@@ -357,14 +365,12 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
              log.warning(f"Could not record failed link {task_id_str}, error object might be missing attributes.")
         return False
     else:
-        # NEW: Record successful upload size in per-task transfer object if available, otherwise global
+        # Final safety catch: if Pyrogram misses the final 100% callback, we append the missed bytes exactly.
         try:
-            if isinstance(transfer_obj.up_bytes, list):
-                transfer_obj.up_bytes.append(file_size)
-            else:
-                transfer_obj.up_bytes += file_size
-        except AttributeError:
-            log.warning(f"Could not record uploaded bytes {task_id_str}, transfer object might be missing attributes.")
+            if transfer_obj:
+                missed_bytes = file_size - last_current
+                if missed_bytes > 0:
+                    transfer_obj.up_bytes += missed_bytes
         except Exception as report_err:
             log.error(f"Error reporting uploaded bytes {task_id_str} for {actual_upload_filename}: {report_err}")
         return True

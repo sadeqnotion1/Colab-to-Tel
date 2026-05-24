@@ -1382,7 +1382,8 @@ async def Do_GDrive_Upload(
                 log.info(f"Downloading batch {i // batch_size + 1}...")
 
                 try:
-                    await downloadManager(batch_links, batch_filenames, task_ctx)
+                    # FIX: Inserted the missing `is_ytdl` parameter to prevent argument shifting
+                    await downloadManager(batch_links, is_ytdl, batch_filenames, task_ctx)
 
                     if _task_error.state:
                         log.warning(

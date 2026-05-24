@@ -1,4 +1,4 @@
-﻿# /content/Telegram-Leecher/colab_leecher/__main__.py
+# /content/Telegram-Leecher/colab_leecher/__main__.py
 
 from . import aliases  # registers /mirror,/leech,/ytdl,/count,/del,/stats
 import logging, os, math
@@ -2403,19 +2403,20 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
     try: # Main try block starts here
         # === NEW: Handle Dashboard Pagination ===
-        if query_data.startswith("dash_page:"):
-            await callback_query.answer()
+        if query_data.startswith("dash_page:") or query_data.startswith("dash_refresh"):
             try:
-                page_num = int(query_data.split(":")[1])
-                TASK_QUEUE.dashboard_page = page_num
-                await force_update_summary(client)
+                page_num = None
+                if ":" in query_data:
+                    page_num = int(query_data.split(":")[1])
+                
+                if query_data.startswith("dash_refresh"):
+                    await callback_query.answer("Refreshing Dashboard... 🔄")
+                else:
+                    await callback_query.answer()
+                
+                await force_update_summary(client, page=page_num)
             except Exception as e:
-                log.error(f"Dashboard page update error: {e}")
-            return
-
-        if query_data == "dash_refresh":
-            await callback_query.answer("Refreshing Dashboard... 🔄")
-            await force_update_summary(client)
+                log.error(f"Dashboard update error: {e}")
             return
 
         # === MODE PICKER HANDLER ===

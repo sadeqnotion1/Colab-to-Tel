@@ -1,0 +1,579 @@
+Here is the fully refactored `task_context.py` file.
+
+I have replaced the lazy, dynamically imported global properties (`_TaskBot`, `_TaskOptions`, `_TaskPaths`) with **Strictly Isolated Containers** (`IsolatedBot`, `IsolatedPaths`, `IsolatedMsg`).
+
+### Key Structural Changes to Enforce Strict Isolation:
+
+1. **Removed Lazy Global Imports:** The `TaskContext` properties no longer contain `from .variables import ...`. Instead, if a property is accessed before it is explicitly instantiated, it will raise a `RuntimeError`.
+2. **Safe Deep Copying:** Added a `_safe_copy_attrs` helper. When the factory function `create_task_context` initializes a task, it passes the global `BOT`, `MSG`, and `Paths` into the isolated containers. These containers perform a deep copy on mutable types (like `dict` and `list`), ensuring that if a task modifies `self.bot.Options.some_list`, it does not leak into the global state.
+3. **Dedicated Instantiation Phase:** All global variables are now read **only once** at the moment the task is born in `create_task_context()`. The task runtime now operates strictly inside its isolated sandbox.
+
+### Refactored Code (`task_context.py`)
+
+```python
+# /content/Telegram-Leecher/colab_leecher/utility/task_context.py
+
+"""
+Multi-Task Parallel Download System - Task Context and Queue Manager
+
+This module provides isolated task contexts for running multiple download/upload
+tasks in parallel. Each TaskContext maintains its own state, paths, messages,
+and statistics to prevent interference between concurrent tasks.
+"""
+
+import uuid
+import logging
+import time
+import asyncio
+import copy
+from dataclasses import dataclass, field
+from collections import deque
+from datetime import datetime
+from typing import Dict, Optional, List, Set, Deque, Any
+from pyrogram.types import Message
+from .ui_copy import build_health_summary_text
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class SystemMetrics:
+    """Real-time system health metrics for observability"""
+    active_tasks: int = 0
+    completed_tasks_total: int = 0
+    failed_tasks_total: int = 0
+    cancelled_tasks_total: int = 0
+    total_bytes_downloaded: int = 0
+    total_bytes_uploaded: int = 0
+    aria2_restarts: int = 0
+    telegram_api_errors: int = 0
+    start_time: float = field(default_factory=time.time)
+
+    recent_completion_times: Deque[float] = field(
+        default_factory=lambda: deque(maxlen=50))
+
+    def record_completion(self, duration_seconds: float):
+        self.completed_tasks_total += 1
+        self.recent_completion_times.append(duration_seconds)
+
+    def record_failure(self):
+        self.failed_tasks_total += 1
+
+    def record_cancellation(self):
+        self.cancelled_tasks_total += 1
+
+    def get_success_rate(self) -> float:
+        total = self.completed_tasks_total + self.failed_tasks_total
+        if total == 0:
+            return 100.0
+        return (self.completed_tasks_total / total) * 100
+
+    def get_avg_completion_time(self) -> float:
+        if not self.recent_completion_times:
+            return 0.0
+        return sum(self.recent_completion_times) / len(self.recent_completion_times)
+
+
+@dataclass
+class TaskTransfer:
+    """Per-task transfer statistics"""
+    down_bytes: List[int] = field(default_factory=lambda: [0])
+    up_bytes: List[int] = field(default_factory=lambda: [0])
+    total_size: int = 0
+    sent_file: List = field(default_factory=list)
+    sent_file_names: List[str] = field(default_factory=list)
+    successful_downloads: List[dict] = field(default_factory=list)
+    start_time: float = field(default_factory=lambda: time.time())
+    last_speed: str = "0 B/s"
+    last_speed_bytes: float = 0.0
+
+    def reset(self):
+        self.down_bytes = [0]
+        self.up_bytes = [0]
+        self.total_size = 0
+        self.sent_file = []
+        self.sent_file_names = []
+        self.successful_downloads = []
+        self.start_time = time.time()
+        self.last_speed = "0 B/s"
+
+    def get_current_bytes(self) -> int:
+        d_bytes = sum(self.down_bytes) if isinstance(self.down_bytes, list) else self.down_bytes
+        u_bytes = sum(self.up_bytes) if isinstance(self.up_bytes, list) else self.up_bytes
+        return max(d_bytes, u_bytes)
+
+    def get_percentage(self, total_size: int = 0) -> float:
+        size_to_use = total_size if total_size > 0 else self.total_size
+        if size_to_use == 0:
+            return 0.0
+        current_bytes = self.get_current_bytes()
+        return min(100.0, (current_bytes / size_to_use) * 100)
+
+    def get_eta(self) -> float:
+        current_bytes = self.get_current_bytes()
+        if self.total_size == 0 or current_bytes == 0:
+            return 0.0
+        elapsed = time.time() - self.start_time
+        if elapsed < 0.01:
+            return 0.0
+        speed = current_bytes / elapsed
+        remaining_bytes = self.total_size - current_bytes
+        if speed > 0:
+            return remaining_bytes / speed
+        return 0.0
+
+    def get_speed(self) -> str:
+        elapsed = time.time() - self.start_time
+        if elapsed < 0.01:
+            return "0 B/s"
+        current_bytes = self.get_current_bytes()
+        speed = current_bytes / elapsed
+        if speed < 1024:
+            return f"{speed:.0f} B/s"
+        elif speed < 1024 * 1024:
+            return f"{speed / 1024:.1f} KB/s"
+        elif speed < 1024 * 1024 * 1024:
+            return f"{speed / (1024 * 1024):.1f} MB/s"
+        else:
+            return f"{speed / (1024 * 1024 * 1024):.1f} GB/s"
+
+
+@dataclass
+class TaskError:
+    """Per-task error tracking"""
+    state: bool = False
+    message: str = ""
+    text: str = ""
+    failed_links: List[dict] = field(default_factory=list)
+
+    def set_error(self, message: str):
+        self.state = True
+        self.message = message
+        self.text = message
+
+    def clear(self):
+        self.state = False
+        self.message = ""
+        self.text = ""
+        self.failed_links = []
+
+
+@dataclass
+class TaskMessages:
+    """Per-task message templates"""
+    download_name: str = ""
+    task_msg: str = ""
+    status_head: str = ""
+    dump_task: str = ""
+    src_link: str = ""
+    current_file: str = ""
+    files_processed: int = 0
+    total_files: int = 0
+    archive_size: int = 0
+
+
+@dataclass
+class TaskBotTimes:
+    """Per-task timing information"""
+    current_time: float = field(default_factory=time.time)
+    start_time: datetime = field(default_factory=datetime.now)
+    task_start: datetime = field(default_factory=datetime.now)
+
+    def reset(self):
+        self.current_time = time.time()
+        self.start_time = datetime.now()
+        self.task_start = datetime.now()
+
+
+# --- ISOLATED CONTAINERS FOR TASK COMPATIBILITY --- #
+
+def _safe_copy_attrs(source_obj, target_obj):
+    """
+    Safely copies attributes from global state to an isolated task instance.
+    Uses deepcopy for mutables (dicts, lists) to ensure strict isolation,
+    and shallow copy for immutables (strings, ints) to prevent shared mutations.
+    """
+    for attr in dir(source_obj):
+        if not attr.startswith('__'):
+            val = getattr(source_obj, attr)
+            if not callable(val):
+                if isinstance(val, (list, dict, set)):
+                    setattr(target_obj, attr, copy.deepcopy(val))
+                else:
+                    setattr(target_obj, attr, val)
+
+class IsolatedPaths:
+    """Fully isolated paths configuration per task."""
+    def __init__(self, task_ctx, global_paths):
+        _safe_copy_attrs(global_paths, self)
+        
+        # Override with task-specific sandbox paths
+        self.work_path = task_ctx.work_path
+        self.WORK_PATH = task_ctx.work_path # legacy alias
+        self.down_path = task_ctx.down_path
+        self.temp_zpath = f"{self.work_path}/temp_zip"
+        self.temp_unzip_path = f"{self.work_path}/temp_unzip"
+        self.temp_unzip = self.temp_unzip_path # legacy alias
+        self.temp_dirleech_path = f"{self.work_path}/dir_leech_temp"
+        self.temp_files_dir = f"{self.work_path}/leech_temp"
+
+class IsolatedBotOptions:
+    def __init__(self, global_options, task_ctx):
+        _safe_copy_attrs(global_options, self)
+        if task_ctx.service_type:
+            self.service_type = task_ctx.service_type
+
+class IsolatedBot:
+    """Fully isolated bot configuration per task."""
+    def __init__(self, global_bot, task_ctx):
+        for category in ['SOURCE', 'TASK', 'Setting', 'Mode', 'State']:
+            if hasattr(global_bot, category):
+                cat_obj = getattr(global_bot, category)
+                isolated_cat = type(category, (), {})()
+                _safe_copy_attrs(cat_obj, isolated_cat)
+                setattr(self, category, isolated_cat)
+        
+        if hasattr(global_bot, 'Options'):
+            self.Options = IsolatedBotOptions(global_bot.Options, task_ctx)
+
+class IsolatedMsg:
+    """Fully isolated message configuration per task."""
+    def __init__(self, global_msg):
+        _safe_copy_attrs(global_msg, self)
+
+
+@dataclass
+class TaskContext:
+    """
+    Isolated context for a single download/upload task.
+    Enforces strict architectural boundaries to prevent tasks from polluting global state.
+    """
+    task_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: int = 0
+    chat_id: int = 0
+    mode: str = "leech"
+    mode_type: str = "normal"
+    service_type: Optional[str] = None
+    source_urls: List[str] = field(default_factory=list)
+    filenames: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    work_path: str = ""
+    down_path: str = ""
+    hero_image: str = ""
+
+    status_msg: Optional[Message] = None
+    sent_msg: Optional[Message] = None
+
+    transfer: TaskTransfer = field(default_factory=TaskTransfer)
+    error: TaskError = field(default_factory=TaskError)
+    messages: TaskMessages = field(default_factory=TaskMessages)
+    bot_times: TaskBotTimes = field(default_factory=TaskBotTimes)
+    async_task: Optional[asyncio.Task] = None
+
+    created_at: datetime = field(default_factory=datetime.now)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    last_status_update: float = 0.0
+
+    is_cancelled: bool = False
+    is_completed: bool = False
+
+    # Strictly isolated containers - initialized during task factory creation
+    _bot_isolated: Any = field(default=None, init=False, repr=False, compare=False)
+    _paths_isolated: Any = field(default=None, init=False, repr=False, compare=False)
+    _msg_isolated: Any = field(default=None, init=False, repr=False, compare=False)
+
+    def get_short_id(self) -> str:
+        return self.task_id[:8]
+
+    def get_elapsed_time(self) -> float:
+        if not self.started_at:
+            return 0.0
+        end_time = self.completed_at if self.completed_at else datetime.now()
+        return (end_time - self.started_at).total_seconds()
+
+    def mark_started(self):
+        self.started_at = datetime.now()
+
+    def mark_completed(self):
+        self.completed_at = datetime.now()
+        self.is_completed = True
+
+    def mark_cancelled(self):
+        self.completed_at = datetime.now()
+        self.is_cancelled = True
+
+    @property
+    def task_error(self):
+        return self.error
+
+    # --- STRICT ISOLATION ENFORCEMENT PROPERTIES --- #
+    # These properties trap invalid accesses and prevent silent global fallbacks.
+    
+    @property
+    def bot(self):
+        if self._bot_isolated is None:
+            raise RuntimeError("Strict Isolation Violation: Task bot configuration accessed before initialization. Global import blocked.")
+        return self._bot_isolated
+
+    @bot.setter
+    def bot(self, value):
+        self._bot_isolated = value
+
+    @property
+    def msg(self):
+        if self._msg_isolated is None:
+            raise RuntimeError("Strict Isolation Violation: Task message configuration accessed before initialization. Global import blocked.")
+        return self._msg_isolated
+
+    @msg.setter
+    def msg(self, value):
+        self._msg_isolated = value
+
+    @property
+    def paths(self):
+        if self._paths_isolated is None:
+            raise RuntimeError("Strict Isolation Violation: Task paths accessed before initialization. Global import blocked.")
+        return self._paths_isolated
+
+    @paths.setter
+    def paths(self, value):
+        self._paths_isolated = value
+
+
+class TaskQueue:
+    """
+    Global task queue manager for parallel multi-task execution.
+    """
+    MAX_TASKS_PER_USER = 5
+    MAX_TOTAL_TASKS = 20
+
+    def __init__(self):
+        self.active_tasks: Dict[str, TaskContext] = {}
+        self.running_tasks: Set[str] = set()
+        self.summary_msg: Optional[Message] = None
+        self.last_summary_text: str = ""
+        self.last_summary_keyboard_signature = ""
+        self.dashboard_page = 0
+        self.last_summary_update: float = 0
+        self.summary_update_interval: float = 5.0
+        self.min_forced_update_interval: float = 1.0
+        self._lock = asyncio.Lock()
+        self._summary_lock = asyncio.Lock()
+        self._worker_cond = asyncio.Condition()
+
+        self.metrics = SystemMetrics()
+        self.background_tasks: Set[asyncio.Task] = set()
+        self.is_shutting_down: bool = False
+
+    def get_worker_limit(self) -> int:
+        if not self.active_tasks:
+            return 2
+        all_tiktok = all(
+            getattr(t, 'service_type', None) == "tiktokbulk" 
+            for t in self.active_tasks.values()
+        )
+        return 3 if all_tiktok else 2
+
+    async def acquire_worker_slot(self, task_id: str):
+        async with self._worker_cond:
+            while True:
+                limit = self.get_worker_limit()
+                if len(self.running_tasks) < limit:
+                    self.running_tasks.add(task_id)
+                    log.info(f"Task {task_id[:8]} acquired worker slot. ({len(self.running_tasks)}/{limit})")
+                    return
+                await self._worker_cond.wait()
+
+    async def release_worker_slot(self, task_id: str):
+        async with self._worker_cond:
+            if task_id in self.running_tasks:
+                self.running_tasks.remove(task_id)
+                log.info(f"Task {task_id[:8]} released worker slot. ({len(self.running_tasks)} running)")
+                self._worker_cond.notify_all()
+
+    def create_background_task(self, coro, name: str) -> asyncio.Task:
+        task = asyncio.create_task(coro, name=name)
+        self.background_tasks.add(task)
+        task.add_done_callback(self.background_tasks.discard)
+        return task
+
+    async def add_task(self, task_ctx: TaskContext):
+        async with self._lock:
+            if self.is_shutting_down:
+                log.warning(f"Rejecting task {task_ctx.get_short_id()} - system shutting down")
+                return
+            self.active_tasks[task_ctx.task_id] = task_ctx
+            self.metrics.active_tasks = len(self.active_tasks)
+            log.info(f"Task {task_ctx.get_short_id()} added to queue. Total active: {len(self.active_tasks)}")
+
+    async def remove_task(self, task_id: str) -> Optional[TaskContext]:
+        async with self._lock:
+            task_ctx = self.active_tasks.pop(task_id, None)
+            if task_ctx:
+                self.metrics.active_tasks = len(self.active_tasks)
+                duration = task_ctx.get_elapsed_time()
+                if task_ctx.is_cancelled:
+                    self.metrics.record_cancellation()
+                elif task_ctx.error.state:
+                    self.metrics.record_failure()
+                else:
+                    self.metrics.record_completion(duration)
+
+                self.metrics.total_bytes_downloaded += sum(task_ctx.transfer.down_bytes) if isinstance(task_ctx.transfer.down_bytes, list) else task_ctx.transfer.down_bytes
+                self.metrics.total_bytes_uploaded += sum(task_ctx.transfer.up_bytes) if isinstance(task_ctx.transfer.up_bytes, list) else task_ctx.transfer.up_bytes
+                log.info(f"Task {task_ctx.get_short_id()} removed from queue. Remaining: {len(self.active_tasks)}")
+            return task_ctx
+
+    def get_health_summary(self) -> str:
+        uptime = time.time() - self.metrics.start_time
+
+        def format_time(seconds):
+            if seconds < 60:
+                return f"{seconds:.0f}s"
+            if seconds < 3600:
+                return f"{seconds / 60:.1f}m"
+            return f"{seconds / 3600:.1f}h"
+
+        return build_health_summary_text(
+            is_shutting_down=self.is_shutting_down,
+            uptime_text=format_time(uptime),
+            active_tasks=len(self.active_tasks),
+            max_total_tasks=self.MAX_TOTAL_TASKS,
+            background_tasks=len(self.background_tasks),
+            success_rate_text=f"{self.metrics.get_success_rate():.1f}%",
+            avg_task_time_text=format_time(self.metrics.get_avg_completion_time()),
+            total_down_text=f"{self.metrics.total_bytes_downloaded / 1e9:.2f} GB",
+            total_up_text=f"{self.metrics.total_bytes_uploaded / 1e9:.2f} GB",
+        )
+
+    async def shutdown(self):
+        log.info("Starting system-wide graceful shutdown...")
+        self.is_shutting_down = True
+        async with self._lock:
+            tasks_to_cancel = list(self.active_tasks.values())
+
+        for ctx in tasks_to_cancel:
+            if ctx.async_task and not ctx.async_task.done():
+                log.info(f"Cancelling task {ctx.get_short_id()} during shutdown")
+                ctx.async_task.cancel()
+
+        log.info(f"Cancelling {len(self.background_tasks)} background tasks")
+        for task in list(self.background_tasks):
+            if not task.done():
+                task.cancel()
+
+        try:
+            await asyncio.wait_for(asyncio.gather(*self.background_tasks, return_exceptions=True), timeout=10.0)
+        except asyncio.TimeoutError:
+            log.warning("Shutdown timeout - some tasks may have been force-killed")
+        log.info("Graceful shutdown complete")
+
+    async def get_task(self, task_id: str) -> Optional[TaskContext]:
+        async with self._lock:
+            return self.active_tasks.get(task_id)
+
+    async def has_task(self, task_id: str) -> bool:
+        async with self._lock:
+            return task_id in self.active_tasks
+
+    async def get_user_tasks(self, user_id: int) -> List[TaskContext]:
+        async with self._lock:
+            return [task_ctx for task_ctx in self.active_tasks.values() if task_ctx.user_id == user_id]
+
+    async def get_all_tasks(self) -> Dict[str, TaskContext]:
+        async with self._lock:
+            return self.active_tasks.copy()
+
+    def get_task_count(self) -> int:
+        return len(self.active_tasks)
+
+    def has_active_tasks(self) -> bool:
+        return len(self.active_tasks) > 0
+
+    async def can_start_task(self, user_id: int = None) -> tuple[bool, str]:
+        async with self._lock:
+            total_tasks = len(self.active_tasks)
+            if total_tasks >= self.MAX_TOTAL_TASKS:
+                return (False, f"System limit reached ({total_tasks}/{self.MAX_TOTAL_TASKS} tasks active). Please wait for some to complete.")
+
+            if user_id:
+                user_task_count = len([task for task in self.active_tasks.values() if task.user_id == user_id])
+                if user_task_count >= self.MAX_TASKS_PER_USER:
+                    return (False, f"You have {user_task_count}/{self.MAX_TASKS_PER_USER} tasks active. Please wait for some to complete.")
+            return True, "OK"
+
+    def should_update_summary(self) -> bool:
+        return time.time() - self.last_summary_update >= self.summary_update_interval
+
+    def mark_summary_updated(self):
+        self.last_summary_update = time.time()
+
+    async def clear_completed_tasks(self, max_age_hours: int = 1):
+        async with self._lock:
+            now = datetime.now()
+            to_remove = []
+            for task_id, task_ctx in self.active_tasks.items():
+                if task_ctx.is_completed or task_ctx.is_cancelled:
+                    if task_ctx.completed_at:
+                        age_hours = (now - task_ctx.completed_at).total_seconds() / 3600
+                        if age_hours > max_age_hours:
+                            to_remove.append(task_id)
+            for task_id in to_remove:
+                removed_task = self.active_tasks.pop(task_id, None)
+                if removed_task:
+                    log.info(f"Auto-removed old completed task: {task_id[:8]}")
+
+
+TASK_QUEUE = TaskQueue()
+
+def get_current_task_ctx() -> Optional[TaskContext]:
+    return None
+
+def create_task_context(
+        user_id: int,
+        chat_id: int,
+        mode: str = "leech") -> TaskContext:
+    """
+    Factory function to create a new TaskContext with proper initialization.
+    Imports global structures exactly once to build isolated execution sandboxes.
+    """
+    task_ctx = TaskContext(
+        user_id=user_id,
+        chat_id=chat_id,
+        mode=mode
+    )
+
+    # Import globally defined variables securely here
+    from .variables import Paths, BOT, MSG
+    
+    # Establish local path bindings
+    task_ctx.work_path = f"{Paths.WORK_PATH}/{task_ctx.task_id}"
+    task_ctx.down_path = f"{task_ctx.work_path}/Downloads"
+    task_ctx.hero_image = f"{task_ctx.work_path}/hero_{task_ctx.get_short_id()}.jpg"
+
+    # INJECT FULLY ISOLATED COPIES
+    # This guarantees tasks running asynchronously will NEVER unintentionally write
+    # to the `variables` namespace, as their bot, paths, and msg properties are 
+    # independent deep-cloned classes attached uniquely to the instance.
+    task_ctx.paths = IsolatedPaths(task_ctx, Paths)
+    task_ctx.bot = IsolatedBot(BOT, task_ctx)
+    task_ctx.msg = IsolatedMsg(MSG)
+
+    log.info(f"Created Strictly Isolated TaskContext {task_ctx.get_short_id()} for user {user_id}")
+    return task_ctx
+
+
+__all__ = [
+    'TaskContext',
+    'TaskQueue',
+    'TaskTransfer',
+    'TaskError',
+    'TaskMessages',
+    'TASK_QUEUE',
+    'create_task_context',
+    'get_current_task_ctx',
+]
+
+```
