@@ -536,7 +536,7 @@ async def Do_Leech(
     _paths = task_ctx.paths
     _transfer = task_ctx.transfer
     _messages = task_ctx.messages
-    _task_error = task_ctx.task_error
+    _task_error = task_ctx.error
     log.info(f"Do_Leech using TaskContext for task_id: {task_ctx.task_id}")
 
     log.info(
@@ -669,10 +669,11 @@ async def Do_Leech(
             # --- Start of Batch Loop ---
             for i in range(0, total_links, batch_size):
                 # --- Start of Batch Processing Logic ---
-                # Check 1: Check for critical errors *before* starting batch
-                if _task_error and _task_error.state:
+                # Check 1: Abort immediately if a critical error was already set
+                if _task_error.state:
                     log.warning(
-                        "Skipping further batches due to earlier critical _task_error.")
+                        "Skipping further batches due to earlier critical error: %s",
+                        _task_error.text)
                     overall_success = False
                     break  # Exit the loop
 
@@ -706,30 +707,25 @@ async def Do_Leech(
 
                 # 2. Download the current batch
                 log.info(f"Downloading batch {i // batch_size + 1}...")
-                # Reset temporary error state *before* calling download manager
-                batch_task_error_state_before_dl = _task_error.state if _task_error else False
-                if _task_error:
-                    _task_error.state = False
-                    _task_error.text = ""
+                # Clear error state ONLY for this batch so downloadManager can
+                # signal a batch-scoped failure without touching prior state.
+                # The pre-loop check (above) already blocks entry if a critical
+                # error is still live.
+                _task_error.clear()
                 await downloadManager(batch_links, is_ytdl, batch_filenames, task_ctx)
-                # Capture download success/failure *for this batch*
-                batch_download_succeeded = not (
-                    _task_error and _task_error.state)
-                batch_download_error_text = _task_error.text if _task_error and _task_error.state else ""
-                # Restore original error state if download succeeded but there
-                # was a prior error
-                if batch_download_succeeded and batch_task_error_state_before_dl:
-                    _task_error.state = True
-                    _task_error.text = "Earlier critical error occurred."
+
+                # Capture download outcome strictly from this batch's run
+                batch_download_succeeded = not _task_error.state
+                batch_download_error_text = _task_error.text if _task_error.state else ""
 
                 # 3. Handle Download Errors (Non-Breaking)
                 batch_had_download_failures = False
                 if not batch_download_succeeded:
                     log.warning(
-                        f"One or more downloads failed during batch {i // batch_size + 1}. Reason: {batch_download_error_text}. Continuing task."
+                        "One or more downloads failed during batch %d. Reason: %s. Continuing task.",
+                        i // batch_size + 1, batch_download_error_text,
                     )
                     overall_success = False  # Mark overall task as having failures
-                    # Track this specific batch had download issues
                     batch_had_download_failures = True
 
                 # 4. Check if Download Directory is Empty (Can skip
@@ -808,9 +804,7 @@ async def Do_Leech(
                             log.error(
                                 "No RAR archives found for streaming extraction")
                             batch_processing_error = True
-                            if _task_error:
-                                _task_error.state = True
-                                _task_error.text = "No RAR files found"
+                            _task_error.set_error("No RAR files found")
                         else:
                             # Process first RAR archive
                             archive_path = ospath.join(
@@ -830,8 +824,7 @@ async def Do_Leech(
                                 log.error(
                                     ">>> Streaming extract-upload failed.")
                                 batch_processing_error = True
-                                if _task_error:
-                                    _task_error.state = True
+                                _task_error.set_error("Streaming extract-upload failed")
                             else:
                                 log.info(
                                     ">>> Streaming extract-upload completed successfully")
@@ -878,51 +871,50 @@ async def Do_Leech(
                     # Call Leech handler to upload processed files to Telegram
                     elif leech_path is not None and ospath.exists(leech_path):
                         log.info(
-                            f"Do_Leech batch: Starting Leech handler for path: {leech_path}")
+                            "Do_Leech batch: Starting Leech handler for path: %s",
+                            leech_path)
                         await Leech(leech_path, True, task_ctx)
                         if _task_error.state:
                             log.error(">>> Leech handler failed.")
                             batch_processing_error = True
                         else:
                             log.debug(
-                                f">>> Leech successful for batch {i // batch_size + 1}"
-                            )
+                                ">>> Leech successful for batch %d",
+                                i // batch_size + 1)
                     elif leech_path is None:
                         log.debug(
                             "leech_path is None - files already uploaded (streaming mode)")
                     else:
                         log.error(
-                            f"Leech path missing or invalid: {leech_path}")
+                            "Leech path missing or invalid: %s", leech_path)
                         batch_processing_error = True
-                        if _task_error:
-                            _task_error.state = True
-                            _task_error.text = "Leech path invalid"
+                        _task_error.set_error("Leech path invalid")
 
                 except Exception as processing_err:
                     log.error(
-                        f"Error during batch processing: {processing_err}",
-                        exc_info=True)
+                        "Error during batch processing: %s",
+                        processing_err, exc_info=True)
                     batch_processing_error = True
-                    if _task_error:
-                        _task_error.state = True
-                        _task_error.text = f"Processing error: {processing_err}"
+                    _task_error.set_error(f"Processing error: {processing_err}")
+                    # Clear stale size so it cannot bleed into the next batch
+                    _transfer.total_down_size = 0
 
                 # --- Logic AFTER processing/upload try-except block, still INSIDE the loop ---
                 if batch_had_download_failures and not batch_processing_error:
+                    # Upload of whatever was downloaded succeeded — clear the
+                    # download-failure flag so the next batch starts cleanly.
                     log.debug(
-                        "Resetting _task_error state after recoverable download failure.")
-                    if _task_error:
-                        _task_error.state = False
-                        _task_error.text = ""
+                        "Clearing _task_error after recoverable download failure "
+                        "(upload succeeded for partial batch).")
+                    _task_error.clear()
 
                 # Handle critical processing errors -> Break the main loop
                 if batch_processing_error:
                     overall_success = False
-                    if _task_error and not _task_error.state:
-                        _task_error.state = True
-                        _task_error.text = "Processing/Upload Error"
+                    if not _task_error.state:
+                        _task_error.set_error("Processing/Upload Error")
                     log.error(
-                        "Critical processing/upload error detected. Stopping.")
+                        "Critical processing/upload error detected. Stopping batch loop.")
                     break  # Stop processing further batches
 
                 log.info("--- Finished Batch ---")
@@ -931,28 +923,25 @@ async def Do_Leech(
     # --- Main except for Do_Leech ---
     except Exception as leech_err:
         log.error(
-            f"Error in Do_Leech main execution: {leech_err}",
-            exc_info=True)
-        if _task_error and not _task_error.state:
-            _task_error.state = True
-            _task_error.text = f"Unexpected Leech Error: {leech_err}"
+            "Error in Do_Leech main execution: %s",
+            leech_err, exc_info=True)
+        if not _task_error.state:
+            _task_error.set_error(f"Unexpected Leech Error: {leech_err}")
         overall_success = False
 
     # --- Final cleanup logic for Do_Leech ---
-    if overall_success and (not _task_error or not _task_error.state):
+    if overall_success and not _task_error.state:
         log.info("Do_Leech completed successfully. Calling SendLogs...")
         await SendLogs(True, task_ctx)
     elif not overall_success:
         log.warning("Do_Leech completed with errors.")
-        if _task_error and not _task_error.state:
-            _task_error.state = True
-            _task_error.text = _task_error.text or "Task completed with errors."
+        if not _task_error.state:
+            _task_error.set_error(_task_error.text or "Task completed with errors.")
         log.info("Do_Leech finished with errors.")
     else:
         log.warning("Do_Leech finished in inconsistent state.")
-        if _task_error and not _task_error.state:
-            _task_error.state = True
-            _task_error.text = "Inconsistent final state"
+        if not _task_error.state:
+            _task_error.set_error("Inconsistent final state")
 
 
 # --- Do_Mirror Function ---
@@ -1334,27 +1323,37 @@ async def Do_GDrive_Upload(
                 makedirs(batch_download_path, exist_ok=True)
 
                 # Download batch
-                log.info(f"Downloading batch {i // batch_size + 1}...")
+                # Clear error state for this batch so downloadManager can
+                # signal a failure without any cross-batch bleed.
+                log.info("Downloading batch %d...", i // batch_size + 1)
+                _task_error.clear()
 
                 try:
-                    # FIX: Inserted the missing `is_ytdl` parameter to prevent argument shifting
                     await downloadManager(batch_links, is_ytdl, batch_filenames, task_ctx)
 
                     if _task_error.state:
                         log.warning(
-                            f"Batch {i // batch_size + 1} download had failures."
+                            "Batch %d download had failures: %s",
+                            i // batch_size + 1, _task_error.text,
                         )
                 except Exception as download_err:
                     log.error(
-                        f"Download error in batch {i // batch_size + 1}: {download_err}",
-                        exc_info=True)
+                        "Download error in batch %d: %s",
+                        i // batch_size + 1, download_err, exc_info=True)
+                    # Register the error so the empty-dir check below can skip
+                    # the upload phase instead of proceeding with no files.
+                    _task_error.set_error(
+                        f"Download error (batch {i // batch_size + 1}): {download_err}")
 
                 # Check if download directory has files
                 if not ospath.exists(batch_download_path) or not os.listdir(
                         batch_download_path):
                     log.warning(
-                        f"Batch {i // batch_size + 1} download directory empty or missing. Skipping processing/upload."
+                        "Batch %d download directory empty or missing. "
+                        "Skipping processing/upload.",
+                        i // batch_size + 1,
                     )
+                    overall_success = False
                     continue
 
                 # --- Process and Upload ---
@@ -1375,46 +1374,50 @@ async def Do_GDrive_Upload(
                     if is_zip:
                         log.debug(">>> Calling Zip_Handler...")
                         await Zip_Handler(process_path, True, True, task_ctx)
-                        if _task_error and _task_error.state:
+                        if _task_error.state:
                             batch_processing_error = True
                             log.error(">>> Zip_Handler failed.")
                         else:
                             gdrive_upload_path = _paths.temp_zpath
                             log.debug(
-                                f">>> Zip successful. gdrive_upload_path set to: {gdrive_upload_path}")
+                                ">>> Zip successful. gdrive_upload_path: %s",
+                                gdrive_upload_path)
                     elif is_unzip:
                         log.debug(">>> Calling Unzip_Handler...")
                         await Unzip_Handler(process_path, True, task_ctx)
-                        if _task_error and _task_error.state:
+                        if _task_error.state:
                             batch_processing_error = True
                             log.error(">>> Unzip_Handler failed.")
                         else:
                             gdrive_upload_path = _paths.temp_unzip_path
                             log.debug(
-                                f">>> Unzip successful. gdrive_upload_path set to: {gdrive_upload_path}")
+                                ">>> Unzip successful. gdrive_upload_path: %s",
+                                gdrive_upload_path)
                     elif is_dualzip:
                         log.debug(">>> Calling Unzip_Handler (dualzip)...")
                         await Unzip_Handler(process_path, True, task_ctx)
-                        if _task_error and _task_error.state:
+                        if _task_error.state:
                             batch_processing_error = True
                             log.error(">>> Unzip_Handler (dualzip) failed.")
                         else:
                             log.debug(">>> Calling Zip_Handler (dualzip)...")
                             await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx)
-                            if _task_error and _task_error.state:
+                            if _task_error.state:
                                 batch_processing_error = True
                                 log.error(">>> Zip_Handler (dualzip) failed.")
                             else:
                                 gdrive_upload_path = _paths.temp_zpath
                                 log.debug(
-                                    f">>> Dualzip successful. gdrive_upload_path set to: {gdrive_upload_path}")
+                                    ">>> Dualzip successful. gdrive_upload_path: %s",
+                                    gdrive_upload_path)
                     else:
                         # Normal mode - no processing needed
                         log.debug(
                             ">>> Normal GDrive upload mode - no processing needed")
                         gdrive_upload_path = process_path
                         log.debug(
-                            f">>> Normal mode. gdrive_upload_path set to: {gdrive_upload_path}")
+                            ">>> Normal mode. gdrive_upload_path: %s",
+                            gdrive_upload_path)
 
                     # Check for processing errors before upload
                     if _task_error.state:
@@ -1423,7 +1426,8 @@ async def Do_GDrive_Upload(
                     # Call GDrive Upload handler
                     elif gdrive_upload_path is not None and ospath.exists(gdrive_upload_path):
                         log.info(
-                            f"Do_GDrive_Upload batch: Starting GDrive upload for path: {gdrive_upload_path}")
+                            "Do_GDrive_Upload batch: Starting GDrive upload for path: %s",
+                            gdrive_upload_path)
                         from ..uploader.gdrive import GDrive_Upload
                         await GDrive_Upload(gdrive_upload_path, True, task_ctx)
                         if _task_error.state:
@@ -1431,53 +1435,49 @@ async def Do_GDrive_Upload(
                             batch_processing_error = True
                         else:
                             log.debug(
-                                f">>> GDrive upload successful for batch {i // batch_size + 1}"
-                            )
+                                ">>> GDrive upload successful for batch %d",
+                                i // batch_size + 1)
                     else:
                         log.error(
-                            f"GDrive upload path missing or invalid: {gdrive_upload_path}")
+                            "GDrive upload path missing or invalid: %s",
+                            gdrive_upload_path)
                         batch_processing_error = True
-                        if _task_error:
-                            _task_error.state = True
-                            _task_error.text = "GDrive upload path invalid"
+                        _task_error.set_error("GDrive upload path invalid")
 
                 except Exception as processing_err:
                     log.error(
-                        f"Error during batch processing: {processing_err}",
-                        exc_info=True)
+                        "Error during batch processing: %s",
+                        processing_err, exc_info=True)
                     batch_processing_error = True
-                    if _task_error:
-                        _task_error.state = True
-                        _task_error.text = f"Processing error: {processing_err}"
+                    _task_error.set_error(f"Processing error: {processing_err}")
+                    # Clear stale size so it cannot bleed into the next batch
+                    _transfer.total_down_size = 0
 
                 # Handle critical processing errors -> Break the main loop
                 if batch_processing_error:
                     overall_success = False
-                    if _task_error and not _task_error.state:
-                        _task_error.state = True
-                        _task_error.text = "Processing/Upload Error"
+                    if not _task_error.state:
+                        _task_error.set_error("Processing/Upload Error")
                     log.error(
-                        "Critical processing/upload error detected. Stopping.")
+                        "Critical processing/upload error detected. Stopping batch loop.")
                     break
 
                 log.info("--- Finished Batch ---")
 
     except Exception as gdrive_err:
         log.error(
-            f"Error in Do_GDrive_Upload main execution: {gdrive_err}",
-            exc_info=True)
-        if _task_error and not _task_error.state:
-            _task_error.state = True
-            _task_error.text = f"Unexpected GDrive Error: {gdrive_err}"
+            "Error in Do_GDrive_Upload main execution: %s",
+            gdrive_err, exc_info=True)
+        if not _task_error.state:
+            _task_error.set_error(f"Unexpected GDrive Error: {gdrive_err}")
         overall_success = False
 
     # --- Final cleanup logic ---
-    if overall_success and (not _task_error or not _task_error.state):
+    if overall_success and not _task_error.state:
         log.info("Do_GDrive_Upload completed successfully. Calling SendLogs...")
         await SendLogs(True, task_ctx)  # True for non-mirror mode
     elif not overall_success:
         log.warning("Do_GDrive_Upload completed with errors.")
-        if _task_error and not _task_error.state:
-            _task_error.state = True
-            _task_error.text = _task_error.text or "Task completed with errors."
+        if not _task_error.state:
+            _task_error.set_error(_task_error.text or "Task completed with errors.")
         log.info("Do_GDrive_Upload finished with errors.")
