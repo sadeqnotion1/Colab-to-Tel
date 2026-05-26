@@ -26,9 +26,7 @@ BOT_DEBUG = os.getenv("BOT_DEBUG", "0") == "1"
 
 log = logging.getLogger(__name__)
 
-# Track delayed forced updates to prevent API spam and task leaks
-_scheduled_update_task = None
-_last_force_time = 0.0
+
 
 
 def _format_bytes(x) -> str:
@@ -357,44 +355,54 @@ async def try_update_summary(client=None, page: Optional[int] = None):
 async def force_update_summary(client=None, page: Optional[int] = None, move_to_bottom: bool = True):
     """
     Force update summary dashboard with tracked debounce logic.
+
     Ensures bursts of task updates (e.g., bulk cancellations or fast downloads)
     don't slam the Telegram API with redundant move_to_bottom API calls.
+
+    Debounce state is owned by ``TASK_QUEUE`` so it survives across imports and
+    is never split between module-level variables and the queue instance.
     """
-    global _scheduled_update_task, _last_force_time
-
     now = time.time()
-    time_since_last = now - _last_force_time
+    time_since_last = now - TASK_QUEUE._last_force_time
 
-    # If it's been more than 2 seconds since the last forced update, push immediately
+    # If it's been more than 2 seconds since the last forced update, push immediately.
     if time_since_last >= 2.0:
-        _last_force_time = now
-        
-        # If there happens to be a pending delayed update, safely cancel it
-        if _scheduled_update_task and not _scheduled_update_task.done():
-            _scheduled_update_task.cancel()
-            
+        TASK_QUEUE._last_force_time = now
+
+        # A pending delayed update is now superseded — cancel it cleanly.
+        await TASK_QUEUE.cancel_scheduled_update()
+
         await update_summary_dashboard(client, force=True, move_to_bottom=move_to_bottom, page=page)
-        
+
     else:
-        # Debouncing: If we are already waiting to push a delayed update, don't queue another
-        if _scheduled_update_task and not _scheduled_update_task.done():
+        # Debouncing: if a delayed update is already in flight, let it run.
+        if (
+            TASK_QUEUE._scheduled_update_task is not None
+            and not TASK_QUEUE._scheduled_update_task.done()
+        ):
             return
-            
+
         async def delayed_update():
             try:
-                # Wait for the remainder of the throttle window to allow the burst to settle
+                # Wait for the remainder of the throttle window to let the burst settle.
                 await asyncio.sleep(2.0 - time_since_last)
-                global _last_force_time
-                _last_force_time = time.time()
-                
-                await update_summary_dashboard(client, force=True, move_to_bottom=move_to_bottom, page=page)
+                TASK_QUEUE._last_force_time = time.time()
+                await update_summary_dashboard(
+                    client, force=True, move_to_bottom=move_to_bottom, page=page
+                )
             except asyncio.CancelledError:
-                pass  # Task was interrupted by a new immediate update, safely exit
-            except Exception as e:
-                log.error(f"Debounced background update failed: {e}")
+                pass  # Superseded by a new immediate update — exit cleanly.
+            except Exception as exc:
+                log.error(f"Debounced background update failed: {exc}")
 
-        # Track the delayed task in the master system to prevent orphaned memory leaks
-        _scheduled_update_task = TASK_QUEUE.create_background_task(
-            delayed_update(), 
-            "debounced_dashboard_update"
+        task = TASK_QUEUE.create_background_task(
+            delayed_update(),
+            "debounced_dashboard_update",
+        )
+        TASK_QUEUE._scheduled_update_task = task
+        # Auto-clear the reference once the task finishes naturally so the
+        # field never holds a stale done-task.
+        task.add_done_callback(
+            lambda t: setattr(TASK_QUEUE, "_scheduled_update_task", None)
+            if TASK_QUEUE._scheduled_update_task is t else None
         )

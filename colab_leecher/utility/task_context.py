@@ -559,6 +559,12 @@ class TaskQueue:
         self.background_tasks: Set[asyncio.Task] = set()
         self.is_shutting_down: bool = False
 
+        # --- Debounce state for force_update_summary (owned here, not in task_dashboard) ---
+        # Holds the single in-flight delayed-update asyncio.Task (if any).
+        self._scheduled_update_task: Optional[asyncio.Task] = None
+        # Monotonic timestamp of the last *completed* forced update.
+        self._last_force_time: float = 0.0
+
     def get_worker_limit(self) -> int:
         if not self.active_tasks:
             return 2
@@ -590,6 +596,32 @@ class TaskQueue:
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
         return task
+
+    async def cancel_scheduled_update(self) -> None:
+        """
+        Cancel the in-flight debounced dashboard-update task (if any) and wait
+        for it to finish so we never hold a dangling reference.
+
+        Design notes
+        ------------
+        * ``asyncio.Task.cancel()`` only *requests* cancellation — the task is
+          not guaranteed to be done until the next ``await``.  We shield the
+          wait from a *second* cancellation so this helper is safe to call from
+          within a coroutine that may itself be cancelled.
+        * After this returns, ``self._scheduled_update_task`` is set to ``None``
+          so callers can rely on a clean slate.
+        """
+        task = self._scheduled_update_task
+        if task is None or task.done():
+            self._scheduled_update_task = None
+            return
+        task.cancel()
+        try:
+            await asyncio.shield(asyncio.gather(task, return_exceptions=True))
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._scheduled_update_task = None
 
     async def add_task(self, task_ctx: TaskContext):
         async with self._lock:
