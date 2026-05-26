@@ -172,59 +172,266 @@ class TaskBotTimes:
 
 # --- ISOLATED CONTAINERS FOR TASK COMPATIBILITY --- #
 
-def _safe_copy_attrs(source_obj, target_obj):
+
+class IsolationError(RuntimeError):
     """
-    Safely copies attributes from global state to an isolated task instance.
-    Uses deepcopy for mutables (dicts, lists) to ensure strict isolation,
-    and shallow copy for immutables (strings, ints) to prevent shared mutations.
+    Raised when the isolation layer encounters a type it cannot safely clone.
+
+    This is an explicit, loud failure — far preferable to silently sharing a
+    mutable reference across concurrent tasks.
     """
-    for attr in dir(source_obj):
-        if not attr.startswith('__'):
-            val = getattr(source_obj, attr)
-            if not callable(val):
-                if isinstance(val, (list, dict, set)):
-                    setattr(target_obj, attr, copy.deepcopy(val))
-                else:
-                    setattr(target_obj, attr, val)
+
+
+# Types that are considered *intrinsically immutable* and safe to share by
+# reference across task boundaries.  Extend this tuple if you add new value
+# types (e.g. enum members, frozenset already handled below).
+_PRIMITIVE_TYPES = (
+    type(None), bool, int, float, complex, str, bytes, bytearray,
+)
+
+# Pyrogram (and any other Telegram-client) objects embed asyncio primitives
+# (Locks, Events, Queues) that are neither picklable nor deepcopy-safe.
+# We detect them by module prefix so we never silently share or fail on them.
+_UNCOPYABLE_MODULE_PREFIXES = ("pyrogram", "telethon", "hydrogram")
+
+
+def _is_pyrogram_type(val: object) -> bool:
+    """Return True if *val* originates from a known un-cloneable Telegram library."""
+    mod = getattr(type(val), "__module__", "") or ""
+    return any(mod.startswith(p) for p in _UNCOPYABLE_MODULE_PREFIXES)
+
+
+def _collect_class_namespace(obj: object) -> dict:
+    """
+    Return a flat dict of all non-dunder, non-callable attributes visible on
+    *obj*, merging instance ``__dict__`` (if any) over the class ``__dict__``.
+
+    Using ``vars()`` + class ``__dict__`` instead of ``dir()`` avoids:
+    - Inherited dunder noise (``__class__``, ``__doc__``, …)
+    - MRO-walked attributes from unexpected base classes
+    - Descriptor side-effects triggered by ``getattr`` on irrelevant names
+    """
+    merged: dict = {}
+
+    # 1. Class-level attributes (covers class-variable namespaces like BOT.Setting)
+    for klass in type(obj).__mro__:
+        for k, v in vars(klass).items():
+            if not k.startswith("__") and not callable(v) and k not in merged:
+                merged[k] = v
+
+    # 2. Instance-level attributes win over class-level
+    try:
+        for k, v in vars(obj).items():
+            if not k.startswith("__") and not callable(v):
+                merged[k] = v
+    except TypeError:
+        # Some objects (e.g. pure class namespaces) have no instance __dict__
+        pass
+
+    return merged
+
+
+def _deep_isolate_value(val: object, attr_name: str = "<unknown>") -> object:
+    """
+    Produce a fully isolated (no shared mutable state) copy of *val*.
+
+    Dispatch table (in priority order):
+      1. Primitives / frozenset  → returned as-is (immutable, safe to share)
+      2. Pyrogram / Telegram objects → IsolationError (un-cloneable)
+      3. asyncio primitives      → IsolationError (not cross-task safe)
+      4. list / tuple            → recursively isolated element-by-element
+      5. dict                    → recursively isolated key-value pairs
+      6. set / frozenset         → deepcopy (contains only hashable values)
+      7. deque                   → recursively isolated element-by-element
+      8. dataclass instances     → deepcopy (pure-Python value containers)
+      9. Everything else         → deepcopy, with IsolationError on failure
+    """
+    # --- 1. Primitives ---
+    if isinstance(val, _PRIMITIVE_TYPES):
+        return val
+    if isinstance(val, frozenset):
+        return val  # frozenset is immutable
+
+    # --- 2. Pyrogram / Telegram objects ---
+    if _is_pyrogram_type(val):
+        raise IsolationError(
+            f"Attribute '{attr_name}': value of type '{type(val).__qualname__}' "
+            f"is a Pyrogram/Telegram object and cannot be deep-copied. "
+            f"Store only message IDs (int) in isolated task state, not live "
+            f"Message objects."
+        )
+
+    # --- 3. asyncio primitives ---
+    if isinstance(val, (asyncio.Lock, asyncio.Event, asyncio.Condition,
+                        asyncio.Semaphore, asyncio.BoundedSemaphore,
+                        asyncio.Queue, asyncio.Task)):
+        raise IsolationError(
+            f"Attribute '{attr_name}': value of type '{type(val).__qualname__}' "
+            f"is an asyncio primitive and cannot be shared across task contexts. "
+            f"Create a fresh instance per task instead."
+        )
+
+    # --- 4. list / tuple ---
+    if isinstance(val, (list, tuple)):
+        isolated = [_deep_isolate_value(item, f"{attr_name}[{i}]")
+                    for i, item in enumerate(val)]
+        return isolated if isinstance(val, list) else tuple(isolated)
+
+    # --- 5. dict ---
+    if isinstance(val, dict):
+        return {
+            _deep_isolate_value(k, f"{attr_name}.key"): _deep_isolate_value(v, f"{attr_name}[{k!r}]")
+            for k, v in val.items()
+        }
+
+    # --- 6. set ---
+    if isinstance(val, set):
+        try:
+            return copy.deepcopy(val)
+        except Exception as exc:
+            raise IsolationError(
+                f"Attribute '{attr_name}': set contains un-cloneable element — {exc}"
+            ) from exc
+
+    # --- 7. deque ---
+    if isinstance(val, deque):
+        isolated_items = [_deep_isolate_value(item, f"{attr_name}[{i}]")
+                          for i, item in enumerate(val)]
+        return deque(isolated_items, maxlen=val.maxlen)
+
+    # --- 8. dataclass instances ---
+    import dataclasses as _dc
+    if _dc.is_dataclass(val) and not isinstance(val, type):
+        try:
+            return copy.deepcopy(val)
+        except Exception as exc:
+            raise IsolationError(
+                f"Attribute '{attr_name}': dataclass '{type(val).__qualname__}' "
+                f"cannot be deep-copied — {exc}"
+            ) from exc
+
+    # --- 9. General fallback — deepcopy with explicit failure reporting ---
+    try:
+        return copy.deepcopy(val)
+    except Exception as exc:
+        raise IsolationError(
+            f"Attribute '{attr_name}': value of type '{type(val).__qualname__}' "
+            f"cannot be deep-copied (it likely holds un-serialisable state). "
+            f"Original error: {exc}"
+        ) from exc
+
+
+def _safe_copy_attrs(source_obj: object, target_obj: object) -> None:
+    """
+    Walk every non-dunder, non-callable attribute on *source_obj* and write a
+    fully isolated copy onto *target_obj*.
+
+    Raises ``IsolationError`` immediately if any attribute value cannot be
+    safely cloned — this makes leaks impossible to ignore.
+    """
+    namespace = _collect_class_namespace(source_obj)
+    errors: list[str] = []
+
+    for attr, val in namespace.items():
+        try:
+            setattr(target_obj, attr, _deep_isolate_value(val, attr_name=attr))
+        except IsolationError as exc:
+            errors.append(str(exc))
+
+    if errors:
+        error_block = "\n  • ".join(errors)
+        raise IsolationError(
+            f"Context isolation failed for '{type(source_obj).__qualname__}'. "
+            f"Fix the following attributes before proceeding:\n  • {error_block}"
+        )
+
 
 class IsolatedPaths:
     """Fully isolated paths configuration per task."""
-    def __init__(self, task_ctx, global_paths):
+
+    def __init__(self, task_ctx: "TaskContext", global_paths: object) -> None:
         _safe_copy_attrs(global_paths, self)
-        
-        # Override with task-specific sandbox paths
+
+        # Override with task-specific sandbox paths (always strings — safe)
         self.work_path = task_ctx.work_path
-        self.WORK_PATH = task_ctx.work_path # legacy alias
+        self.WORK_PATH = task_ctx.work_path          # legacy alias
         self.down_path = task_ctx.down_path
         self.temp_zpath = f"{self.work_path}/temp_zip"
         self.temp_unzip_path = f"{self.work_path}/temp_unzip"
-        self.temp_unzip = self.temp_unzip_path # legacy alias
+        self.temp_unzip = self.temp_unzip_path        # legacy alias
         self.temp_dirleech_path = f"{self.work_path}/dir_leech_temp"
         self.temp_files_dir = f"{self.work_path}/leech_temp"
 
+
 class IsolatedBotOptions:
-    def __init__(self, global_options, task_ctx):
+    """Isolated copy of ``BOT.Options`` for a single task."""
+
+    def __init__(self, global_options: object, task_ctx: "TaskContext") -> None:
         _safe_copy_attrs(global_options, self)
-        if task_ctx.service_type:
+        # Task-level override wins over the global default
+        if task_ctx.service_type is not None:
             self.service_type = task_ctx.service_type
 
+
 class IsolatedBot:
-    """Fully isolated bot configuration per task."""
-    def __init__(self, global_bot, task_ctx):
-        for category in ['SOURCE', 'TASK', 'Setting', 'Mode', 'State']:
-            if hasattr(global_bot, category):
-                cat_obj = getattr(global_bot, category)
-                isolated_cat = type(category, (), {})()
+    """
+    Fully isolated bot configuration per task.
+
+    Each of the five well-known category namespaces (SOURCE, TASK, Setting,
+    Mode, State) is deep-cloned into a fresh anonymous object.  Pyrogram /
+    asyncio values inside State (e.g. ``password_retry_context`` when it holds
+    a live Message) will raise ``IsolationError`` at construction time —
+    callers must reset such attributes to ``None`` before spawning a task.
+    """
+
+    def __init__(self, global_bot: object, task_ctx: "TaskContext") -> None:
+        for category in ("SOURCE", "TASK", "Setting", "Mode", "State"):
+            if not hasattr(global_bot, category):
+                continue
+            cat_obj = getattr(global_bot, category)
+            isolated_cat = type(category, (), {})()
+            try:
                 _safe_copy_attrs(cat_obj, isolated_cat)
-                setattr(self, category, isolated_cat)
-        
-        if hasattr(global_bot, 'Options'):
+            except IsolationError as exc:
+                raise IsolationError(
+                    f"IsolatedBot: failed to isolate BOT.{category} — {exc}"
+                ) from exc
+            setattr(self, category, isolated_cat)
+
+        if hasattr(global_bot, "Options"):
             self.Options = IsolatedBotOptions(global_bot.Options, task_ctx)
 
+
 class IsolatedMsg:
-    """Fully isolated message configuration per task."""
-    def __init__(self, global_msg):
-        _safe_copy_attrs(global_msg, self)
+    """
+    Fully isolated message configuration per task.
+
+    Pyrogram ``Message`` objects (``MSG.sent_msg``, ``MSG.status_msg``) are
+    **not** copied — they embed asyncio locks and cannot be deepcopy'd.
+    Instead, only the integer message IDs are stored so the task can reference
+    them if needed.  The live ``Message`` objects remain owned by the event
+    handler that created them.
+    """
+
+    def __init__(self, global_msg: object) -> None:
+        namespace = _collect_class_namespace(global_msg)
+        for attr, val in namespace.items():
+            if _is_pyrogram_type(val):
+                # Store only the integer id — never the live object
+                msg_id = getattr(val, "id", None)
+                setattr(self, attr, msg_id)
+                log.debug(
+                    "IsolatedMsg: attribute '%s' is a Pyrogram object — "
+                    "storing message id=%s instead of the live reference.",
+                    attr, msg_id,
+                )
+            else:
+                try:
+                    setattr(self, attr, _deep_isolate_value(val, attr_name=attr))
+                except IsolationError as exc:
+                    raise IsolationError(
+                        f"IsolatedMsg: failed to isolate MSG.{attr} — {exc}"
+                    ) from exc
 
 
 @dataclass
@@ -529,32 +736,61 @@ def create_task_context(
         chat_id: int,
         mode: str = "leech") -> TaskContext:
     """
-    Factory function to create a new TaskContext with proper initialization.
-    Imports global structures exactly once to build isolated execution sandboxes.
+    Factory that creates a fully isolated ``TaskContext`` for a single task.
+
+    Isolation guarantee
+    -------------------
+    All mutable global state (``Paths``, ``BOT``, ``MSG``) is deep-cloned into
+    per-task containers before the ``TaskContext`` is returned.  The cloning is
+    performed by the strict ``_deep_isolate_value`` dispatcher, which raises
+    ``IsolationError`` on any type it cannot safely copy — so a half-baked
+    context is **never** silently returned to the caller.
+
+    Pre-flight contract on global state
+    ------------------------------------
+    The caller is responsible for ensuring that ``BOT.State`` does **not**
+    contain live Pyrogram ``Message`` objects (e.g. ``password_retry_context``
+    should be ``None``) before calling this factory.  If it does, an
+    ``IsolationError`` is raised immediately with a clear attribution.
     """
     task_ctx = TaskContext(
         user_id=user_id,
         chat_id=chat_id,
-        mode=mode
+        mode=mode,
     )
 
-    # Import globally defined variables securely here
+    # Import globals exactly once, at task-creation time.
     from .variables import Paths, BOT, MSG
-    
-    # Establish local path bindings
+
+    # Establish per-task sandbox paths (pure strings, no isolation risk).
     task_ctx.work_path = f"{Paths.WORK_PATH}/{task_ctx.task_id}"
     task_ctx.down_path = f"{task_ctx.work_path}/Downloads"
     task_ctx.hero_image = f"{task_ctx.work_path}/hero_{task_ctx.get_short_id()}.jpg"
 
-    # INJECT FULLY ISOLATED COPIES
-    # This guarantees tasks running asynchronously will NEVER unintentionally write
-    # to the `variables` namespace, as their bot, paths, and msg properties are 
-    # independent deep-cloned classes attached uniquely to the instance.
-    task_ctx.paths = IsolatedPaths(task_ctx, Paths)
-    task_ctx.bot = IsolatedBot(BOT, task_ctx)
-    task_ctx.msg = IsolatedMsg(MSG)
+    # ------------------------------------------------------------------ #
+    # STRICT ISOLATION PHASE
+    # Each container constructor will raise IsolationError loudly if it
+    # encounters a type it cannot clone.  We let that propagate without
+    # swallowing it so the caller's error handler sees the exact attribute
+    # that caused the failure.
+    # ------------------------------------------------------------------ #
+    try:
+        task_ctx.paths = IsolatedPaths(task_ctx, Paths)
+        task_ctx.bot   = IsolatedBot(BOT, task_ctx)
+        task_ctx.msg   = IsolatedMsg(MSG)
+    except IsolationError:
+        log.critical(
+            "TaskContext %s ABORTED — isolation phase failed. "
+            "Ensure BOT.State holds no live Pyrogram objects before calling "
+            "create_task_context(). See traceback for the offending attribute.",
+            task_ctx.get_short_id(),
+        )
+        raise  # Re-raise unmodified so the full chain is visible upstream
 
-    log.info(f"Created Strictly Isolated TaskContext {task_ctx.get_short_id()} for user {user_id}")
+    log.info(
+        "Created Strictly Isolated TaskContext %s for user %s",
+        task_ctx.get_short_id(), user_id,
+    )
     return task_ctx
 
 
@@ -564,6 +800,7 @@ __all__ = [
     'TaskTransfer',
     'TaskError',
     'TaskMessages',
+    'IsolationError',
     'TASK_QUEUE',
     'create_task_context',
     'get_current_task_ctx',
