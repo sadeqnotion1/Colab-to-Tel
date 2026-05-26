@@ -506,11 +506,230 @@ async def taskScheduler(task_ctx: TaskContext):
             log.info(
                 "taskScheduler completed successfully (no TaskError set). Logs should be sent by Do_Leech/Do_Mirror.")
         # Note: SendLogs is called within Do_Leech/Do_Mirror on success.
-        # cancelTask handles cleanup and status updates on failure.
+       # --- Pipeline Architecture Helper Functions ---
+
+async def _stage_download(batch_links, task_ctx: TaskContext) -> str | None:
+    """Download stage: cleans work paths and downloads a batch of links.
+
+    Args:
+        batch_links: List of links to download in this batch.
+        task_ctx: The execution TaskContext.
+
+    Returns:
+        The download path (str) if successful and not empty, or None.
+    """
+    _bot = task_ctx.bot
+    _paths = task_ctx.paths
+    _task_error = task_ctx.error
+
+    # 1. Clean Up Dirs for this batch
+    batch_download_path = _paths.down_path
+    log.info(f"[Pipeline] Cleaning work directories for batch... Target: {batch_download_path}")
+    if ospath.exists(batch_download_path):
+        shutil.rmtree(batch_download_path, ignore_errors=True)
+    if ospath.exists(_paths.temp_zpath):
+        shutil.rmtree(_paths.temp_zpath, ignore_errors=True)
+    if ospath.exists(_paths.temp_unzip_path):
+        shutil.rmtree(_paths.temp_unzip_path, ignore_errors=True)
+    makedirs(batch_download_path, exist_ok=True)
+
+    # 2. Extract batch filenames slice if manual filenames were provided
+    full_filenames_list = _bot.Options.filenames if _bot.Options.filenames else []
+    manual_filenames_provided = bool(full_filenames_list)
+    batch_filenames = []
+    if manual_filenames_provided and batch_links:
+        try:
+            idx = _bot.SOURCE.index(batch_links[0])
+            batch_filenames = full_filenames_list[idx : idx + len(batch_links)]
+        except ValueError:
+            pass
+
+    # 3. Download the current batch
+    is_ytdl = (_bot.Options.service_type == 'ytdl') or _bot.Mode.ytdl
+    log.info(f"[Pipeline] Downloading batch links... is_ytdl={is_ytdl}")
+    _task_error.clear()
+    await downloadManager(batch_links, is_ytdl, batch_filenames, task_ctx)
+
+    # Check if download succeeded and dir is not empty
+    if _task_error.state:
+        log.warning(f"[Pipeline] Download had failures: {_task_error.text}")
+        return None
+
+    if not ospath.exists(batch_download_path) or not os.listdir(batch_download_path):
+        log.warning("[Pipeline] Download path empty after download stage.")
+        return None
+
+    # Update smart download name
+    from ..utility.helper import update_download_name_from_directory
+    log.info(f"[Pipeline] Updating download name from: {batch_download_path}")
+    smart_name = update_download_name_from_directory(batch_download_path, task_ctx)
+    log.info(f"[Pipeline] Smart name determined: {smart_name}")
+
+    return batch_download_path
 
 
-# --- NEW Do_Leech Function with Batch Processing ---
-# --- Replace the ENTIRE Do_Leech function with this ---
+async def _stage_process(download_path: str, task_ctx: TaskContext) -> str | None:
+    """Process stage: handles zip, unzip, dualzip, stream_unzip or local copies.
+
+    Args:
+        download_path: The directory or file path to process.
+        task_ctx: The execution TaskContext.
+
+    Returns:
+        The processed path to upload (str), or None if already uploaded (streaming) or failed.
+    """
+    _bot = task_ctx.bot
+    _paths = task_ctx.paths
+    _transfer = task_ctx.transfer
+    _task_error = task_ctx.error
+
+    current_mode = _bot.Mode.mode
+    is_dir = (current_mode == "dir-leech")
+    is_zip = (_bot.Mode.type == "zip") or (current_mode in ["leech", "dir-leech"] and _bot.Mode.type == "normal")
+    is_unzip = (_bot.Mode.type == "unzip")
+    is_dualzip = (_bot.Mode.type == "undzip")
+    is_stream_unzip = (_bot.Mode.type == "stream_unzip")
+
+    _transfer.total_down_size = getSize(download_path)
+    log.info(f"[Pipeline] Processing. Size: {sizeUnit(_transfer.total_down_size)}, Type: {_bot.Mode.type}, is_dir={is_dir}")
+
+    try:
+        if is_dir:
+            # Directory Leech Processing Logic
+            if not ospath.exists(download_path):
+                _task_error.state = True
+                _task_error.text = f"Dir-leech source missing: {download_path}"
+                return None
+
+            if is_zip:
+                await Zip_Handler(download_path, True, False, task_ctx)
+                return _paths.temp_zpath if not _task_error.state else None
+            elif is_stream_unzip:
+                from ..utility.converters import extract_and_upload_streaming
+                items_in_dir = await asyncio.to_thread(os.listdir, download_path) if ospath.isdir(download_path) else [ospath.basename(download_path)]
+                rar_files = [f for f in items_in_dir if f.lower().endswith(
+                    ('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))]
+                if not rar_files:
+                    _task_error.set_error("No RAR files found for streaming extraction")
+                    return None
+                archive_path = ospath.join(download_path, rar_files[0]) if ospath.isdir(download_path) else download_path
+                success = await extract_and_upload_streaming(
+                    rar_filepath=archive_path,
+                    password=_bot.Options.unzip_pswd if _bot.Options.unzip_pswd else None,
+                    file_filter=None,
+                    task_ctx=task_ctx
+                )
+                if not success:
+                    _task_error.set_error("Streaming extract-upload failed")
+                return None  # Upload already done
+            elif is_unzip:
+                await Unzip_Handler(download_path, False, task_ctx)
+                return _paths.temp_unzip_path if not _task_error.state else None
+            elif is_dualzip:
+                await Unzip_Handler(download_path, False, task_ctx)
+                if _task_error.state:
+                    return None
+                await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx)
+                return _paths.temp_zpath if not _task_error.state else None
+            else:  # Normal leech for dir
+                if ospath.isdir(download_path):
+                    return download_path
+                elif ospath.isfile(download_path):
+                    if not ospath.exists(_paths.temp_dirleech_path):
+                        makedirs(_paths.temp_dirleech_path, exist_ok=True)
+                    try:
+                        shutil.copy2(download_path, _paths.temp_dirleech_path)
+                        return _paths.temp_dirleech_path
+                    except Exception as copy_err:
+                        log.error(f"Failed copy single file for dir-leech: {copy_err}")
+                        _task_error.set_error(f"Copy Error: {copy_err}")
+                        return None
+                else:
+                    _task_error.set_error("Source path disappeared")
+                    return None
+        else:
+            # Link Leech Processing Logic
+            if is_zip:
+                log.debug("[Pipeline] Calling Zip_Handler...")
+                await Zip_Handler(download_path, True, True, task_ctx)
+                return _paths.temp_zpath if not _task_error.state else None
+            elif is_stream_unzip:
+                log.debug("[Pipeline] Calling Streaming Extract+Upload Handler...")
+                from ..utility.converters import extract_and_upload_streaming
+                items_in_dir = await asyncio.to_thread(os.listdir, download_path) if ospath.isdir(download_path) else [ospath.basename(download_path)]
+                rar_files = [f for f in items_in_dir if f.lower().endswith(
+                    ('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))]
+                if not rar_files:
+                    log.error("No RAR archives found for streaming extraction")
+                    _task_error.set_error("No RAR files found")
+                    return None
+                else:
+                    archive_path = ospath.join(download_path, rar_files[0]) if ospath.isdir(download_path) else download_path
+                    log.info(f"Starting streaming extract+upload for: {archive_path}")
+                    success = await extract_and_upload_streaming(
+                        rar_filepath=archive_path,
+                        password=_bot.Options.unzip_pswd if _bot.Options.unzip_pswd else None,
+                        file_filter=None,
+                        task_ctx=task_ctx
+                    )
+                    if not success:
+                        log.error("[Pipeline] Streaming extract-upload failed.")
+                        _task_error.set_error("Streaming extract-upload failed")
+                    return None  # Upload already done
+            elif is_unzip:
+                log.debug("[Pipeline] Calling Unzip_Handler...")
+                await Unzip_Handler(download_path, True, task_ctx)
+                return _paths.temp_unzip_path if not _task_error.state else None
+            elif is_dualzip:
+                log.debug("[Pipeline] Calling Unzip_Handler (dualzip)...")
+                await Unzip_Handler(download_path, True, task_ctx)
+                if _task_error.state:
+                    return None
+                log.debug("[Pipeline] Calling Zip_Handler (dualzip)...")
+                await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx)
+                return _paths.temp_zpath if not _task_error.state else None
+            else:
+                log.debug("[Pipeline] Normal leech mode - no processing needed")
+                return download_path
+
+    except Exception as processing_err:
+        log.error(f"Error during processing stage: {processing_err}", exc_info=True)
+        _task_error.set_error(f"Processing error: {processing_err}")
+        _transfer.total_down_size = 0
+        return None
+
+
+async def _stage_upload(processed_path: str | None, task_ctx: TaskContext) -> None:
+    """Upload stage: uploads processed files to Telegram.
+
+    Args:
+        processed_path: The directory or file path to upload, or None (if already uploaded).
+        task_ctx: The execution TaskContext.
+    """
+    _paths = task_ctx.paths
+    _task_error = task_ctx.error
+
+    if processed_path is None:
+        log.debug("[Pipeline] processed_path is None. Skipping upload stage (likely already processed/uploaded).")
+        return
+
+    if not ospath.exists(processed_path):
+        log.error(f"[Pipeline] Upload path missing or invalid: {processed_path}")
+        _task_error.set_error("Leech path invalid")
+        return
+
+    current_mode = task_ctx.bot.Mode.mode
+    is_dir = (current_mode == "dir-leech")
+    is_processed_temp = (processed_path in [_paths.temp_zpath, _paths.temp_unzip_path, _paths.temp_dirleech_path])
+    cleanup_after_leech = not is_dir or is_processed_temp
+
+    log.info(f"[Pipeline] Starting Leech handler for path: {processed_path}, cleanup_after_leech={cleanup_after_leech}")
+    await Leech(processed_path, cleanup_after_leech, task_ctx)
+    if _task_error.state:
+        log.error("[Pipeline] Leech handler failed.")
+
+
+# --- Refactored Do_Leech Orchestrator ---
 async def Do_Leech(
         source,
         is_dir,
@@ -532,416 +751,97 @@ async def Do_Leech(
         is_stream_unzip: Streaming extract+upload for large archives
         task_ctx: Required. Strictly isolated TaskContext; no global fallback.
     """
-    _bot = task_ctx.bot
     _paths = task_ctx.paths
-    _transfer = task_ctx.transfer
-    _messages = task_ctx.messages
     _task_error = task_ctx.error
-    log.info(f"Do_Leech using TaskContext for task_id: {task_ctx.task_id}")
-
-    log.info(
-        f"Do_Leech started. is_dir={is_dir}, is_ytdl(legacy)={is_ytdl}, is_zip={is_zip}, is_unzip={is_unzip}, is_dualzip={is_dualzip}, is_stream_unzip={is_stream_unzip}")
+    log.info(f"Do_Leech (Orchestrator) started. is_dir={is_dir}")
     original_down_path = _paths.down_path  # Store original base download path
-    overall_success = True  # Track if all batches succeeded
-    # Get the full list of filenames if provided manually
-    full_filenames_list = _bot.Options.filenames if _bot.Options.filenames else []
+    overall_success = True
 
-    # --- Main Try Block for Do_Leech ---
     try:
-        # --- Handle Directory Leech (No Batching) ---
         if is_dir:
-            # <<< Keep your existing, working dir-leech logic here >>>
-            # <<< Ensure it correctly sets TaskError.state on failure >>>
-            # Example Structure (replace with your actual logic):
-            log.info("Do_Leech: Directory mode selected.")
             source_path_item = source[0]
-            log.info(f"Do_Leech: Processing directory/file {source_path_item}")
-            process_source_path = source_path_item
-            leech_target_path = None
-            cleanup_after_leech = True
+            log.info(f"Do_Leech [Dir Mode]: Orchestrating processing for {source_path_item}")
 
-            if not ospath.exists(process_source_path):
-                _task_error.state = True
-                _task_error.text = f"Dir-leech source missing: {process_source_path}"
-                raise Exception(_task_error.text)  # Raise to exit via finally
-
-            # Apply Zip/Unzip processing
-            if is_zip:
-                await Zip_Handler(process_source_path, True, False, task_ctx)
-                if _task_error.state:
-                    raise Exception(_task_error.text)
-                leech_target_path = _paths.temp_zpath
-            elif is_stream_unzip:
-                # NEW: Streaming extract+upload for large archives (65GB+)
-                from ..utility.converters import extract_and_upload_streaming
-                items_in_dir = await asyncio.to_thread(os.listdir, process_source_path) if ospath.isdir(process_source_path) else [ospath.basename(process_source_path)]
-                rar_files = [f for f in items_in_dir if f.lower().endswith(
-                    ('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))]
-                if not rar_files:
-                    raise Exception(
-                        "No RAR files found for streaming extraction")
-                archive_path = ospath.join(process_source_path, rar_files[0]) if ospath.isdir(
-                    process_source_path) else process_source_path
-                success = await extract_and_upload_streaming(
-                    rar_filepath=archive_path,
-                    password=_bot.Options.unzip_pswd if _bot.Options.unzip_pswd else None,
-                    file_filter=None,
-                    task_ctx=task_ctx
-                )
-                if not success:
-                    raise Exception("Streaming extract-upload failed")
-                leech_target_path = None  # Files already uploaded - skip Leech
-            elif is_unzip:
-                await Unzip_Handler(process_source_path, False, task_ctx)
-                if _task_error.state:
-                    raise Exception(_task_error.text)
-                leech_target_path = _paths.temp_unzip_path
-            elif is_dualzip:
-                await Unzip_Handler(process_source_path, False, task_ctx)
-                if _task_error.state:
-                    raise Exception(_task_error.text)
-                await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx)
-                if _task_error.state:
-                    raise Exception(_task_error.text)
-                leech_target_path = _paths.temp_zpath
-            else:  # Normal leech for dir
-                if ospath.isdir(process_source_path):
-                    leech_target_path = process_source_path
-                    cleanup_after_leech = False
-                elif ospath.isfile(process_source_path):
-                    # Copy single file logic... ensure it raises Exception on
-                    # error
-                    if not ospath.exists(_paths.temp_dirleech_path):
-                        makedirs(_paths.temp_dirleech_path, exist_ok=True)
-                    try:
-                        shutil.copy2(
-                            process_source_path,
-                            _paths.temp_dirleech_path)
-                        leech_target_path = _paths.temp_dirleech_path
-                        # ... set name/size ...
-                    except Exception as copy_err:
-                        log.error(
-                            f"Failed copy single file for dir-leech: {copy_err}")
-                        _task_error.state = True
-                        _task_error.text = f"Copy Error: {copy_err}"
-                        raise Exception(_task_error.text)
-                else:
-                    _task_error.state = True
-                    _task_error.text = "Source path disappeared"
-                    raise Exception(_task_error.text)
-
-            # Call Leech handler
-            if leech_target_path and ospath.exists(leech_target_path):
-                log.info(
-                    f"Do_Leech: Starting Leech handler for dir from path: {leech_target_path}")
-                await Leech(leech_target_path, cleanup_after_leech, task_ctx)
-                if _task_error.state:
-                    raise Exception(_task_error.text)  # Raise if Leech failed
-            elif not _task_error.state:
-                log.error(
-                    f"Processing failed or leech path missing for dir-leech: {leech_target_path}")
-                _task_error.state = True
-                _task_error.text = f"Dir processing error ({_bot.Mode.type})"
+            # 1. Processing Stage
+            processed_path = await _stage_process(source_path_item, task_ctx)
+            if _task_error.state:
                 raise Exception(_task_error.text)
-            # <<< End of example dir-leech logic >>>
 
-        # --- Handle Link Modes with Batch Processing ---
+            # 2. Upload Stage
+            await _stage_upload(processed_path, task_ctx)
+            if _task_error.state:
+                raise Exception(_task_error.text)
         else:
-            source_links = list(source)  # Ensure it's a list
-            batch_size = 1  # Process one link per batch
+            source_links = list(source)
+            batch_size = 1
             total_links = len(source_links)
-            manual_filenames_provided = bool(full_filenames_list)
 
-            # Validate filename count if manual filenames were provided
-            if manual_filenames_provided and len(
-                    full_filenames_list) != total_links:
-                log.error(
-                    f"Do_Leech Error: Initial filename count ({len(full_filenames_list)}) doesn't match link count ({total_links})."
-                )
-                # Set error state and raise exception to exit via finally block
-                _task_error.state = True
-                _task_error.text = "Initial filename/link count mismatch."
+            # Validate filenames count if provided
+            full_filenames_list = task_ctx.bot.Options.filenames if task_ctx.bot.Options.filenames else []
+            manual_filenames_provided = bool(full_filenames_list)
+            if manual_filenames_provided and len(full_filenames_list) != total_links:
+                log.error(f"Do_Leech Error: Initial filename count ({len(full_filenames_list)}) doesn't match link count ({total_links}).")
+                _task_error.set_error("Initial filename/link count mismatch.")
                 raise Exception(_task_error.text)
 
-            log.info(
-                f"Do_Leech: Link mode selected. Processing {total_links} links in batches of {batch_size}.")
+            log.info(f"Do_Leech [Link Mode]: Orchestrating {total_links} links in batches of {batch_size}.")
 
-            # --- Start of Batch Loop ---
+            # --- Batch loop ---
             for i in range(0, total_links, batch_size):
-                # --- Start of Batch Processing Logic ---
-                # Check 1: Abort immediately if a critical error was already set
                 if _task_error.state:
-                    log.warning(
-                        "Skipping further batches due to earlier critical error: %s",
-                        _task_error.text)
+                    log.warning(f"Skipping further batches due to earlier critical error: {_task_error.text}")
                     overall_success = False
-                    break  # Exit the loop
+                    break
 
                 batch_start_index = i
                 batch_end_index = min(i + batch_size, total_links)
                 batch_links = source_links[batch_start_index:batch_end_index]
-                batch_filenames = full_filenames_list[batch_start_index:batch_end_index] if manual_filenames_provided else [
-                ]
 
-                log.info(
-                    f"--- Processing Batch {i // batch_size + 1} ({batch_start_index + 1}-{batch_end_index}) / {total_links} ---")
+                log.info(f"--- Processing Batch {i // batch_size + 1} / {total_links} ---")
 
-                # 1. Clean Up Dirs
-                # Use original path for consistency if zip mode isn't creating
-                # subdirs per batch
-                batch_download_path = original_down_path
-                _paths.down_path = batch_download_path  # Set current download path
-                log.info(
-                    f"Cleaning work directories before batch {i // batch_size + 1}... Target: {batch_download_path}"
-                )
-                # Ensure previous batch's potential leftovers are cleaned
-                if ospath.exists(batch_download_path):
-                    shutil.rmtree(batch_download_path, ignore_errors=True)
-                # Clean specific temp dirs used by processing steps
-                if ospath.exists(_paths.temp_zpath):
-                    shutil.rmtree(_paths.temp_zpath, ignore_errors=True)
-                if ospath.exists(_paths.temp_unzip_path):
-                    shutil.rmtree(_paths.temp_unzip_path, ignore_errors=True)
-                # Recreate the main download dir for this batch
-                makedirs(batch_download_path, exist_ok=True)
-
-                # 2. Download the current batch
-                log.info(f"Downloading batch {i // batch_size + 1}...")
-                # Clear error state ONLY for this batch so downloadManager can
-                # signal a batch-scoped failure without touching prior state.
-                # The pre-loop check (above) already blocks entry if a critical
-                # error is still live.
-                _task_error.clear()
-                await downloadManager(batch_links, is_ytdl, batch_filenames, task_ctx)
-
-                # Capture download outcome strictly from this batch's run
-                batch_download_succeeded = not _task_error.state
-                batch_download_error_text = _task_error.text if _task_error.state else ""
-
-                # 3. Handle Download Errors (Non-Breaking)
-                batch_had_download_failures = False
-                if not batch_download_succeeded:
-                    log.warning(
-                        "One or more downloads failed during batch %d. Reason: %s. Continuing task.",
-                        i // batch_size + 1, batch_download_error_text,
-                    )
-                    overall_success = False  # Mark overall task as having failures
-                    batch_had_download_failures = True
-
-                # 4. Check if Download Directory is Empty (Can skip
-                # processing/upload)
-                if not ospath.exists(batch_download_path) or not os.listdir(
-                        batch_download_path):
-                    log.warning(
-                        f"Download path empty after batch {i // batch_size + 1}. Skipping processing/upload for this batch."
-                    )
-                    # If download failed, reset _task_error state so the main
-                    # loop continues
-                    if batch_had_download_failures and _task_error:
-                        _task_error.state = False
-                        _task_error.text = ""
-                    continue  # Skip to the next iteration of the loop
-
-                # 4.5. Smart Name Update - Update download_name based on what was actually downloaded
-                # This ensures batch downloads get correct archive names (not
-                # just the last file)
-                from ..utility.helper import update_download_name_from_directory
-                log.info(
-                    f"Updating download_name based on files in: {batch_download_path}")
-                smart_name = update_download_name_from_directory(
-                    batch_download_path, task_ctx)
-                log.info(f"Smart name determined: {smart_name}")
-
-                # --- 5. Process and Upload Step (Inside its own try/except) ---
-                # This block executes only if download succeeded (or failed but
-                # left files) AND dir is not empty
-                log.info(
-                    f"Processing/Uploading downloaded files for batch {i // batch_size + 1}...")
-                log.debug(
-                    f">>> Starting processing/upload block for batch {i // batch_size + 1}.")
-                batch_processing_error = False
-                # --- Inner try for processing/upload ---
-                try:
-                    # Ensure getSize, sizeUnit, Zip/Unzip/Leech handlers are
-                    # imported/available
-                    _transfer.total_down_size = getSize(batch_download_path)
-                    log.info(
-                        f"Batch download size: {sizeUnit(_transfer.total_down_size)}. Processing type: {_bot.Mode.type}"
-                    )
-
-                    process_path = batch_download_path
-                    leech_path = None
-
-                    log.debug(
-                        f">>> Initial process_path: {process_path}, Mode: {_bot.Mode.type}"
-                    )
-
-                    # --- Zip/Unzip Logic ---
-                    if is_zip:
-                        log.debug(">>> Calling Zip_Handler...")
-                        # Assumes it removes original on success
-                        await Zip_Handler(process_path, True, True, task_ctx)
-                        if _task_error and _task_error.state:
-                            batch_processing_error = True
-                            log.error(">>> Zip_Handler failed.")
-                        else:
-                            leech_path = _paths.temp_zpath
-                            log.debug(
-                                f">>> Zip successful. leech_path set to: {leech_path}")
-                    elif is_stream_unzip:
-                        # NEW: Streaming extract+upload for large archives
-                        # (65GB+)
-                        log.debug(
-                            ">>> Calling Streaming Extract+Upload Handler...")
-                        from ..utility.converters import extract_and_upload_streaming
-
-                        # Find RAR archives in the process directory
-                        items_in_dir = await asyncio.to_thread(os.listdir, process_path) if ospath.isdir(process_path) else [ospath.basename(process_path)]
-                        rar_files = [f for f in items_in_dir if f.lower().endswith(
-                            ('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))]
-
-                        if not rar_files:
-                            log.error(
-                                "No RAR archives found for streaming extraction")
-                            batch_processing_error = True
-                            _task_error.set_error("No RAR files found")
-                        else:
-                            # Process first RAR archive
-                            archive_path = ospath.join(
-                                process_path, rar_files[0]) if ospath.isdir(process_path) else process_path
-
-                            # Extract + Upload + Delete in streaming mode
-                            log.info(
-                                f"Starting streaming extract+upload for: {archive_path}")
-                            success = await extract_and_upload_streaming(
-                                rar_filepath=archive_path,
-                                password=_bot.Options.unzip_pswd if _bot.Options.unzip_pswd else None,
-                                file_filter=None,
-                                task_ctx=task_ctx
-                            )
-
-                            if not success:
-                                log.error(
-                                    ">>> Streaming extract-upload failed.")
-                                batch_processing_error = True
-                                _task_error.set_error("Streaming extract-upload failed")
-                            else:
-                                log.info(
-                                    ">>> Streaming extract-upload completed successfully")
-                                leech_path = None  # Skip normal Leech - files already uploaded
-                    elif is_unzip:
-                        log.debug(">>> Calling Unzip_Handler...")
-                        await Unzip_Handler(process_path, True, task_ctx)
-                        if _task_error and _task_error.state:
-                            batch_processing_error = True
-                            log.error(">>> Unzip_Handler failed.")
-                        else:
-                            leech_path = _paths.temp_unzip_path
-                            log.debug(
-                                f">>> Unzip successful. leech_path set to: {leech_path}")
-                    elif is_dualzip:
-                        log.debug(">>> Calling Unzip_Handler (dualzip)...")
-                        await Unzip_Handler(process_path, True, task_ctx)
-                        if _task_error and _task_error.state:
-                            batch_processing_error = True
-                            log.error(">>> Unzip_Handler (dualzip) failed.")
-                        else:
-                            log.debug(">>> Calling Zip_Handler (dualzip)...")
-                            await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx)
-                            if _task_error and _task_error.state:
-                                batch_processing_error = True
-                                log.error(">>> Zip_Handler (dualzip) failed.")
-                            else:
-                                leech_path = _paths.temp_zpath
-                                log.debug(
-                                    f">>> Dualzip successful. leech_path set to: {leech_path}")
-                    else:
-                        # Normal mode - no processing needed, upload downloaded
-                        # files directly
-                        log.debug(
-                            ">>> Normal leech mode - no processing needed")
-                        leech_path = process_path
-                        log.debug(
-                            f">>> Normal mode. leech_path set to: {leech_path}")
-
-                    # Check for processing errors before leech
-                    if _task_error.state:
-                        log.error("Zip/Unzip failed before leech upload.")
-                        batch_processing_error = True
-                    # Call Leech handler to upload processed files to Telegram
-                    elif leech_path is not None and ospath.exists(leech_path):
-                        log.info(
-                            "Do_Leech batch: Starting Leech handler for path: %s",
-                            leech_path)
-                        await Leech(leech_path, True, task_ctx)
-                        if _task_error.state:
-                            log.error(">>> Leech handler failed.")
-                            batch_processing_error = True
-                        else:
-                            log.debug(
-                                ">>> Leech successful for batch %d",
-                                i // batch_size + 1)
-                    elif leech_path is None:
-                        log.debug(
-                            "leech_path is None - files already uploaded (streaming mode)")
-                    else:
-                        log.error(
-                            "Leech path missing or invalid: %s", leech_path)
-                        batch_processing_error = True
-                        _task_error.set_error("Leech path invalid")
-
-                except Exception as processing_err:
-                    log.error(
-                        "Error during batch processing: %s",
-                        processing_err, exc_info=True)
-                    batch_processing_error = True
-                    _task_error.set_error(f"Processing error: {processing_err}")
-                    # Clear stale size so it cannot bleed into the next batch
-                    _transfer.total_down_size = 0
-
-                # --- Logic AFTER processing/upload try-except block, still INSIDE the loop ---
-                if batch_had_download_failures and not batch_processing_error:
-                    # Upload of whatever was downloaded succeeded — clear the
-                    # download-failure flag so the next batch starts cleanly.
-                    log.debug(
-                        "Clearing _task_error after recoverable download failure "
-                        "(upload succeeded for partial batch).")
-                    _task_error.clear()
-
-                # Handle critical processing errors -> Break the main loop
-                if batch_processing_error:
+                # 1. Stage: Download
+                download_path = await _stage_download(batch_links, task_ctx)
+                if not download_path:
                     overall_success = False
-                    if not _task_error.state:
-                        _task_error.set_error("Processing/Upload Error")
-                    log.error(
-                        "Critical processing/upload error detected. Stopping batch loop.")
-                    break  # Stop processing further batches
+                    continue
+
+                # 2. Stage: Process
+                processed_path = await _stage_process(download_path, task_ctx)
+                if _task_error.state:
+                    overall_success = False
+                    break
+
+                # 3. Stage: Upload
+                await _stage_upload(processed_path, task_ctx)
+                if _task_error.state:
+                    overall_success = False
+                    break
 
                 log.info("--- Finished Batch ---")
-            # --- End of Batch Loop ---
 
-    # --- Main except for Do_Leech ---
     except Exception as leech_err:
-        log.error(
-            "Error in Do_Leech main execution: %s",
-            leech_err, exc_info=True)
+        log.error(f"Error in Do_Leech main execution: {leech_err}", exc_info=True)
         if not _task_error.state:
             _task_error.set_error(f"Unexpected Leech Error: {leech_err}")
         overall_success = False
 
-    # --- Final cleanup logic for Do_Leech ---
-    if overall_success and not _task_error.state:
-        log.info("Do_Leech completed successfully. Calling SendLogs...")
-        await SendLogs(True, task_ctx)
-    elif not overall_success:
-        log.warning("Do_Leech completed with errors.")
-        if not _task_error.state:
-            _task_error.set_error(_task_error.text or "Task completed with errors.")
-        log.info("Do_Leech finished with errors.")
-    else:
-        log.warning("Do_Leech finished in inconsistent state.")
-        if not _task_error.state:
-            _task_error.set_error("Inconsistent final state")
+    finally:
+        # Restore original download path
+        if _paths.down_path != original_down_path:
+            _paths.down_path = original_down_path
+
+        # Final cleanup / reporting
+        if overall_success and not _task_error.state:
+            log.info("Do_Leech completed successfully. Calling SendLogs...")
+            await SendLogs(True, task_ctx)
+        elif not overall_success:
+            log.warning("Do_Leech completed with errors.")
+            if not _task_error.state:
+                _task_error.set_error(_task_error.text or "Task completed with errors.")
+        else:
+            log.warning("Do_Leech finished in inconsistent state.")
+            if not _task_error.state:
+                _task_error.set_error("Inconsistent final state")
 
 
 # --- Do_Mirror Function ---
