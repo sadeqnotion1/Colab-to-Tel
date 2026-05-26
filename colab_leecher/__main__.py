@@ -2408,17 +2408,23 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 page_num = None
                 if ":" in query_data:
                     page_num = int(query_data.split(":")[1])
-                
+
                 if query_data.startswith("dash_refresh"):
                     await callback_query.answer("Refreshing Dashboard... 🔄")
                 else:
                     await callback_query.answer()
-                
+
+                # Persist page to backend BEFORE rendering so the renderer
+                # reads the authoritative value from TASK_QUEUE, not the markup.
+                if page_num is not None:
+                    await TASK_QUEUE.set_dashboard_page(page_num)
+
                 # Use move_to_bottom=False to prevent photo re-uploading and session disconnects
-                await force_update_summary(client, page=page_num, move_to_bottom=False)
+                await force_update_summary(client, move_to_bottom=False)
             except Exception as e:
                 log.error(f"Dashboard update error: {e}")
             return
+
 
         # === MODE PICKER HANDLER ===
         if query_data.startswith("modepick_"):

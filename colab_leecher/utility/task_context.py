@@ -547,7 +547,8 @@ class TaskQueue:
         self.summary_msg: Optional[Message] = None
         self.last_summary_text: str = ""
         self.last_summary_keyboard_signature = ""
-        self.dashboard_page = 0
+        # --- Dashboard pagination state (backend-owned, never scraped from message markup) ---
+        self._dashboard_page: int = 0
         self.last_summary_update: float = 0
         self.summary_update_interval: float = 5.0
         self.min_forced_update_interval: float = 1.0
@@ -564,6 +565,33 @@ class TaskQueue:
         self._scheduled_update_task: Optional[asyncio.Task] = None
         # Monotonic timestamp of the last *completed* forced update.
         self._last_force_time: float = 0.0
+
+    # ------------------------------------------------------------------
+    # Dashboard pagination — thread-safe accessors
+    # ------------------------------------------------------------------
+
+    def get_dashboard_page(self) -> int:
+        """
+        Return the current dashboard page index.
+
+        This is a *synchronous* read and is safe to call from inside a
+        coroutine that already holds ``_summary_lock`` (e.g. inside
+        ``update_summary_dashboard``).  The integer is written atomically
+        by CPython's GIL, so a bare read is always consistent.
+        """
+        return self._dashboard_page
+
+    async def set_dashboard_page(self, page: int) -> None:
+        """
+        Persist the chosen dashboard page.
+
+        Acquires ``_summary_lock`` so the write is serialised against any
+        in-progress render that reads the same field — preventing a page
+        transition from landing mid-render and producing a torn frame.
+        """
+        async with self._summary_lock:
+            self._dashboard_page = page
+            log.debug("Dashboard page set to %d", page)
 
     def get_worker_limit(self) -> int:
         if not self.active_tasks:

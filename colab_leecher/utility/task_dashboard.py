@@ -53,19 +53,6 @@ def _keyboard_signature(keyboard: Optional[InlineKeyboardMarkup]) -> str:
     return "|".join(rows)
 
 
-def _extract_page_from_msg(msg: Optional[Message]) -> int:
-    """Extract the current dashboard page statelessly from the message's callback data."""
-    if not msg or not getattr(msg, 'reply_markup', None):
-        return 0
-    
-    try:
-        for row in msg.reply_markup.inline_keyboard:
-            for btn in row:
-                if btn.callback_data and btn.callback_data.startswith("dash_refresh:"):
-                    return int(btn.callback_data.split(":")[1])
-    except Exception:
-        pass
-    return 0
 
 
 async def update_summary_dashboard(
@@ -104,8 +91,10 @@ async def update_summary_dashboard(
 
         tasks = await TASK_QUEUE.get_all_tasks()
         
-        # Determine the current page entirely statelessly
-        current_page = page if page is not None else _extract_page_from_msg(TASK_QUEUE.summary_msg)
+        # Use the backend-owned page index; the `page` argument is an explicit
+        # override supplied by the callback handler immediately after it calls
+        # TASK_QUEUE.set_dashboard_page(), so we trust it when present.
+        current_page = page if page is not None else TASK_QUEUE.get_dashboard_page()
 
         if not tasks:
             if TASK_QUEUE.summary_msg:
@@ -257,8 +246,8 @@ async def update_summary_dashboard(
             prev_page = (current_page - 1) % total_pages
             next_page = (current_page + 1) % total_pages
             nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"dash_page:{prev_page}"))
-            # Embed current page context in the refresh button statelessly
-            nav_buttons.append(InlineKeyboardButton(f"Page {current_page + 1}/{total_pages}", callback_data=f"dash_refresh:{current_page}"))
+            # Refresh re-renders the current backend page; no page number needed in the payload.
+            nav_buttons.append(InlineKeyboardButton(f"Page {current_page + 1}/{total_pages}", callback_data="dash_refresh"))
             nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"dash_page:{next_page}"))
 
         buttons = []
@@ -343,16 +332,20 @@ async def update_summary_dashboard(
             return None
 
 
-async def try_update_summary(client=None, page: Optional[int] = None):
+async def try_update_summary(client=None):
     """
     Update summary dashboard only if throttle interval has passed.
+
+    The page to render is read from ``TASK_QUEUE.get_dashboard_page()``;
+    callers that need a page change must call
+    ``await TASK_QUEUE.set_dashboard_page(n)`` before invoking this helper.
     """
     if TASK_QUEUE._summary_lock.locked():
         return
-    await update_summary_dashboard(client, force=False, page=page)
+    await update_summary_dashboard(client, force=False)
 
 
-async def force_update_summary(client=None, page: Optional[int] = None, move_to_bottom: bool = True):
+async def force_update_summary(client=None, move_to_bottom: bool = True):
     """
     Force update summary dashboard with tracked debounce logic.
 
@@ -361,6 +354,10 @@ async def force_update_summary(client=None, page: Optional[int] = None, move_to_
 
     Debounce state is owned by ``TASK_QUEUE`` so it survives across imports and
     is never split between module-level variables and the queue instance.
+
+    The page to render is read from ``TASK_QUEUE.get_dashboard_page()``;
+    callers that need a page change must call
+    ``await TASK_QUEUE.set_dashboard_page(n)`` before invoking this helper.
     """
     now = time.time()
     time_since_last = now - TASK_QUEUE._last_force_time
@@ -372,7 +369,7 @@ async def force_update_summary(client=None, page: Optional[int] = None, move_to_
         # A pending delayed update is now superseded — cancel it cleanly.
         await TASK_QUEUE.cancel_scheduled_update()
 
-        await update_summary_dashboard(client, force=True, move_to_bottom=move_to_bottom, page=page)
+        await update_summary_dashboard(client, force=True, move_to_bottom=move_to_bottom)
 
     else:
         # Debouncing: if a delayed update is already in flight, let it run.
@@ -388,7 +385,7 @@ async def force_update_summary(client=None, page: Optional[int] = None, move_to_
                 await asyncio.sleep(2.0 - time_since_last)
                 TASK_QUEUE._last_force_time = time.time()
                 await update_summary_dashboard(
-                    client, force=True, move_to_bottom=move_to_bottom, page=page
+                    client, force=True, move_to_bottom=move_to_bottom
                 )
             except asyncio.CancelledError:
                 pass  # Superseded by a new immediate update — exit cleanly.
