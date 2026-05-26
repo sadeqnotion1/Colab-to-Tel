@@ -71,8 +71,8 @@ async def http_download_logic(url: str, file_path: str, display_name: str, heade
 
                 with open(file_path, "wb") as file:
                     async for chunk in response.content.iter_chunked(block_size):
-                        if _task_error and _task_error.state:
-                            log.warning(f"Download cancelled externally for {display_name}")
+                        if (_task_error and _task_error.state) or (task_ctx and task_ctx.cancel_event.is_set()):
+                            log.warning(f"Download cancelled externally/actively for {display_name}")
                             try:
                                file.close()
                                if os.path.exists(file_path): os.remove(file_path)
@@ -307,6 +307,12 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
     selected_service = _bot.Options.service_type
     log.info(f"Download Manager routing. Service: '{selected_service}', Sources: {len(source)}")
 
+    if task_ctx and task_ctx.cancel_event.is_set():
+        log.warning("downloadManager called but task is actively cancelled.")
+        _task_error.state = True
+        _task_error.text = "Task actively cancelled."
+        return
+
     batch_had_failures = False
     os.makedirs(_paths.down_path, exist_ok=True)
 
@@ -322,6 +328,10 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
 
     elif selected_service == "downloadly":
         for i, link in enumerate(source, 1):
+            if task_ctx and task_ctx.cancel_event.is_set():
+                log.warning("Active cancellation detected in downloadly loop.")
+                batch_had_failures = True
+                break
             filename_hint = _messages.download_name if _messages.download_name else None
             link_success = await downloadly_download(link, i, filename_hint, task_ctx)
             if not link_success: batch_had_failures = True
@@ -329,6 +339,10 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
     elif selected_service == "ytdl":
         if not source: _task_error.state = True; _task_error.text = "No YTDL links provided."; return
         for i, link in enumerate(source):
+            if task_ctx and task_ctx.cancel_event.is_set():
+                log.warning("Active cancellation detected in ytdl loop.")
+                batch_had_failures = True
+                break
             await YTDL_Status(link, i + 1, task_ctx=task_ctx)
             if _task_error and _task_error.state:
                  failed_info = {"link": link, "filename": "YTDL Download", "index": i + 1, "reason": _task_error.text or "YTDL Failed"}
@@ -339,6 +353,10 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
     elif selected_service == "direct" or selected_service is None:
          total_links = len(source)
          for i, link in enumerate(source):
+             if task_ctx and task_ctx.cancel_event.is_set():
+                 log.warning("Active cancellation detected in direct download loop.")
+                 batch_had_failures = True
+                 break
              link_success = False
              intended_filename = batch_filenames[i] if (batch_filenames and i < len(batch_filenames)) else f"Link_{i+1}"
              try:

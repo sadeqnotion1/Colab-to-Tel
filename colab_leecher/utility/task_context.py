@@ -470,6 +470,7 @@ class TaskContext:
 
     is_cancelled: bool = False
     is_completed: bool = False
+    cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
 
     # Strictly isolated containers - initialized during task factory creation
     _bot_isolated: Any = field(default=None, init=False, repr=False, compare=False)
@@ -495,6 +496,7 @@ class TaskContext:
     def mark_cancelled(self):
         self.completed_at = datetime.now()
         self.is_cancelled = True
+        self.cancel_event.set()
 
     @property
     def task_error(self):
@@ -821,6 +823,7 @@ def create_task_context(
         chat_id=chat_id,
         mode=mode,
     )
+    task_ctx.cancel_event = asyncio.Event()
 
     # Import globals exactly once, at task-creation time.
     from .variables import Paths, BOT, MSG

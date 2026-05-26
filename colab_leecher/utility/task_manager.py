@@ -551,10 +551,20 @@ async def _stage_download(batch_links, task_ctx: TaskContext) -> str | None:
             pass
 
     # 3. Download the current batch
+    if task_ctx.cancel_event.is_set():
+        log.warning("[Pipeline] Download stage aborted: task actively cancelled.")
+        _task_error.set_error("Task actively cancelled.")
+        return None
+
     is_ytdl = (_bot.Options.service_type == 'ytdl') or _bot.Mode.ytdl
     log.info(f"[Pipeline] Downloading batch links... is_ytdl={is_ytdl}")
     _task_error.clear()
     await downloadManager(batch_links, is_ytdl, batch_filenames, task_ctx)
+
+    if task_ctx.cancel_event.is_set():
+        log.warning("[Pipeline] Download stage cancelled after download manager returned.")
+        _task_error.set_error("Task actively cancelled.")
+        return None
 
     # Check if download succeeded and dir is not empty
     if _task_error.state:
@@ -692,7 +702,13 @@ async def _handle_normal_processing(download_path: str, task_ctx: TaskContext) -
             if not ospath.exists(_paths.temp_dirleech_path):
                 makedirs(_paths.temp_dirleech_path, exist_ok=True)
             try:
-                shutil.copy2(download_path, _paths.temp_dirleech_path)
+                if task_ctx.cancel_event.is_set():
+                    log.warning("File copy cancelled actively before start.")
+                    return None
+                await asyncio.to_thread(shutil.copy2, download_path, _paths.temp_dirleech_path)
+                if task_ctx.cancel_event.is_set():
+                    log.warning("File copy finished but task was actively cancelled.")
+                    return None
                 return _paths.temp_dirleech_path
             except Exception as copy_err:
                 log.error(f"Failed copy single file for dir-leech: {copy_err}")
@@ -716,6 +732,11 @@ async def _stage_process(download_path: str, task_ctx: TaskContext) -> str | Non
     Returns:
         The processed path to upload (str), or None if already uploaded (streaming) or failed.
     """
+    if task_ctx.cancel_event.is_set():
+        log.warning("[Pipeline] Process stage aborted: task actively cancelled.")
+        task_ctx.error.set_error("Task actively cancelled.")
+        return None
+
     _transfer = task_ctx.transfer
     _bot = task_ctx.bot
 
@@ -761,6 +782,11 @@ async def _stage_upload(processed_path: str | None, task_ctx: TaskContext) -> No
     _paths = task_ctx.paths
     _task_error = task_ctx.error
 
+    if task_ctx.cancel_event.is_set():
+        log.warning("[Pipeline] Upload stage aborted: task actively cancelled.")
+        _task_error.set_error("Task actively cancelled.")
+        return
+
     if processed_path is None:
         log.debug("[Pipeline] processed_path is None. Skipping upload stage (likely already processed/uploaded).")
         return
@@ -777,6 +803,12 @@ async def _stage_upload(processed_path: str | None, task_ctx: TaskContext) -> No
 
     log.info(f"[Pipeline] Starting Leech handler for path: {processed_path}, cleanup_after_leech={cleanup_after_leech}")
     await Leech(processed_path, cleanup_after_leech, task_ctx)
+
+    if task_ctx.cancel_event.is_set():
+        log.warning("[Pipeline] Upload stage cancelled after Leech returned.")
+        _task_error.set_error("Task actively cancelled.")
+        return
+
     if _task_error.state:
         log.error("[Pipeline] Leech handler failed.")
 
@@ -840,6 +872,11 @@ async def Do_Leech(
 
             # --- Batch loop ---
             for i in range(0, total_links, batch_size):
+                if task_ctx.cancel_event.is_set():
+                    log.warning("Task actively cancelled. Breaking batch loop in Do_Leech.")
+                    overall_success = False
+                    break
+
                 if _task_error.state:
                     log.warning(f"Skipping further batches due to earlier critical error: {_task_error.text}")
                     overall_success = False
@@ -1054,15 +1091,22 @@ async def Do_Mirror(
             log.info(
                 f"Mirroring content from {source_path_for_copy} to LOCAL Colab path: {mirror_dir_final}")
             try:
-                for item in os.listdir(source_path_for_copy):
+                mirror_items = await asyncio.to_thread(os.listdir, source_path_for_copy)
+                for item in mirror_items:
+                    if task_ctx.cancel_event.is_set():
+                        log.warning("Active cancellation detected during mirror copy loop.")
+                        _task_error.state = True
+                        _task_error.text = "Mirror copy actively cancelled by user."
+                        break
                     s_item = ospath.join(source_path_for_copy, item)
                     d_item = ospath.join(mirror_dir_final, item)
                     if ospath.isdir(s_item):
-                        shutil.copytree(s_item, d_item, dirs_exist_ok=True)
+                        await asyncio.to_thread(shutil.copytree, s_item, d_item, dirs_exist_ok=True)
                     elif ospath.isfile(s_item):
-                        shutil.copy2(s_item, d_item)
-                log.info(
-                    f"Successfully mirrored content to {mirror_dir_final}")
+                        await asyncio.to_thread(shutil.copy2, s_item, d_item)
+                if not _task_error.state:
+                    log.info(
+                        f"Successfully mirrored content to {mirror_dir_final}")
             except Exception as copy_err:
                 log.error(
                     f"Error mirroring content: {copy_err}",
@@ -1255,6 +1299,11 @@ async def Do_GDrive_Upload(
 
             # --- Batch Processing Loop ---
             for i in range(0, total_links, batch_size):
+                if task_ctx.cancel_event.is_set():
+                    log.warning("Task actively cancelled. Breaking GDrive upload batch loop.")
+                    overall_success = False
+                    break
+
                 batch_links = source_links[i:i + batch_size]
                 batch_filenames = full_filenames_list[i:i +
                                                       batch_size] if manual_filenames_provided else []
