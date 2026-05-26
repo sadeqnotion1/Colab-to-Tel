@@ -17,7 +17,7 @@ from .helper import fileType, getSize, getTime, keyboard, shortFileName, sizeUni
 from .message_safety import escape_html, safe_href
 from pyrogram.errors import MessageNotModified
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from .task_context import TaskContext  # NEW: Import for multi-task support
+from .task_context import TaskContext, cleanup_task_artifacts  # NEW: Import for multi-task support
 
 log = logging.getLogger(__name__)
 
@@ -598,19 +598,8 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
         log.error(f"Failed to save download report file: {e}")
         report_file_path = None
 
-    skip_cleanup = bool(error_obj.failed_links)
-    if not skip_cleanup:
-        try:
-            if os.path.exists(work_path):
-                shutil.rmtree(work_path, ignore_errors=True)
-                log.info(f"Cleaning up workspace: {work_path}")
-        except Exception as e:
-            log.error(f"Error during workspace cleanup: {e}", exc_info=True)
-    else:
-        log.warning(
-            f"Workspace cleanup skipped due to download failures. "
-            f"Check {work_path} for partial downloads and report."
-        )
+    # Note: Workspace cleanup is deferred to the end of this function (and/or the highest-level taskScheduler finally block)
+    # to ensure the report file can be read and sent to the owner successfully first.
 
     # FIX #2: was markdown-styled failure/cancel text rendered incorrectly in HTML mode.
     # Markdown ** renders as literal asterisks in HTML-mode messages.
@@ -741,6 +730,12 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
         await force_update_summary(colab_bot)
     except Exception as e:
         log.warning(f"Failed to update summary after task removal: {e}")
+
+    # Securely clean up the isolated task workspace artifacts to prevent disk leaks
+    try:
+        cleanup_task_artifacts(task_ctx)
+    except Exception as cleanup_err:
+        log.error(f"Failed to run cleanup_task_artifacts in cancelTask: {cleanup_err}", exc_info=True)
 
 # --- End of cancelTask function ---
 

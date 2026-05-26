@@ -31,7 +31,7 @@ from .variables import (
 )
 
 # Import task context for multi-task support
-from .task_context import TASK_QUEUE, TaskContext
+from .task_context import TASK_QUEUE, TaskContext, cleanup_task_artifacts
 
 
 log = logging.getLogger(__name__)
@@ -505,6 +505,12 @@ async def taskScheduler(task_ctx: TaskContext):
         else:
             log.info(
                 "taskScheduler completed successfully (no TaskError set). Logs should be sent by Do_Leech/Do_Mirror.")
+        
+        # Aggressively and safely clean up the isolated task workspace artifacts to prevent disk leaks
+        try:
+            cleanup_task_artifacts(task_ctx)
+        except Exception as cleanup_err:
+            log.error(f"Failed to run cleanup_task_artifacts: {cleanup_err}", exc_info=True)
         # Note: SendLogs is called within Do_Leech/Do_Mirror on success.
        # --- Pipeline Architecture Helper Functions ---
 

@@ -857,6 +857,83 @@ def create_task_context(
     return task_ctx
 
 
+def cleanup_task_artifacts(task_ctx: "TaskContext"):
+    """
+    Safely and robustly deletes the isolated workspace directory for a task.
+    Handles Windows file-in-use and read-only file locks gracefully without crashing
+    or raising exceptions.
+    """
+    import os
+    import shutil
+    import stat
+    import logging
+
+    log = logging.getLogger(__name__)
+
+    # 1. Retrieve the isolated work path
+    try:
+        work_path = task_ctx.paths.work_path
+    except Exception as e:
+        log.error(f"Failed to retrieve work_path from task context: {e}")
+        return
+
+    if not work_path:
+        log.debug("Workspace path is empty. Skipping cleanup.")
+        return
+
+    if not os.path.exists(work_path):
+        log.debug(f"Workspace path does not exist: {work_path}. No cleanup needed.")
+        return
+
+    log.info(f"Initiating robust cleanup of task workspace: {work_path}")
+
+    # Helper function to clear read-only flag and retry deletion
+    def remove_readonly(func, path, excinfo):
+        try:
+            # Change permissions to writable
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except Exception as e:
+            # Ignore and log warning; do not propagate so rmtree can try to proceed
+            log.warning(f"Could not change permissions or delete {path} in onerror handler: {e}")
+
+    try:
+        # Standard deletion with our custom onerror handler to handle read-only files
+        shutil.rmtree(work_path, onerror=remove_readonly)
+        log.info(f"Successfully cleaned up task workspace: {work_path}")
+    except Exception as rmtree_err:
+        log.warning(f"shutil.rmtree failed for {work_path}: {rmtree_err}. Attempting aggressive fallback cleanup.")
+        
+        # Aggressive fallback: walk bottom-up, force chmod, delete what we can
+        try:
+            for root, dirs, files in os.walk(work_path, topdown=False):
+                for name in files:
+                    file_path = os.path.join(root, name)
+                    try:
+                        os.chmod(file_path, stat.S_IWRITE)
+                        os.remove(file_path)
+                    except Exception as f_err:
+                        log.debug(f"Failed to remove file {file_path} during fallback cleanup: {f_err}")
+
+                for name in dirs:
+                    dir_path = os.path.join(root, name)
+                    try:
+                        os.chmod(dir_path, stat.S_IWRITE)
+                        os.rmdir(dir_path)
+                    except Exception as d_err:
+                        log.debug(f"Failed to remove directory {dir_path} during fallback cleanup: {d_err}")
+
+            # Try to delete the root directory again
+            try:
+                os.chmod(work_path, stat.S_IWRITE)
+                os.rmdir(work_path)
+                log.info(f"Successfully cleaned up workspace on fallback: {work_path}")
+            except Exception as final_err:
+                log.warning(f"Could not remove root workspace directory {work_path} on final attempt: {final_err}")
+        except Exception as walk_err:
+            log.error(f"Critical error during fallback walk of {work_path}: {walk_err}")
+
+
 __all__ = [
     'TaskContext',
     'TaskQueue',
@@ -867,4 +944,5 @@ __all__ = [
     'TASK_QUEUE',
     'create_task_context',
     'get_current_task_ctx',
+    'cleanup_task_artifacts',
 ]
