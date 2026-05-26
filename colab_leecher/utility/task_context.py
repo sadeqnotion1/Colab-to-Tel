@@ -565,6 +565,9 @@ class TaskQueue:
         self._scheduled_update_task: Optional[asyncio.Task] = None
         # Monotonic timestamp of the last *completed* forced update.
         self._last_force_time: float = 0.0
+        # Monotonic timestamp until which UI edits are suspended after a FloodWait.
+        # A value of 0.0 means no active suspension.
+        self._ui_suspended_until: float = 0.0
 
     # ------------------------------------------------------------------
     # Dashboard pagination — thread-safe accessors

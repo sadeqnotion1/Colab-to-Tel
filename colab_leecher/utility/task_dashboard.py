@@ -14,6 +14,7 @@ import asyncio
 from html import escape
 from typing import Optional
 from pyrogram import enums
+from pyrogram.errors import MessageNotModified, FloodWait
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 from .. import OWNER, colab_bot
 from .task_context import TASK_QUEUE
@@ -88,6 +89,14 @@ async def update_summary_dashboard(
             time_since_last = time.time() - TASK_QUEUE.last_summary_update
             if time_since_last < TASK_QUEUE.min_forced_update_interval:
                 return TASK_QUEUE.summary_msg
+
+        # --- FloodWait suspension guard ---
+        # If a previous edit triggered a FloodWait we store the resume time on the
+        # queue.  Skip all API writes until that window has expired.
+        if time.monotonic() < TASK_QUEUE._ui_suspended_until:
+            remaining = TASK_QUEUE._ui_suspended_until - time.monotonic()
+            log.debug("UI updates suspended for %.1fs (FloodWait active)", remaining)
+            return TASK_QUEUE.summary_msg
 
         tasks = await TASK_QUEUE.get_all_tasks()
         
@@ -301,21 +310,55 @@ async def update_summary_dashboard(
                         await TASK_QUEUE.summary_msg.edit_text(
                             summary_text, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True, reply_markup=keyboard
                         )
+
+                except MessageNotModified:
+                    # Telegram confirmed the content is byte-for-byte identical.
+                    # Cache the values so the pre-API equality check fires next time
+                    # and avoid counting this as a real error.
+                    log.debug("Dashboard edit skipped: content not modified (Telegram confirmed)")
+                    TASK_QUEUE.last_summary_text = summary_text
+                    TASK_QUEUE.last_summary_keyboard_signature = keyboard_signature
+                    TASK_QUEUE.mark_summary_updated()
+                    return TASK_QUEUE.summary_msg
+
+                except FloodWait as fw:
+                    # Telegram is rate-limiting us.  Record the suspension window
+                    # on the queue so *all* callers (not just this coroutine) will
+                    # back off for the required duration.  Then sleep non-blockingly
+                    # so we don't block the event loop or crash the caller.
+                    wait_secs = fw.value
+                    log.warning(
+                        "FloodWait hit while updating summary dashboard — "
+                        "suspending UI edits for %ds.",
+                        wait_secs,
+                    )
+                    TASK_QUEUE._ui_suspended_until = time.monotonic() + wait_secs
+                    # Release the lock *before* sleeping so other coroutines are
+                    # not blocked for the full flood-wait duration.  We do this by
+                    # returning immediately; the suspension guard at the top of
+                    # this function will protect us on the next invocation.
+                    await asyncio.sleep(wait_secs)
+                    TASK_QUEUE._ui_suspended_until = 0.0  # clear after sleep completes
+                    return TASK_QUEUE.summary_msg
+
                 except Exception as edit_err:
                     error_msg = str(edit_err).lower()
-                    if "not modified" in error_msg:
-                        TASK_QUEUE.last_summary_text = summary_text
-                        TASK_QUEUE.last_summary_keyboard_signature = keyboard_signature
-                        TASK_QUEUE.mark_summary_updated()
-                        return TASK_QUEUE.summary_msg
-                    
-                    # Recreate if edit fails
-                    TASK_QUEUE.summary_msg = None
-                    if thumbnail_path and os.path.exists(thumbnail_path):
-                        TASK_QUEUE.summary_msg = await client.send_photo(OWNER, photo=thumbnail_path, caption=summary_text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard)
+                    # Some errors mean the message no longer exists on Telegram's
+                    # side (deleted externally, migrated chat, etc.).  Only clear
+                    # summary_msg in that case so we recreate it on the next call.
+                    msg_gone = any(
+                        kw in error_msg
+                        for kw in ("message to edit not found", "message_id_invalid",
+                                   "channel_invalid", "chat not found")
+                    )
+                    if msg_gone:
+                        log.warning("Summary message appears deleted; will recreate. Error: %s", edit_err)
+                        TASK_QUEUE.summary_msg = None
                     else:
-                        TASK_QUEUE.summary_msg = await client.send_message(OWNER, text=summary_text, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True, reply_markup=keyboard)
-            else:
+                        log.warning("Edit failed (non-critical); keeping existing summary_msg. Error: %s", edit_err)
+                    return TASK_QUEUE.summary_msg
+
+            if not TASK_QUEUE.summary_msg:
                 if thumbnail_path and os.path.exists(thumbnail_path):
                     TASK_QUEUE.summary_msg = await client.send_photo(OWNER, photo=thumbnail_path, caption=summary_text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard)
                 else:
@@ -324,11 +367,26 @@ async def update_summary_dashboard(
             TASK_QUEUE.last_summary_text = summary_text
             TASK_QUEUE.last_summary_keyboard_signature = keyboard_signature
             TASK_QUEUE.mark_summary_updated()
-            
+
+            return TASK_QUEUE.summary_msg
+
+        except FloodWait as fw:
+            wait_secs = fw.value
+            log.warning(
+                "FloodWait hit while sending new summary dashboard — "
+                "suspending UI edits for %ds.",
+                wait_secs,
+            )
+            TASK_QUEUE._ui_suspended_until = time.monotonic() + wait_secs
+            await asyncio.sleep(wait_secs)
+            TASK_QUEUE._ui_suspended_until = 0.0
             return TASK_QUEUE.summary_msg
 
         except Exception as e:
-            log.error(f"Failed to update summary dashboard: {e}")
+            log.error("Failed to update summary dashboard: %s", e)
+            # Do NOT clear summary_msg here — only message-gone errors (handled
+            # in the inner except above) warrant that.  Clearing it on a transient
+            # network hiccup would cause an unwanted re-send on the next tick.
             return None
 
 
