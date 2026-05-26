@@ -100,15 +100,11 @@ async def taskScheduler(task_ctx: TaskContext):
     """Main function to orchestrate the download/upload task.
 
     Args:
-        task_ctx: TaskContext for this task execution.
+        task_ctx: Required. Strictly isolated TaskContext for this execution.
+                  Global state is never accessed; all state is sourced from here.
     """
-    global BOT, MSG, BotTimes, Messages, Paths, TRANSFER, TaskError
-
-    if task_ctx is None:
-        raise ValueError("taskScheduler requires task_ctx")
-
     _bot = task_ctx.bot
-    _msg = task_ctx  # TaskContext has status_msg and sent_msg directly!
+    _msg = task_ctx  # TaskContext carries status_msg and sent_msg directly
     _messages = task_ctx.messages
     _paths = task_ctx.paths
     _transfer = task_ctx.transfer
@@ -361,12 +357,9 @@ async def taskScheduler(task_ctx: TaskContext):
             # Prepend task context to status message base
             _messages.task_msg += f"__[{task_title}]({_messages.src_link})__\n\n"
 
-            # ===== PARALLEL MODE: Skip individual messages, use shared dashboa
-            # Check if we're in parallel mode by seeing if we're part of
-            # TASK_QUEUE
-            is_parallel_mode = False
-            if task_ctx:
-                is_parallel_mode = await TASK_QUEUE.has_task(task_ctx.task_id)
+            # ===== PARALLEL MODE: Skip individual messages, use shared dashboard =====
+            # task_ctx is guaranteed non-None; check queue membership directly.
+            is_parallel_mode = await TASK_QUEUE.has_task(task_ctx.task_id)
 
             # Only create individual status message if NOT in parallel mode
             if not _msg.status_msg and not is_parallel_mode:
@@ -383,32 +376,31 @@ async def taskScheduler(task_ctx: TaskContext):
                     if not img_to_send or not ospath.exists(img_to_send):
                         log.critical(
                             "FATAL: No valid thumbnail image found to send.")
-                        _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + "\n📝 __Initializing...__ (Thumbnail Error)" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()) if task_ctx else keyboard())
+                        _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + "\n📝 __Initializing...__ (Thumbnail Error)" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()))
                     else:
                         try:
-                            _msg.status_msg = await colab_bot.send_photo(chat_id=OWNER, photo=img_to_send, caption=_messages.task_msg + _messages.status_head + "\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()) if task_ctx else keyboard())
+                            _msg.status_msg = await colab_bot.send_photo(chat_id=OWNER, photo=img_to_send, caption=_messages.task_msg + _messages.status_head + "\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()))
                         except Exception as photo_err:
                             log.warning(
                                 f"Failed to send photo (MD5 or other error): {photo_err}. Sending text-only message.")
-                            _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + "\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()) if task_ctx else keyboard())
+                            _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + "\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()))
                 else:
                     try:
-                        _msg.status_msg = await colab_bot.send_photo(chat_id=OWNER, photo=img_to_send, caption=_messages.task_msg + _messages.status_head + "\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()) if task_ctx else keyboard())
+                        _msg.status_msg = await colab_bot.send_photo(chat_id=OWNER, photo=img_to_send, caption=_messages.task_msg + _messages.status_head + "\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()))
                     except Exception as photo_err:
                         log.warning(
                             f"Failed to send photo (MD5 or other error): {photo_err}. Sending text-only message.")
-                        _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + "\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()) if task_ctx else keyboard())
+                        _msg.status_msg = await colab_bot.send_message(chat_id=OWNER, text=_messages.task_msg + _messages.status_head + "\n📝 __Initializing...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()))
             elif is_parallel_mode and _msg.status_msg:
-                # In parallel mode, we keep the individual status message (e.g., the "Processing..." prompt)
-                # so it can be used for final logs/summary by SendLogs.
+                # In parallel mode, keep the individual status message so
+                # SendLogs can use it for the final summary.
                 log.info(
-                    f"Parallel mode detected - keeping existing status message for task {task_ctx.get_short_id() if task_ctx else 'N/A'}"
+                    f"Parallel mode detected - keeping existing status message for task {task_ctx.get_short_id()}"
                 )
             else:
-                # Status message already exists (shared message for parallel
-                # tasks)
+                # Status message already exists (shared message for parallel tasks)
                 log.info(
-                    f"Skipping status message creation - using existing shared message for task {task_ctx.get_short_id() if task_ctx else 'N/A'}"
+                    f"Skipping status message creation - using existing shared message for task {task_ctx.get_short_id()}"
                 )
 
         except Exception as msg_err:
@@ -445,9 +437,8 @@ async def taskScheduler(task_ctx: TaskContext):
                         f"Pre-check error: {precheck_err} - continuing anyway")
             elif not is_dir and selected_service in ['nzbcloud', 'delta', 'bitso']:
                 # Name/size handled later or manually provided
-                task_id_for_keyboard = task_ctx.get_short_id() if task_ctx else None
                 if _msg.status_msg:
-                    await _msg.status_msg.edit_caption(caption=_messages.task_msg + _messages.status_head + "\n📝 __Waiting for downloader...__" + sysINFO(), reply_markup=keyboard(task_id_for_keyboard))
+                    await _msg.status_msg.edit_caption(caption=_messages.task_msg + _messages.status_head + "\n📝 __Waiting for downloader...__" + sysINFO(), reply_markup=keyboard(task_ctx.get_short_id()))
 
         # --- Adjust Download Path for Zip Mode ---
         # Only if no error has occurred yet
@@ -528,7 +519,7 @@ async def Do_Leech(
         is_unzip,
         is_dualzip,
         is_stream_unzip,
-        task_ctx=None):
+        task_ctx: TaskContext):
     """Execute leech operation (download + upload to Telegram).
 
     Args:
@@ -539,26 +530,14 @@ async def Do_Leech(
         is_unzip: Unzip files before upload
         is_dualzip: Unzip then zip before upload
         is_stream_unzip: Streaming extract+upload for large archives
-        task_ctx: Optional TaskContext for multi-task support
+        task_ctx: Required. Strictly isolated TaskContext; no global fallback.
     """
-    global BOT, TRANSFER, Paths, Messages, TaskError, log  # Ensure log is accessible
-
-    # Multi-task support: Use task_ctx if provided, otherwise fallback to
-    # globals
-    if task_ctx:
-        _bot = task_ctx.bot
-        _paths = task_ctx.paths
-        _transfer = task_ctx.transfer
-        _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
-        log.info(f"Do_Leech using TaskContext for task_id: {task_ctx.task_id}")
-    else:
-        _bot = BOT
-        _paths = Paths
-        _transfer = TRANSFER
-        _messages = Messages
-        _task_error = TaskError
-        log.info("Do_Leech using global state (single-task mode)")
+    _bot = task_ctx.bot
+    _paths = task_ctx.paths
+    _transfer = task_ctx.transfer
+    _messages = task_ctx.messages
+    _task_error = task_ctx.task_error
+    log.info(f"Do_Leech using TaskContext for task_id: {task_ctx.task_id}")
 
     log.info(
         f"Do_Leech started. is_dir={is_dir}, is_ytdl(legacy)={is_ytdl}, is_zip={is_zip}, is_unzip={is_unzip}, is_dualzip={is_dualzip}, is_stream_unzip={is_stream_unzip}")
@@ -984,7 +963,7 @@ async def Do_Mirror(
         is_unzip,
         is_dualzip,
         is_stream_unzip,
-        task_ctx=None):
+        task_ctx: TaskContext):
     """Execute mirror operation (download + copy to local directory).
 
     Args:
@@ -994,28 +973,16 @@ async def Do_Mirror(
         is_unzip: Unzip files before mirroring
         is_dualzip: Unzip then zip before mirroring
         is_stream_unzip: Streaming extract+upload for large archives
-        task_ctx: Optional TaskContext for multi-task support
+        task_ctx: Required. Strictly isolated TaskContext; no global fallback.
     """
-    global BOT, TRANSFER, Paths, Messages, TaskError, log
-
-    # Multi-task support: Use task_ctx if provided, otherwise fallback to
-    # globals
-    if task_ctx:
-        _bot = task_ctx.bot
-        _paths = task_ctx.paths
-        _transfer = task_ctx.transfer
-        _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
-        log.info(
-            f"Do_Mirror using TaskContext for task_id: {task_ctx.task_id}"
-        )
-    else:
-        _bot = BOT
-        _paths = Paths
-        _transfer = TRANSFER
-        _messages = Messages
-        _task_error = TaskError
-        log.info("Do_Mirror using global state (single-task mode)")
+    _bot = task_ctx.bot
+    _paths = task_ctx.paths
+    _transfer = task_ctx.transfer
+    _messages = task_ctx.messages
+    _task_error = task_ctx.task_error
+    log.info(
+        f"Do_Mirror using TaskContext for task_id: {task_ctx.task_id}"
+    )
 
     log.info(
         f"Do_Mirror started. is_ytdl(legacy)={is_ytdl}, is_zip={is_zip}, is_unzip={is_unzip}, is_dualzip={is_dualzip}, is_stream_unzip={is_stream_unzip}")
@@ -1210,7 +1177,7 @@ async def Do_GDrive_Upload(
         is_unzip,
         is_dualzip,
         is_stream_unzip,
-        task_ctx=None):
+        task_ctx: TaskContext):
     """Execute Google Drive upload operation (download + upload to Google Drive).
 
     Args:
@@ -1221,28 +1188,16 @@ async def Do_GDrive_Upload(
         is_unzip: Unzip files before upload
         is_dualzip: Unzip then zip before upload
         is_stream_unzip: Streaming extract+upload for large archives
-        task_ctx: Optional TaskContext for multi-task support
+        task_ctx: Required. Strictly isolated TaskContext; no global fallback.
     """
-    global BOT, TRANSFER, Paths, Messages, TaskError, log
-
-    # Multi-task support: Use task_ctx if provided, otherwise fallback to
-    # globals
-    if task_ctx:
-        _bot = task_ctx.bot
-        _paths = task_ctx.paths
-        _transfer = task_ctx.transfer
-        _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
-        log.info(
-            f"Do_GDrive_Upload using TaskContext for task_id: {task_ctx.task_id}"
-        )
-    else:
-        _bot = BOT
-        _paths = Paths
-        _transfer = TRANSFER
-        _messages = Messages
-        _task_error = TaskError
-        log.info("Do_GDrive_Upload using global state (single-task mode)")
+    _bot = task_ctx.bot
+    _paths = task_ctx.paths
+    _transfer = task_ctx.transfer
+    _messages = task_ctx.messages
+    _task_error = task_ctx.task_error
+    log.info(
+        f"Do_GDrive_Upload using TaskContext for task_id: {task_ctx.task_id}"
+    )
 
     log.info(
         f"Do_GDrive_Upload started. is_dir={is_dir}, is_ytdl(legacy)={is_ytdl}, is_zip={is_zip}, is_unzip={is_unzip}, is_dualzip={is_dualzip}, is_stream_unzip={is_stream_unzip}")
