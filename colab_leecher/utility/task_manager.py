@@ -568,6 +568,138 @@ async def _stage_download(batch_links, task_ctx: TaskContext) -> str | None:
     return batch_download_path
 
 
+async def _handle_streaming_extraction(download_path: str, task_ctx: TaskContext) -> str | None:
+    """Handles streaming extraction and direct upload.
+
+    Returns:
+        None (as files are uploaded directly via streaming), or raises exception/sets error on failure.
+    """
+    _bot = task_ctx.bot
+    _task_error = task_ctx.error
+
+    log.info(f"[Process] Starting streaming extraction for: {download_path}")
+    if not ospath.exists(download_path):
+        _task_error.set_error(f"Source path missing for streaming extraction: {download_path}")
+        return None
+
+    items_in_dir = await asyncio.to_thread(os.listdir, download_path) if ospath.isdir(download_path) else [ospath.basename(download_path)]
+    rar_files = [f for f in items_in_dir if f.lower().endswith(
+        ('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))]
+
+    if not rar_files:
+        _task_error.set_error("No RAR files found for streaming extraction")
+        return None
+
+    archive_path = ospath.join(download_path, rar_files[0]) if ospath.isdir(download_path) else download_path
+    log.info(f"Starting streaming extract+upload for: {archive_path}")
+
+    from ..utility.converters import extract_and_upload_streaming
+    success = await extract_and_upload_streaming(
+        rar_filepath=archive_path,
+        password=_bot.Options.unzip_pswd if _bot.Options.unzip_pswd else None,
+        file_filter=None,
+        task_ctx=task_ctx
+    )
+    if not success:
+        _task_error.set_error("Streaming extract-upload failed")
+    return None  # Upload already done
+
+
+async def _handle_archive_processing(download_path: str, action: str, task_ctx: TaskContext) -> str | None:
+    """Handles standard zip, unzip, and dual-zip (undzip) batching/archive processing.
+
+    This function completely encapsulates the chunking logic (950MB Telegram limits)
+    and routes archive operations based on is_dir context.
+    """
+    _bot = task_ctx.bot
+    _paths = task_ctx.paths
+    _task_error = task_ctx.error
+
+    current_mode = _bot.Mode.mode
+    is_dir = (current_mode == "dir-leech")
+
+    # Encapsulate the chunk size (950MB for Telegram API limits) within the process stage
+    chunk_size_bytes = 950 * 1024 * 1024
+
+    log.info(f"[Process] Archive action '{action}' started. Source: {download_path}, is_dir: {is_dir}")
+
+    if is_dir:
+        # Directory Leech Processing Logic
+        if not ospath.exists(download_path):
+            _task_error.set_error(f"Dir-leech source missing: {download_path}")
+            return None
+
+        if action == "zip":
+            await Zip_Handler(download_path, is_split=True, remove=False, task_ctx=task_ctx, max_split_size=chunk_size_bytes)
+            return _paths.temp_zpath if not _task_error.state else None
+
+        elif action == "unzip":
+            await Unzip_Handler(download_path, remove=False, task_ctx=task_ctx)
+            return _paths.temp_unzip_path if not _task_error.state else None
+
+        elif action == "undzip":
+            await Unzip_Handler(download_path, remove=False, task_ctx=task_ctx)
+            if _task_error.state:
+                return None
+            await Zip_Handler(_paths.temp_unzip_path, is_split=True, remove=True, task_ctx=task_ctx, max_split_size=chunk_size_bytes)
+            return _paths.temp_zpath if not _task_error.state else None
+    else:
+        # Link Leech Processing Logic
+        if action == "zip":
+            log.debug("[Process] Calling Zip_Handler...")
+            await Zip_Handler(download_path, is_split=True, remove=True, task_ctx=task_ctx, max_split_size=chunk_size_bytes)
+            return _paths.temp_zpath if not _task_error.state else None
+
+        elif action == "unzip":
+            log.debug("[Process] Calling Unzip_Handler...")
+            await Unzip_Handler(download_path, remove=True, task_ctx=task_ctx)
+            return _paths.temp_unzip_path if not _task_error.state else None
+
+        elif action == "undzip":
+            log.debug("[Process] Calling Unzip_Handler (dualzip)...")
+            await Unzip_Handler(download_path, remove=True, task_ctx=task_ctx)
+            if _task_error.state:
+                return None
+            log.debug("[Process] Calling Zip_Handler (dualzip)...")
+            await Zip_Handler(_paths.temp_unzip_path, is_split=True, remove=True, task_ctx=task_ctx, max_split_size=chunk_size_bytes)
+            return _paths.temp_zpath if not _task_error.state else None
+
+    _task_error.set_error(f"Unknown archive action: {action}")
+    return None
+
+
+async def _handle_normal_processing(download_path: str, task_ctx: TaskContext) -> str | None:
+    """Handles normal processing: returns path directly, or copies single file for dir-leech."""
+    _bot = task_ctx.bot
+    _paths = task_ctx.paths
+    _task_error = task_ctx.error
+    current_mode = _bot.Mode.mode
+    is_dir = (current_mode == "dir-leech")
+
+    if is_dir:
+        if not ospath.exists(download_path):
+            _task_error.set_error(f"Dir-leech source missing: {download_path}")
+            return None
+        if ospath.isdir(download_path):
+            return download_path
+        elif ospath.isfile(download_path):
+            if not ospath.exists(_paths.temp_dirleech_path):
+                makedirs(_paths.temp_dirleech_path, exist_ok=True)
+            try:
+                shutil.copy2(download_path, _paths.temp_dirleech_path)
+                return _paths.temp_dirleech_path
+            except Exception as copy_err:
+                log.error(f"Failed copy single file for dir-leech: {copy_err}")
+                _task_error.set_error(f"Copy Error: {copy_err}")
+                return None
+        else:
+            _task_error.set_error("Source path disappeared")
+            return None
+    else:
+        log.debug("[Pipeline] Normal leech mode - no processing needed")
+        return download_path
+
+
 async def _stage_process(download_path: str, task_ctx: TaskContext) -> str | None:
     """Process stage: handles zip, unzip, dualzip, stream_unzip or local copies.
 
@@ -578,123 +710,37 @@ async def _stage_process(download_path: str, task_ctx: TaskContext) -> str | Non
     Returns:
         The processed path to upload (str), or None if already uploaded (streaming) or failed.
     """
-    _bot = task_ctx.bot
-    _paths = task_ctx.paths
     _transfer = task_ctx.transfer
-    _task_error = task_ctx.error
+    _bot = task_ctx.bot
+
+    # Set initial download size for status
+    _transfer.total_down_size = getSize(download_path)
+    log.info(f"[Pipeline] Processing. Size: {sizeUnit(_transfer.total_down_size)}, Type: {task_ctx.mode_type}")
 
     current_mode = _bot.Mode.mode
-    is_dir = (current_mode == "dir-leech")
-    is_zip = (_bot.Mode.type == "zip") or (current_mode in ["leech", "dir-leech"] and _bot.Mode.type == "normal")
-    is_unzip = (_bot.Mode.type == "unzip")
-    is_dualzip = (_bot.Mode.type == "undzip")
-    is_stream_unzip = (_bot.Mode.type == "stream_unzip")
+    mode_type = task_ctx.mode_type
 
-    _transfer.total_down_size = getSize(download_path)
-    log.info(f"[Pipeline] Processing. Size: {sizeUnit(_transfer.total_down_size)}, Type: {_bot.Mode.type}, is_dir={is_dir}")
+    # Map normal mode under leech/dir-leech to zip if required by legacy logic
+    is_zip_leech = (mode_type == "normal" and current_mode in ["leech", "dir-leech"])
 
     try:
-        if is_dir:
-            # Directory Leech Processing Logic
-            if not ospath.exists(download_path):
-                _task_error.state = True
-                _task_error.text = f"Dir-leech source missing: {download_path}"
-                return None
-
-            if is_zip:
-                await Zip_Handler(download_path, True, False, task_ctx)
-                return _paths.temp_zpath if not _task_error.state else None
-            elif is_stream_unzip:
-                from ..utility.converters import extract_and_upload_streaming
-                items_in_dir = await asyncio.to_thread(os.listdir, download_path) if ospath.isdir(download_path) else [ospath.basename(download_path)]
-                rar_files = [f for f in items_in_dir if f.lower().endswith(
-                    ('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))]
-                if not rar_files:
-                    _task_error.set_error("No RAR files found for streaming extraction")
-                    return None
-                archive_path = ospath.join(download_path, rar_files[0]) if ospath.isdir(download_path) else download_path
-                success = await extract_and_upload_streaming(
-                    rar_filepath=archive_path,
-                    password=_bot.Options.unzip_pswd if _bot.Options.unzip_pswd else None,
-                    file_filter=None,
-                    task_ctx=task_ctx
-                )
-                if not success:
-                    _task_error.set_error("Streaming extract-upload failed")
-                return None  # Upload already done
-            elif is_unzip:
-                await Unzip_Handler(download_path, False, task_ctx)
-                return _paths.temp_unzip_path if not _task_error.state else None
-            elif is_dualzip:
-                await Unzip_Handler(download_path, False, task_ctx)
-                if _task_error.state:
-                    return None
-                await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx)
-                return _paths.temp_zpath if not _task_error.state else None
-            else:  # Normal leech for dir
-                if ospath.isdir(download_path):
-                    return download_path
-                elif ospath.isfile(download_path):
-                    if not ospath.exists(_paths.temp_dirleech_path):
-                        makedirs(_paths.temp_dirleech_path, exist_ok=True)
-                    try:
-                        shutil.copy2(download_path, _paths.temp_dirleech_path)
-                        return _paths.temp_dirleech_path
-                    except Exception as copy_err:
-                        log.error(f"Failed copy single file for dir-leech: {copy_err}")
-                        _task_error.set_error(f"Copy Error: {copy_err}")
-                        return None
-                else:
-                    _task_error.set_error("Source path disappeared")
-                    return None
+        if mode_type == "zip" or is_zip_leech:
+            return await _handle_archive_processing(download_path, "zip", task_ctx)
+        elif mode_type == "unzip":
+            return await _handle_archive_processing(download_path, "unzip", task_ctx)
+        elif mode_type == "undzip":
+            return await _handle_archive_processing(download_path, "undzip", task_ctx)
+        elif mode_type == "stream_unzip":
+            return await _handle_streaming_extraction(download_path, task_ctx)
+        elif mode_type == "normal":
+            return await _handle_normal_processing(download_path, task_ctx)
         else:
-            # Link Leech Processing Logic
-            if is_zip:
-                log.debug("[Pipeline] Calling Zip_Handler...")
-                await Zip_Handler(download_path, True, True, task_ctx)
-                return _paths.temp_zpath if not _task_error.state else None
-            elif is_stream_unzip:
-                log.debug("[Pipeline] Calling Streaming Extract+Upload Handler...")
-                from ..utility.converters import extract_and_upload_streaming
-                items_in_dir = await asyncio.to_thread(os.listdir, download_path) if ospath.isdir(download_path) else [ospath.basename(download_path)]
-                rar_files = [f for f in items_in_dir if f.lower().endswith(
-                    ('.rar', '.part01.rar', '.part001.rar', '.part1.rar'))]
-                if not rar_files:
-                    log.error("No RAR archives found for streaming extraction")
-                    _task_error.set_error("No RAR files found")
-                    return None
-                else:
-                    archive_path = ospath.join(download_path, rar_files[0]) if ospath.isdir(download_path) else download_path
-                    log.info(f"Starting streaming extract+upload for: {archive_path}")
-                    success = await extract_and_upload_streaming(
-                        rar_filepath=archive_path,
-                        password=_bot.Options.unzip_pswd if _bot.Options.unzip_pswd else None,
-                        file_filter=None,
-                        task_ctx=task_ctx
-                    )
-                    if not success:
-                        log.error("[Pipeline] Streaming extract-upload failed.")
-                        _task_error.set_error("Streaming extract-upload failed")
-                    return None  # Upload already done
-            elif is_unzip:
-                log.debug("[Pipeline] Calling Unzip_Handler...")
-                await Unzip_Handler(download_path, True, task_ctx)
-                return _paths.temp_unzip_path if not _task_error.state else None
-            elif is_dualzip:
-                log.debug("[Pipeline] Calling Unzip_Handler (dualzip)...")
-                await Unzip_Handler(download_path, True, task_ctx)
-                if _task_error.state:
-                    return None
-                log.debug("[Pipeline] Calling Zip_Handler (dualzip)...")
-                await Zip_Handler(_paths.temp_unzip_path, True, True, task_ctx)
-                return _paths.temp_zpath if not _task_error.state else None
-            else:
-                log.debug("[Pipeline] Normal leech mode - no processing needed")
-                return download_path
+            log.warning(f"[Pipeline] Unknown mode_type: {mode_type}, falling back to normal processing")
+            return await _handle_normal_processing(download_path, task_ctx)
 
     except Exception as processing_err:
         log.error(f"Error during processing stage: {processing_err}", exc_info=True)
-        _task_error.set_error(f"Processing error: {processing_err}")
+        task_ctx.error.set_error(f"Processing error: {processing_err}")
         _transfer.total_down_size = 0
         return None
 

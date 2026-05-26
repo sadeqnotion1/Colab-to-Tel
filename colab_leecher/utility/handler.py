@@ -751,7 +751,8 @@ async def Zip_Handler(
         down_path: str,
         is_split: bool,
         remove: bool,
-        task_ctx: TaskContext = None):
+        task_ctx: TaskContext = None,
+        max_split_size: int = None):
     """Create archive from files.
 
     Args:
@@ -759,6 +760,7 @@ async def Zip_Handler(
         is_split: Whether to split the archive
         remove: Whether to remove source after archiving
         task_ctx: Optional TaskContext for multi-task support
+        max_split_size: Optional custom maximum split size in bytes (defaults to 950MB)
     """
     global BOT, Messages, MSG, TRANSFER, BotTimes, Paths, TaskError
 
@@ -785,8 +787,9 @@ async def Zip_Handler(
     log.info(f"Zip Handler started for: {down_path}")
     try:
         # Convert is_split boolean to max_split_size_bytes
-        # Default split size: 1000MB (1GB) if splitting enabled, 0 if not
-        max_split_size = (1000 * 1024 * 1024) if is_split else 0
+        # Default split size: 950MB (under 950MB for Telegram API limits) if splitting enabled, 0 if not
+        if max_split_size is None:
+            max_split_size = (950 * 1024 * 1024) if is_split else 0
         # Fixed parameter order
         await archive(down_path, remove, max_split_size, task_ctx)
         # Check if archive function set _task_error
