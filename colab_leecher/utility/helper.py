@@ -1749,10 +1749,8 @@ async def status_bar(
 
                 task_ctx.transfer.total_size = total_bytes
 
-                # Also update speed for dashboard display
-                task_ctx.transfer.last_speed = speed
-                
-                # Parse speed string back to bytes for aggregate calculations
+                # Also update speed for dashboard display (parsed as float bytes-per-second)
+                parsed_speed = 0.0
                 try:
                     if speed and speed != "N/A":
                         speed_parts = speed.split()[0]
@@ -1763,11 +1761,12 @@ async def status_bar(
                         # Also handle KB, MB, GB from other downloaders
                         multipliers.update({'KB': 1024, 'MB': 1024**2, 'GB': 1024**3})
                         
-                        task_ctx.transfer.last_speed_bytes = speed_val * multipliers.get(unit, 1)
-                    else:
-                        task_ctx.transfer.last_speed_bytes = 0.0
+                        parsed_speed = speed_val * multipliers.get(unit, 1)
                 except (IndexError, ValueError):
-                    task_ctx.transfer.last_speed_bytes = 0.0
+                    pass
+
+                task_ctx.transfer.last_speed = parsed_speed
+                task_ctx.transfer.last_speed_bytes = parsed_speed
             except (ValueError, AttributeError) as e:
                 # Use engine to decide which one to set to 1
                 is_upload = any(x in engine.lower() for x in ["upload", "up", "mirror", "gdrive"])
@@ -1787,11 +1786,13 @@ async def status_bar(
                     task_ctx.transfer.down_bytes = [est_bytes]
                 
                 if speed and speed != "N/A":
-                    task_ctx.transfer.last_speed = speed
+                    parsed_speed = 0.0
                     try:
                          val = float(speed.split()[0])
-                         task_ctx.transfer.last_speed_bytes = val * 1024 
+                         parsed_speed = val * 1024 
                     except: pass
+                    task_ctx.transfer.last_speed = parsed_speed
+                    task_ctx.transfer.last_speed_bytes = parsed_speed
 
             log.debug(
                 f"📉 status_bar {task_id_str}: Parallel mode - Updated stats: {done} / {total_size} ({task_ctx.transfer.down_bytes} / {task_ctx.transfer.total_size} bytes), speed: {speed}"

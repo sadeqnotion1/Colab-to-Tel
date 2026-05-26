@@ -71,7 +71,7 @@ class TaskTransfer:
     sent_file_names: List[str] = field(default_factory=list)
     successful_downloads: List[dict] = field(default_factory=list)
     start_time: float = field(default_factory=lambda: time.time())
-    last_speed: str = "0 B/s"
+    last_speed: float = 0.0
     last_speed_bytes: float = 0.0
 
     def reset(self):
@@ -82,7 +82,7 @@ class TaskTransfer:
         self.sent_file_names = []
         self.successful_downloads = []
         self.start_time = time.time()
-        self.last_speed = "0 B/s"
+        self.last_speed = 0.0
 
     def get_current_bytes(self) -> int:
         return max(self.down_bytes, self.up_bytes)
@@ -107,20 +107,12 @@ class TaskTransfer:
             return remaining_bytes / speed
         return 0.0
 
-    def get_speed(self) -> str:
+    def get_speed(self) -> float:
         elapsed = time.time() - self.start_time
         if elapsed < 0.01:
-            return "0 B/s"
+            return 0.0
         current_bytes = self.get_current_bytes()
-        speed = current_bytes / elapsed
-        if speed < 1024:
-            return f"{speed:.0f} B/s"
-        elif speed < 1024 * 1024:
-            return f"{speed / 1024:.1f} KB/s"
-        elif speed < 1024 * 1024 * 1024:
-            return f"{speed / (1024 * 1024):.1f} MB/s"
-        else:
-            return f"{speed / (1024 * 1024 * 1024):.1f} GB/s"
+        return current_bytes / elapsed
 
 
 @dataclass

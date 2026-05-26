@@ -224,10 +224,9 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
                 speed_string, eta_seconds, percentage = helper.speedETA(upload_start_time, current, total)
                 
                 if transfer_obj:
-                    transfer_obj.last_speed = speed_string
-                    try:
-                        transfer_obj.last_speed_bytes = current / (now - upload_start_time) if (now - upload_start_time) > 0 else 0
-                    except: pass
+                    raw_speed = current / (now - upload_start_time) if (now - upload_start_time) > 0 else 0.0
+                    transfer_obj.last_speed = raw_speed
+                    transfer_obj.last_speed_bytes = raw_speed
                 
                 done_str = helper.sizeUnit(current)
                 total_str = helper.sizeUnit(total)

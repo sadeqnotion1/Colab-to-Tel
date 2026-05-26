@@ -20,7 +20,7 @@ from .. import OWNER, colab_bot
 from .task_context import TASK_QUEUE
 from .helper import getTime
 from .variables import Paths, BOT
-from .ui_components import SizeFormatter, ProgressBar
+from .ui_components import SizeFormatter, ProgressBar, TimeFormatter
 from .ui_copy import build_cancel_task_button_label, summarize_task_name
 
 BOT_DEBUG = os.getenv("BOT_DEBUG", "0") == "1"
@@ -186,7 +186,7 @@ async def update_summary_dashboard(
             d_bytes = sum(task_ctx.transfer.down_bytes) if isinstance(task_ctx.transfer.down_bytes, list) else task_ctx.transfer.down_bytes
 
             if u_bytes > 0:
-                speed = task_ctx.transfer.get_speed()
+                speed = SizeFormatter.format_speed(task_ctx.transfer.get_speed())
                 uploaded = _format_bytes(task_ctx.transfer.up_bytes)
                 percentage = 0.0
                 if task_ctx.transfer.total_size > 0:
@@ -230,12 +230,12 @@ async def update_summary_dashboard(
                         f"<b>└📦 Files »</b> <code>{task_ctx.messages.files_processed}/{task_ctx.messages.total_files}</code>"
                     )
                 else:
-                    speed = task_ctx.transfer.get_speed()
+                    speed = SizeFormatter.format_speed(task_ctx.transfer.get_speed())
                     percentage = task_ctx.transfer.get_percentage()
                     downloaded = _format_bytes(task_ctx.transfer.down_bytes)
                     total = _format_bytes(task_ctx.transfer.total_size) if task_ctx.transfer.total_size > 0 else "Unknown"
                     eta = task_ctx.transfer.get_eta()
-                    eta_str = getTime(eta) if eta > 0 else "?"
+                    eta_str = TimeFormatter.format_eta(eta) if eta > 0 else "?"
                     
                     bar = "█" * int(percentage/5) + "▒" * (20 - int(percentage/5))
                     summary_text += (
