@@ -103,15 +103,17 @@ async def taskScheduler(task_ctx: TaskContext):
         task_ctx: Required. Strictly isolated TaskContext for this execution.
                   Global state is never accessed; all state is sourced from here.
     """
+    task_id = task_ctx.task_id
+    log.info(
+        f"taskScheduler started using TaskContext for task_id: {task_id}"
+    )
+
     _bot = task_ctx.bot
     _msg = task_ctx  # TaskContext carries status_msg and sent_msg directly
     _messages = task_ctx.messages
     _paths = task_ctx.paths
     _transfer = task_ctx.transfer
     _task_error = task_ctx.error
-    log.info(
-        f"taskScheduler using TaskContext for task_id: {task_ctx.task_id}"
-    )
 
     selected_service = _bot.Options.service_type
     log.info(
@@ -129,7 +131,8 @@ async def taskScheduler(task_ctx: TaskContext):
     # Store original download path in case it's modified (e.g., for zip mode)
     original_Paths_down_path = _paths.down_path
 
-    try:  # Main try block for the entire task
+    try:
+        # Enclose the complete pipeline orchestration in this strict top-level try block
         _transfer.reset()  # Reset transfer statistics
         log.debug("Transfer state reset.")
         _messages.download_name = ""  # Reset download name context
@@ -409,10 +412,8 @@ async def taskScheduler(task_ctx: TaskContext):
                 exc_info=True)
             _task_error.state = True
             _task_error.text = f"Failed send status: {msg_err}"
-            # Return early if status sending fails critically
-            # No need to explicitly return, finally block handles cancellation
-            # if TaskError is set
-            pass  # Allow finally block to handle cancellation
+            # Allow finally block to handle cancellation
+            pass
 
         # --- Pre-checks (Size/Name) ---
         # Only run if no error has occurred yet
@@ -475,43 +476,70 @@ async def taskScheduler(task_ctx: TaskContext):
                 _task_error.state = True
                 _task_error.text = f"Invalid mode: {current_mode}"
 
+    except asyncio.CancelledError:
+        log.warning(f"taskScheduler: Task {task_id[:8]} actively cancelled.")
+        task_ctx.mark_cancelled()
+        # Set task error text to represent cancellation
+        if not _task_error.state:
+            _task_error.set_error("Task actively cancelled by user.")
+        raise
     except Exception as scheduler_err:
         log.error(
             f"Error within taskScheduler main try block: {scheduler_err}",
             exc_info=True)
         # Set error state if one hasn't been set already
         if not _task_error.state:
-            _task_error.state = True
-            _task_error.text = f"Scheduler Error: {scheduler_err}"
-            # Don't call cancelTask here, finally block will handle it
+            _task_error.set_error(f"Scheduler Error: {scheduler_err}")
     finally:
-        # This block runs whether an exception occurred or not
+        # Ultimate safety net block. Runs whether exception, cancellation or normal completion occurred.
         log.info(
-            "taskScheduler finished or encountered error. Entering finally block.")
-        # Restore original download path if it was changed
-        if _paths.down_path != original_Paths_down_path:
-            _paths.down_path = original_Paths_down_path
-            log.debug("Restored original _paths.down_path")
+            f"taskScheduler: Entering safety finally block for task {task_id[:8]}")
 
-        # Check if an error occurred during the task
-        if _task_error.state:
-            log.warning(
-                f"Task failed. Reason: {_task_error.text}. Initiating cancellation/cleanup."
-            )
-            # Call cancelTask only if it wasn't the source of the error itself
-            # This check might be complex depending on specific errors caught above
-            # A simple approach is to always call it if TaskError.state is True
-            await cancelTask(f"Task Failed: {_task_error.text}", task_ctx)
-        else:
-            log.info(
-                "taskScheduler completed successfully (no TaskError set). Logs should be sent by Do_Leech/Do_Mirror.")
-        
-        # Aggressively and safely clean up the isolated task workspace artifacts to prevent disk leaks
+        # 1. Restore original download path if it was changed
         try:
+            if _paths.down_path != original_Paths_down_path:
+                _paths.down_path = original_Paths_down_path
+                log.debug("taskScheduler finally: Restored original _paths.down_path")
+        except Exception as path_err:
+            log.error(f"taskScheduler finally: Failed to restore download path: {path_err}")
+
+        # 2. Dispatch reports/cancellation UI updates safely if task was cancelled or failed
+        if _task_error.state or task_ctx.is_cancelled:
+            try:
+                log.warning(f"taskScheduler finally: Task {task_id[:8]} is failed/cancelled. Dispatching reports.")
+                reason_to_report = _task_error.text or "Task stopped unexpectedly."
+                await cancelTask(reason_to_report, task_ctx)
+            except Exception as cancel_dispatch_err:
+                log.error(f"taskScheduler finally: Failed to dispatch reports via cancelTask: {cancel_dispatch_err}", exc_info=True)
+
+        # 3. Clean up isolated task workspace artifacts to prevent disk leaks
+        try:
+            log.debug(f"taskScheduler finally: Cleaning up task workspace artifacts for {task_id[:8]}")
             cleanup_task_artifacts(task_ctx)
         except Exception as cleanup_err:
-            log.error(f"Failed to run cleanup_task_artifacts: {cleanup_err}", exc_info=True)
-        # Note: SendLogs is called within Do_Leech/Do_Mirror on success.
+            log.error(f"taskScheduler finally: Failed to run cleanup_task_artifacts: {cleanup_err}", exc_info=True)
+
+        # 4. ABSOLUTE GUARANTEE: Release worker slot
+        try:
+            log.info(f"taskScheduler finally: Guaranteeing release of worker slot for task {task_id[:8]}")
+            await TASK_QUEUE.release_worker_slot(task_id)
+        except Exception as slot_err:
+            log.error(f"taskScheduler finally: Failed to release worker slot: {slot_err}", exc_info=True)
+
+        # 5. ABSOLUTE GUARANTEE: Remove task from TASK_QUEUE
+        try:
+            log.info(f"taskScheduler finally: Guaranteeing removal of task {task_id[:8]} from active queue")
+            await TASK_QUEUE.remove_task(task_id)
+        except Exception as remove_err:
+            log.error(f"taskScheduler finally: Failed to remove task from queue: {remove_err}", exc_info=True)
+
+        # 6. Force summary dashboard update to reflect freed concurrency slots
+        try:
+            log.info(f"taskScheduler finally: Forcing summary dashboard update")
+            from .task_dashboard import force_update_summary
+            await force_update_summary(colab_bot)
+        except Exception as dashboard_err:
+            log.warning(f"taskScheduler finally: Failed to force update dashboard: {dashboard_err}")
        # --- Pipeline Architecture Helper Functions ---
 
 async def _stage_download(batch_links, task_ctx: TaskContext) -> str | None:
