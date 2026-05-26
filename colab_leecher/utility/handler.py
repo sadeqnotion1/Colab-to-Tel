@@ -459,19 +459,24 @@ async def Unzip_Handler(
 # ----- END OF REPLACEMENT BLOCK -----
 
 
-async def cancelTask(Reason: str, task_ctx: TaskContext = None):
+async def cancel_task(reason: str, task_ctx: TaskContext = None):
     """
-    Cancel a task and clean up resources.
+    Cancel a task and clean up resources in a strictly sequenced, exception-safe manner.
 
     Args:
-        Reason: Reason for cancellation.
+        reason: Reason for cancellation.
         task_ctx: TaskContext for per-task cancellation.
     """
     global OWNER, colab_bot, log
+    import io
+    from pyrogram import enums
+    from pyrogram.errors import MessageNotModified
+    from .task_context import TASK_QUEUE, cleanup_task_artifacts
 
     if task_ctx is None:
         log.error(
-            "cancelTask called without task_ctx; legacy global cancellation path has been removed.")
+            "cancel_task called without task_ctx; legacy global cancellation path has been removed."
+        )
         return
 
     transfer_obj = task_ctx.transfer
@@ -480,207 +485,210 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
     start_time = task_ctx.started_at or task_ctx.created_at or datetime.now()
 
     task_failed = error_obj.state
-    final_reason = error_obj.text if task_failed and error_obj.text else Reason
+    final_reason = error_obj.text if task_failed and error_obj.text else reason
 
     log.warning(
         f"Task {task_ctx.get_short_id()} cancellation/completion triggered. "
         f"Reason: {final_reason}"
     )
-    task_ctx.mark_cancelled()
 
-    # Avoid cancelling/awaiting the currently executing task to prevent self-deadlock.
-    current_asyncio_task = asyncio.current_task()
-    if (
-        task_ctx.async_task
-        and task_ctx.async_task is not current_asyncio_task
-        and not task_ctx.async_task.done()
-    ):
-        log.info(f"Requested graceful cancellation for {task_ctx.get_short_id()}. Waiting up to 5s for clean socket teardown...")
-        
-        # 2. WAIT FOR THE TASK TO GRACEFULLY SHUT DOWN
-        wait_time = 0.0
-        while not task_ctx.async_task.done() and wait_time < 5.0:
-            await asyncio.sleep(0.5)
-            wait_time += 0.5
-            
-        # 3. FALLBACK TO HARD CANCELLATION IF STILL RUNNING
-        if not task_ctx.async_task.done():
-            log.warning(f"Task {task_ctx.get_short_id()} did not cooperatively exit in time. Forcing hard cancellation.")
-            task_ctx.async_task.cancel()
-            try:
-                await task_ctx.async_task
-            except asyncio.CancelledError:
-                log.info(f"Task {task_ctx.get_short_id()} successfully hard-cancelled")
-            except Exception as e:
-                log.error(f"Task {task_ctx.get_short_id()} raised exception during hard cancellation: {e}")
-        else:
-            log.info(f"Task {task_ctx.get_short_id()} shut down gracefully.")
-
+    # a) Call task_ctx.mark_cancelled() (which fires the event from Subtopic 4.1).
     try:
-        time_spent = getTime((datetime.now() - start_time).seconds)
-    except Exception:
-        time_spent = "Unknown"
+        task_ctx.mark_cancelled()
+        log.info(f"Step a: Task {task_ctx.get_short_id()} successfully marked as cancelled.")
+    except Exception as e:
+        log.error(f"Error in Step a (mark_cancelled): {e}")
 
-    service_type = task_ctx.service_type or "N/A"
-    mode = task_ctx.mode or "N/A"
-    mode_type = task_ctx.mode_type or "N/A"
+    # b) If task_ctx.async_task is running, call task_ctx.async_task.cancel().
+    try:
+        current_asyncio_task = asyncio.current_task()
+        if (
+            task_ctx.async_task
+            and task_ctx.async_task is not current_asyncio_task
+            and not task_ctx.async_task.done()
+        ):
+            log.info(f"Step b: Actively interrupting async task for {task_ctx.get_short_id()}")
+            task_ctx.async_task.cancel()
+            # Wait up to 2 seconds for clean socket teardown/graceful abort in target task
+            wait_time = 0.0
+            while not task_ctx.async_task.done() and wait_time < 2.0:
+                await asyncio.sleep(0.1)
+                wait_time += 0.1
+            log.info(f"Step b: Async task cancellation completed. (done={task_ctx.async_task.done()})")
+        else:
+            log.info("Step b: No active running async task to cancel (or self-cancel skipped).")
+    except Exception as e:
+        log.error(f"Error in Step b (async_task.cancel): {e}")
 
-    report_content = f"===== Task Report - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =====\n"
-    report_content += f"Task ID: {task_ctx.get_short_id()}\n"
-    report_content += f"Reason for Stop/Completion: {final_reason}\n"
-    report_content += f"Mode: {mode}, Type: {mode_type}, Service: {service_type}\n"
-    report_content += f"Total Time Elapsed: {time_spent}\n"
-    report_content += f"Source Link: {messages_obj.src_link or 'N/A'}\n\n"
-
-    processed_urls = set()
-
-    report_content += f"--- Successful Downloads ({len(transfer_obj.successful_downloads)}) ---\n"
-    if transfer_obj.successful_downloads:
-        for idx, item in enumerate(transfer_obj.successful_downloads):
-            url = item.get("url", "N/A")
-            processed_urls.add(url)
-            report_content += f"{idx + 1}. Filename: {item.get('filename', 'N/A')}\n"
-            report_content += f"   URL: {url}\n\n"
-    else:
-        report_content += "   None\n\n"
-
-    report_content += f"--- Failed Downloads ({len(error_obj.failed_links)}) ---\n"
-    if error_obj.failed_links:
-        for idx, item in enumerate(error_obj.failed_links):
-            url = item.get("link", "N/A")
-            processed_urls.add(url)
-            report_content += f"{idx + 1}. Index/Link Num: {item.get('index', 'N/A')}\n"
-            report_content += f"   Filename: {item.get('filename', 'N/A')}\n"
-            report_content += f"   URL: {url}\n"
-            report_content += f"   Reason: {item.get('reason', 'Unknown')}\n\n"
-    else:
-        report_content += "   None\n\n"
-
+    # --- Pre-generate Report (In-Memory to bypass disk locks & work_path wipe) ---
+    report_stream = None
+    report_saved = False
     skipped_links = []
-    original_links = task_ctx.source_urls or []
-    original_filenames = task_ctx.filenames or []
-    if len(original_links) > (
-            len(transfer_obj.successful_downloads) + len(error_obj.failed_links)):
-        for i, url in enumerate(original_links):
-            if url not in processed_urls:
-                filename = (
-                    original_filenames[i]
-                    if i < len(original_filenames)
-                    else "N/A (Filename List Mismatch?)"
-                )
-                skipped_links.append({"url": url, "filename": filename})
+    time_spent = "Unknown"
+    service_type = "N/A"
+    mode = "N/A"
+    mode_type = "N/A"
+    try:
+        try:
+            time_spent = getTime((datetime.now() - start_time).seconds)
+        except Exception:
+            pass
 
-    report_content += f"--- Skipped / Not Attempted ({len(skipped_links)}) ---\n"
-    if skipped_links:
-        for idx, item in enumerate(skipped_links):
-            report_content += f"{idx + 1}. Filename: {item.get('filename', 'N/A')}\n"
-            report_content += f"   URL: {item.get('url', 'N/A')}\n\n"
-    else:
-        report_content += "   None\n\n"
+        service_type = task_ctx.service_type or "N/A"
+        mode = task_ctx.mode or "N/A"
+        mode_type = task_ctx.mode_type or "N/A"
 
-    if mode != "mirror":
-        report_content += f"--- Successful Uploads ({len(transfer_obj.sent_file)}) ---\n"
-        if not transfer_obj.sent_file:
+        report_content = f"===== Task Report - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =====\n"
+        report_content += f"Task ID: {task_ctx.get_short_id()}\n"
+        report_content += f"Reason for Stop/Completion: {final_reason}\n"
+        report_content += f"Mode: {mode}, Type: {mode_type}, Service: {service_type}\n"
+        report_content += f"Total Time Elapsed: {time_spent}\n"
+        report_content += f"Source Link: {messages_obj.src_link or 'N/A'}\n\n"
+
+        processed_urls = set()
+
+        report_content += f"--- Successful Downloads ({len(transfer_obj.successful_downloads)}) ---\n"
+        if transfer_obj.successful_downloads:
+            for idx, item in enumerate(transfer_obj.successful_downloads):
+                url = item.get("url", "N/A")
+                processed_urls.add(url)
+                report_content += f"{idx + 1}. Filename: {item.get('filename', 'N/A')}\n"
+                report_content += f"   URL: {url}\n\n"
+        else:
             report_content += "   None\n\n"
 
-    report_content += "===== End of Report =====\n"
+        report_content += f"--- Failed Downloads ({len(error_obj.failed_links)}) ---\n"
+        if error_obj.failed_links:
+            for idx, item in enumerate(error_obj.failed_links):
+                url = item.get("link", "N/A")
+                processed_urls.add(url)
+                report_content += f"{idx + 1}. Index/Link Num: {item.get('index', 'N/A')}\n"
+                report_content += f"   Filename: {item.get('filename', 'N/A')}\n"
+                report_content += f"   URL: {url}\n"
+                report_content += f"   Reason: {item.get('reason', 'Unknown')}\n\n"
+        else:
+            report_content += "   None\n\n"
 
-    work_path = task_ctx.work_path
-    report_file_path = os.path.join(work_path, "download_report.txt")
-    report_saved = False
-    try:
-        os.makedirs(work_path, exist_ok=True)
-        with open(report_file_path, "w", encoding="utf-8") as f:
-            f.write(report_content)
-        log.info(f"Download report saved to {report_file_path}")
+        original_links = task_ctx.source_urls or []
+        original_filenames = task_ctx.filenames or []
+        if len(original_links) > (
+                len(transfer_obj.successful_downloads) + len(error_obj.failed_links)):
+            for i, url in enumerate(original_links):
+                if url not in processed_urls:
+                    filename = (
+                        original_filenames[i]
+                        if i < len(original_filenames)
+                        else "N/A (Filename List Mismatch?)"
+                    )
+                    skipped_links.append({"url": url, "filename": filename})
+
+        report_content += f"--- Skipped / Not Attempted ({len(skipped_links)}) ---\n"
+        if skipped_links:
+            for idx, item in enumerate(skipped_links):
+                report_content += f"{idx + 1}. Filename: {item.get('filename', 'N/A')}\n"
+                report_content += f"   URL: {item.get('url', 'N/A')}\n\n"
+        else:
+            report_content += "   None\n\n"
+
+        if mode != "mirror":
+            report_content += f"--- Successful Uploads ({len(transfer_obj.sent_file)}) ---\n"
+            if not transfer_obj.sent_file:
+                report_content += "   None\n\n"
+
+        report_content += "===== End of Report =====\n"
+
+        # Safe in-memory stream representing the report file
+        report_stream = io.BytesIO(report_content.encode("utf-8"))
+        report_stream.name = "download_report.txt"
         report_saved = True
-    except Exception as e:
-        log.error(f"Failed to save download report file: {e}")
-        report_file_path = None
+        log.info("In-memory download report generated successfully.")
+    except Exception as report_err:
+        log.error(f"Failed to generate in-memory download report: {report_err}")
 
-    # Note: Workspace cleanup is deferred to the end of this function (and/or the highest-level taskScheduler finally block)
-    # to ensure the report file can be read and sent to the owner successfully first.
+    # c) Invoke the artifact cleanup routine (wiping the isolated work_path).
+    try:
+        log.info(f"Step c: Cleaning up task workspace artifacts for {task_ctx.get_short_id()}")
+        cleanup_task_artifacts(task_ctx)
+        log.info(f"Step c: Artifact cleanup successfully invoked.")
+    except Exception as cleanup_err:
+        log.error(f"Error in Step c (cleanup_task_artifacts): {cleanup_err}", exc_info=True)
 
-    # FIX #2: was markdown-styled failure/cancel text rendered incorrectly in HTML mode.
-    # Markdown ** renders as literal asterisks in HTML-mode messages.
-    final_summary_header = "<b>\u274c Task Failed!</b>" if task_failed else "<b>\U0001f6d1 Task Cancelled by User</b>"
-    # FIX: Escape final_reason to prevent HTML parsing errors
-    safe_reason = escape_html(final_reason)
-    final_summary_text = (
-        f"{final_summary_header}\n"
-        f"Task ID: {task_ctx.get_short_id()}\n"
-        f"Reason: {safe_reason}\n"
-        f"Elapsed: {time_spent}\n"
-    )
-    if report_saved:
-        final_summary_text += "\n\U0001f4dc Report file generated & sent."
-    else:
-        final_summary_text += "\n\u26a0\ufe0f Report file generation failed."
+    # d) Update the Telegram UI to reflect the "Cancelled" state.
+    try:
+        log.info(f"Step d: Sending final status and updating Telegram UI for {task_ctx.get_short_id()}")
+        
+        final_summary_header = "<b>\u274c Task Failed!</b>" if task_failed else "<b>\U0001f6d1 Task Cancelled by User</b>"
+        safe_reason = escape_html(final_reason)
+        final_summary_text = (
+            f"{final_summary_header}\n"
+            f"Task ID: {task_ctx.get_short_id()}\n"
+            f"Reason: {safe_reason}\n"
+            f"Elapsed: {time_spent}\n"
+        )
+        if report_saved:
+            final_summary_text += "\n\U0001f4dc Report file generated & sent."
+        else:
+            final_summary_text += "\n\u26a0\ufe0f Report file generation failed."
 
-    if error_obj.failed_links:
-        final_summary_text += f"\nFailed Downloads: {len(error_obj.failed_links)}"
-    if skipped_links:
-        final_summary_text += f"\nSkipped/Not Attempted: {len(skipped_links)}"
-    if error_obj.failed_links or skipped_links:
-        final_summary_text += "\n(See report file for details)"
+        if error_obj.failed_links:
+            final_summary_text += f"\nFailed Downloads: {len(error_obj.failed_links)}"
+        if skipped_links:
+            final_summary_text += f"\nSkipped/Not Attempted: {len(skipped_links)}"
+        if error_obj.failed_links or skipped_links:
+            final_summary_text += "\n(See report file for details)"
 
-    report_message_id_to_reply = None
-    if OWNER and colab_bot:
-        try:
-            if report_saved and report_file_path and os.path.exists(
-                    report_file_path):
-                log.info(
-                    f"Sending report file {report_file_path} to owner {OWNER}")
-                report_msg = await colab_bot.send_document(
-                    OWNER,
-                    document=report_file_path,
-                    caption=f"Download Report: {mode} - {final_reason}"[:200],
+        report_message_id_to_reply = None
+        if OWNER and colab_bot:
+            try:
+                if report_saved and report_stream:
+                    log.info(f"Sending in-memory report document to owner {OWNER}")
+                    report_msg = await colab_bot.send_document(
+                        OWNER,
+                        document=report_stream,
+                        caption=f"Download Report: {mode} - {final_reason}"[:200],
+                    )
+                    report_message_id_to_reply = report_msg.id
+                else:
+                    log.warning("Report file was not saved/generated, cannot send document.")
+
+                final_markup = InlineKeyboardMarkup(
+                    [[
+                        InlineKeyboardButton("\U0001f4e3 Channel", url="https://t.me/Colab_Leecher"),
+                        InlineKeyboardButton("\U0001f4ac Group", url="https://t.me/Colab_Leecher_Discuss"),
+                    ]]
                 )
-                report_message_id_to_reply = report_msg.id
-                try:
-                    os.remove(report_file_path)
-                except OSError as e:
-                    log.warning(
-                        f"Could not remove report file {report_file_path}: {e}")
-            else:
-                log.warning(
-                    "Report file not saved or found, cannot send document.")
+                status_msg = task_ctx.status_msg
 
-            # FIX #5: unified emoji style with cancelTask keyboard
-            final_markup = InlineKeyboardMarkup(
-                [[
-                    InlineKeyboardButton("\U0001f4e3 Channel", url="https://t.me/Colab_Leecher"),
-                    InlineKeyboardButton("\U0001f4ac Group", url="https://t.me/Colab_Leecher_Discuss"),
-                ]]
-            )
-            status_msg = task_ctx.status_msg
-
-            # Use our new safety paginator to ensure this summary doesn't exceed 4096 chars or break HTML
-            summary_chunks = split_html_message(final_summary_text)
-            
-            for i, chunk in enumerate(summary_chunks):
-                # Only attach markup to the final chunk
-                current_markup = final_markup if i == len(summary_chunks) - 1 else None
+                summary_chunks = split_html_message(final_summary_text)
                 
-                # First chunk replies to the document if available
-                if i == 0:
-                    if report_message_id_to_reply:
-                        await colab_bot.send_message(
-                            OWNER,
-                            chunk,
-                            reply_to_message_id=report_message_id_to_reply,
-                            reply_markup=current_markup,
-                            disable_web_page_preview=True,
-                        )
-                    elif status_msg:
-                        try:
-                            await status_msg.reply_text(
+                for i, chunk in enumerate(summary_chunks):
+                    current_markup = final_markup if i == len(summary_chunks) - 1 else None
+                    
+                    if i == 0:
+                        if report_message_id_to_reply:
+                            await colab_bot.send_message(
+                                OWNER,
                                 chunk,
-                                quote=True,
+                                reply_to_message_id=report_message_id_to_reply,
                                 reply_markup=current_markup,
                                 disable_web_page_preview=True,
                             )
-                        except Exception:
+                        elif status_msg:
+                            try:
+                                await status_msg.reply_text(
+                                    chunk,
+                                    quote=True,
+                                    reply_markup=current_markup,
+                                    disable_web_page_preview=True,
+                                )
+                            except Exception:
+                                await colab_bot.send_message(
+                                    OWNER,
+                                    chunk,
+                                    reply_markup=current_markup,
+                                    disable_web_page_preview=True,
+                                )
+                        else:
                             await colab_bot.send_message(
                                 OWNER,
                                 chunk,
@@ -691,51 +699,71 @@ async def cancelTask(Reason: str, task_ctx: TaskContext = None):
                         await colab_bot.send_message(
                             OWNER,
                             chunk,
-                            reply_markup=current_markup,
                             disable_web_page_preview=True,
+                            reply_markup=current_markup
                         )
-                else:
-                    # Send subsequent chunks as regular follow-ups
-                    await colab_bot.send_message(
-                        OWNER,
-                        chunk,
-                        disable_web_page_preview=True,
-                        reply_markup=current_markup
-                    )
-            log.info("Sent final cancellation/failure message to owner.")
-        except Exception as send_err:
-            log.error(
-                f"Failed send cancellation report/summary message: {send_err}")
+                log.info("Sent final cancellation/failure message to owner.")
+            except Exception as send_err:
+                log.error(f"Failed send cancellation report/summary message: {send_err}")
 
-    status_msg = task_ctx.status_msg
-    if status_msg:
-        try:
-            await status_msg.delete()
-        except Exception as del_err:
-            log.warning(f"Could not delete original status message: {del_err}")
-        finally:
-            task_ctx.status_msg = None
+        # Update and delete existing status message
+        status_msg = task_ctx.status_msg
+        if status_msg:
+            try:
+                # Update text to reflect cancelled state before deleting
+                from .helper import _edit_status_message
+                cancelled_text = (
+                    f"<b>\U0001f6d1 Task Cancelled</b>\n"
+                    f"Task ID: <code>{task_ctx.get_short_id()}</code>\n"
+                    f"Reason: <i>{safe_reason}</i>"
+                )
+                await _edit_status_message(
+                    status_msg, 
+                    cancelled_text, 
+                    reply_markup=None, 
+                    parse_mode=enums.ParseMode.HTML
+                )
+                await asyncio.sleep(1.0)  # Let the user see the "Cancelled" state update briefly
+                await status_msg.delete()
+            except MessageNotModified:
+                log.debug("Status message content not modified, skipping edit during deletion.")
+            except Exception as del_err:
+                log.warning(f"Could not delete/edit original status message: {del_err}")
+            finally:
+                task_ctx.status_msg = None
 
-    from .task_context import TASK_QUEUE
-
-    removed = await TASK_QUEUE.remove_task(task_ctx.task_id)
-    if removed:
-        log.info(
-            f"Task {task_ctx.get_short_id()} removed from TASK_QUEUE. "
-            f"Active tasks: {TASK_QUEUE.get_task_count()}"
-        )
-
-    try:
-        from .task_dashboard import force_update_summary
-        await force_update_summary(colab_bot)
+    except MessageNotModified:
+        log.debug("Step d: UI update triggered MessageNotModified, ignoring.")
     except Exception as e:
-        log.warning(f"Failed to update summary after task removal: {e}")
+        log.error(f"Error in Step d (UI update): {e}")
 
-    # Securely clean up the isolated task workspace artifacts to prevent disk leaks
+    # Free the worker slot & Clean up Dashboard (Final teardown)
     try:
-        cleanup_task_artifacts(task_ctx)
-    except Exception as cleanup_err:
-        log.error(f"Failed to run cleanup_task_artifacts in cancelTask: {cleanup_err}", exc_info=True)
+        log.info(f"Freeing worker slot and queue for task {task_ctx.get_short_id()}")
+        # Release the worker slot
+        await TASK_QUEUE.release_worker_slot(task_ctx.task_id)
+        # Remove from queue
+        removed = await TASK_QUEUE.remove_task(task_ctx.task_id)
+        if removed:
+            log.info(f"Task {task_ctx.get_short_id()} successfully removed from TASK_QUEUE.")
+        
+        # Update dashboard
+        try:
+            from .task_dashboard import force_update_summary
+            await force_update_summary(colab_bot)
+            log.info("Dashboard summary updated.")
+        except Exception as dashboard_err:
+            log.warning(f"Could not update summary dashboard: {dashboard_err}")
+            
+    except Exception as e:
+        log.error(f"Error freeing worker slot/queue for task {task_ctx.get_short_id()}: {e}")
+
+
+async def cancelTask(Reason: str, task_ctx: TaskContext = None):
+    """
+    Backward-compatible wrapper for camelCase compatibility.
+    """
+    return await cancel_task(reason=Reason, task_ctx=task_ctx)
 
 # --- End of cancelTask function ---
 
