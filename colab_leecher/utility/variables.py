@@ -7,6 +7,7 @@
 # Includes TRANSFER instance import/creation
 # Includes the original YTDL class definition
 
+import os as _os
 from time import time
 from datetime import datetime
 # Use try-except for optional type hinting import
@@ -151,7 +152,6 @@ class BotTimes:
 class Paths:
     """Stores relevant file system paths used by the bot."""
     # Auto-detect environment (Windows or Linux/Colab)
-    import os as _os
     # Use dynamic path detection for both Windows and Linux/Colab
     _ROOT_PATH = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
     _BASE_PATH = _os.path.join(_ROOT_PATH, "BOT_WORK")
