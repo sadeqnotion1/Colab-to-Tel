@@ -466,6 +466,7 @@ class TaskContext:
 
     is_cancelled: bool = False
     is_completed: bool = False
+    report_dispatched: bool = False
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
 
     # Strictly isolated containers - initialized during task factory creation

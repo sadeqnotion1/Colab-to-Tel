@@ -1,149 +1,149 @@
-This is a classic "99% refactored" scenario. You’ve successfully moved the bulk of the system to an isolated, async architecture, but the remaining 1% contains critical design flaws that will manifest under load as deadlocks, memory leaks, and zombie processes.
+This is a solid architectural foundation. Moving from global state to `AsyncIO` contexts with strict boundary isolation is notoriously difficult in Python, and you've successfully bypassed the most common pitfalls (like mutable default arguments in dataclasses and shared `TaskQueue` locks).
 
-Here is the final system architecture audit across the 5 requested vectors. **I have found severe vulnerabilities in 4 out of 5 vectors.**
+However, during this audit, I found **three critical execution vulnerabilities** and **one major state leak** that will cause catastrophic failures, deadlocks, or file-lock races in production.
+
+Here is the merciless breakdown of the 5 failure vectors.
 
 ---
 
-### 1. State Leakage: `transfer_state.py` Class Attribute Trap
+### 1. State Leakage: The `BOT` Global Fallback Leak
 
 **Status: VULNERABLE**
-While you successfully isolated the modern context in `task_context.py` using `dataclasses` and `default_factory`, you left behind a massive global state leak in `colab_leecher/utility/transfer_state.py`.
 
-Because you define `sent_file = []` and `successful_downloads = []` directly on the class body without an `__init__`, these are **class-level mutable attributes**. Any legacy fallback code that instances `Transfer()` will share the exact same list across *all concurrent tasks*. Task A will upload files and append to Task B's lists, resulting in mixed Telegram logs and cross-pollinated Google Drive records.
+Despite the extensive work done in `task_context.py` to create a deeply copied, strictly isolated `IsolatedBot`, the archive handlers completely ignore it and explicitly inject the monolithic global `BOT` back into parallel execution.
 
-**The Fix (`colab_leecher/utility/transfer_state.py`):**
+**The Vulnerability:**
+In `colab_leecher/utility/handler.py`, across the `Leech`, `Unzip_Handler`, and `Zip_Handler` definitions, you have this hardcoded fallback:
 
 ```python
-class Transfer:
-    """Holds state related to file transfer progress and results."""
-    def __init__(self):
-        self.reset()  # Force instance-level initialization
-
-    def reset(self):
-        self.down_bytes = 0
-        self.up_bytes = 0
-        self.total_down_size = 0
-        self.sent_file = []
-        self.sent_file_names = []
-        self.successful_downloads = []
+# handler.py (Lines ~33, 424, 572)
+if task_ctx:
+    _bot = BOT  # TaskContext doesn't have bot attribute, use global
 
 ```
 
-### 2. The "Zombie Slot" Trap: Unbounded `finally` Execution
+**Why it fails:** The comment is mathematically false. `TaskContext` *does* have a `.bot` property (defined in `task_context.py` at line 372). By pointing `_bot` to the global `BOT`, if Task A is downloading a Telegram file (requiring `BOT.Options.service_type = 'telegram'`) and Task B is simultaneously unpacking a zip, Task B is reading/mutating Task A's monolithic global state.
 
-**Status: VULNERABLE**
-In `task_manager.py` -> `taskScheduler`, you properly put `await TASK_QUEUE.release_worker_slot(task_id)` inside the `finally` block (Line 344). However, right above it (Lines 329-331), you `await cancelTask(reason_to_report, task_ctx)`.
-
-If Pyrogram hangs during the `cancelTask` API calls (a common issue with Telegram's backend dropping sockets without closing them), `cancelTask` will block *forever*. The execution will never reach line 344, meaning the worker slot is permanently zombified. After `N` hangs, the bot will refuse all new tasks, requiring a hard reboot.
-
-**The Fix (`colab_leecher/utility/task_manager.py` Lines 329-332):**
+**The Fix:**
 
 ```python
-        # 2. Dispatch reports/cancellation UI updates safely if task was cancelled or failed
-        if _task_error.state or task_ctx.is_cancelled:
-            try:
-                log.warning(f"taskScheduler finally: Task {task_id[:8]} is failed/cancelled. Dispatching reports.")
-                # Wrap in wait_for to guarantee it never blocks the slot release
-                await asyncio.wait_for(cancelTask(reason_to_report, task_ctx), timeout=15.0)
-            except Exception as cancel_dispatch_err:
-                log.error(f"taskScheduler finally: Failed to dispatch reports: {cancel_dispatch_err}", exc_info=True)
+# Apply this to Leech, Unzip_Handler, and Zip_Handler in handler.py
+if task_ctx:
+    _bot = task_ctx.bot  # Use the strictly isolated instance
 
 ```
 
-### 3. Throttling Deadlocks: The Lock-Sleep Catastrophe
+### 2. The "Zombie Slot" Trap
 
-**Status: CRITICAL DEADLOCK**
-In `task_dashboard.py` -> `update_summary_dashboard`, you have built a system-killing deadlock. The author left a comment claiming to release the lock before sleeping on a `FloodWait`, but the code absolutely does not do this.
+**Status: CRITICAL VULNERABILITY**
 
-At Line 198, the `except FloodWait` block invokes `await asyncio.sleep(wait_secs)` **while still inside** `async with TASK_QUEUE._summary_lock:`. If Telegram issues a 60-second FloodWait, the lock is held for 60 seconds. Every single parallel worker trying to update its progress will stall indefinitely waiting for `_summary_lock`, freezing all background I/O.
+You have a severe leak in `task_manager.py` that will permanently lock worker slots and bloat the queue until the entire bot requires a hard restart.
 
-**The Fix (`colab_leecher/utility/task_dashboard.py` Lines 198-204):**
+**The Vulnerability:**
+Inside the `taskScheduler` `finally` block, you attempt to dispatch UI updates securely before releasing the slot:
 
 ```python
-                except FloodWait as fw:
-                    wait_secs = fw.value
-                    log.warning(
-                        "FloodWait hit while updating summary dashboard — "
-                        "suspending UI edits for %ds.", wait_secs
-                    )
-                    # Mark the suspension time, but DO NOT sleep here. Return immediately.
-                    # The suspension guard at the top of the function handles the logic.
-                    TASK_QUEUE._ui_suspended_until = time.monotonic() + wait_secs
-                    return TASK_QUEUE.summary_msg
+# task_manager.py (Lines 284-286)
+if _task_error.state or task_ctx.is_cancelled:
+    try:
+        await asyncio.wait_for(cancelTask(reason_to_report, task_ctx), timeout=15.0)
+    except Exception as cancel_dispatch_err:
+        log.error(...)
 
 ```
 
-### 4. Kill Switch Integrity: Looping Ignorance
+**Why it fails:** If a task is forcefully killed, Python injects an `asyncio.CancelledError`. Because `CancelledError` inherits from `BaseException` (not `Exception` in modern Python), if the cancellation hits while inside this `wait_for` dispatch, the exception completely bypasses your `except Exception` block. Execution immediately flies out of the `finally` block, **skipping the worker slot release and queue removal entirely.**
 
-**Status: VULNERABLE**
-You verified `cancel_event.is_set()` nicely in the orchestrator boundaries (`_stage_process`, `_stage_upload`), but deep pipeline loops ignore it.
-
-In `handler.py` -> `Leech()` (Line 84), the code iterates over `items_to_process` (which could be hundreds of files in an unzipped directory). It checks `if _task_error.state:`, but `cancel_task()` relies primarily on `task_ctx.mark_cancelled()`. If a user cancels a task while a 50-file folder is uploading, the loop will happily continue uploading the remaining files because `cancel_event` is never checked inside the iteration.
-
-**The Fix (`colab_leecher/utility/handler.py` Line 84):**
+**The Fix:**
+Catch `BaseException` so the `finally` block guarantees slot release:
 
 ```python
-    for index, item_path in enumerate(items_to_process):
-        current_item_name = ospath.basename(item_path)
-        log.info(f"Leech: Processing item {index + 1}/{total_items_to_process}: {current_item_name}")
-
-        # Check for active cancellation inside the loop
-        if task_ctx and task_ctx.cancel_event.is_set():
-            log.warning(f"Leech: Aborting upload loop. Task actively cancelled.")
-            _task_error.state = True
-            _task_error.text = "Task actively cancelled during upload."
-            break
-
-        if _task_error.state:
-            # ...
+    try:
+        await asyncio.wait_for(cancelTask(reason_to_report, task_ctx), timeout=15.0)
+    except BaseException as cancel_dispatch_err:  # Catches CancelledError safely
+        log.error(f"Failed dispatch: {cancel_dispatch_err}")
 
 ```
 
-### 5. MVC Violation: "Stringly-Typed" State Checking
+### 3. Throttling Deadlocks & API Crashes
 
-**Status: VULNERABLE (Fragile Logic)**
-In `task_dashboard.py` (Lines 185-188), you are determining the task's business state by parsing raw HTML strings injected into `status_head` by `task_manager.py` and `handler.py`:
+**Status: PARTIALLY SECURE, PARTIALLY FATAL**
+
+**The Good:** The debounce logic in `task_dashboard.py` (`force_update_summary`) is architecturally sound. It securely utilizes a `create_background_task` atomic pointer to avoid leaking tasks, successfully filtering 20 completions down to a single UI render.
+
+**The Fatal Flaw:** The `FloodWait` crash vector still exists, but it moved to `handler.py` during mass-cancellations.
 
 ```python
-sh = task_ctx.messages.status_head.lower()
-if any(k in sh for k in ['archiving', 'zipping', 'compressing']):
-    status_label = "Archiving 🗜️"
+# handler.py (Line 635+)
+summary_chunks = split_html_message(final_summary_text)
+for i, chunk in enumerate(summary_chunks):
+    ...
+    await colab_bot.send_message(OWNER, chunk, ...)
 
 ```
 
-This is a severe MVC violation. The View layer (`task_dashboard`) is reverse-engineering application state by substring-matching HTML presentation data. If someone changes the emoji or capitalization in `handler.py`, the dashboard breaks entirely and falls back to displaying "Downloading ⬇️".
+**Why it fails:** If the system attempts a graceful shutdown or a user clicks "Cancel All Tasks", `cancel_task` is fired concurrently for every active worker. If 10 tasks are cancelled, this loop instantaneously blasts 10-20+ synchronous `send_message` requests over the single Pyrogram socket. Telegram will hit you with a massive `FloodWait (429)`, exceptions will be swallowed, and the bot will go dark.
 
-**The Fix:** Add a strict `current_action: str` field to the Model, and read that in the View.
-
-1. In `colab_leecher/utility/task_context.py` (TaskMessages class):
+**The Fix:**
+You already added `await asyncio.sleep(0.5)` in `SendLogs` (Line 847) to prevent this exact issue. You missed it in `cancel_task`. Add it to the chunk iteration in `cancel_task`:
 
 ```python
-@dataclass
-class TaskMessages:
-    download_name: str = ""
-    current_action: str = "downloading" # Model state identifier
-    # ...
+# handler.py (inside cancel_task loop)
+for i, chunk in enumerate(summary_chunks):
+    # ... send_message logic ...
+    await asyncio.sleep(0.5)  # Enforce API rate limits
 
 ```
 
-2. In `colab_leecher/utility/task_dashboard.py` (Line 183):
+### 4. Kill Switch Integrity (The Double-Cancellation Race)
+
+**Status: CRITICAL RACE CONDITION**
+
+Your cancellation flow is currently tearing itself apart because `cancel_task` is acting as both the *trigger* and the *reactor*.
+
+**The Vulnerability:**
+When `cancel_task` in `handler.py` is invoked externally, it does this:
+
+1. Calls `task_ctx.async_task.cancel()` (Injecting a `CancelledError` into the main loop).
+2. Calls `cleanup_task_artifacts(task_ctx)` (Deleting files on disk).
+3. Calls `TASK_QUEUE.release_worker_slot()`.
+
+Meanwhile, the main `taskScheduler` loop receives the `CancelledError`, drops into its `finally` block, and does this:
+
+1. Calls `cancelTask(...)` AGAIN. (Recursive loop)
+2. Calls `cleanup_task_artifacts(task_ctx)` AGAIN.
+3. Calls `TASK_QUEUE.release_worker_slot()` AGAIN.
+
+**Why it fails:** This guarantees a recursive feedback loop, duplicate Telegram notifications, negative worker counts, and severe OS-level file lock crashes because two parallel threads are attempting `shutil.rmtree()` on the exact same directory while Pyrogram is still attempting to close the open file descriptors.
+
+**The Fix:**
+`taskScheduler`'s `finally` block is the *only* place teardown should occur. Strip the manual teardown out of `cancel_task` and let the injected `CancelledError` do the heavy lifting naturally:
 
 ```python
-                is_proc = False
-                status_label = "Downloading ⬇️"
-                
-                # Check the strict model state, not the HTML presentation string
-                current_action = getattr(task_ctx.messages, "current_action", "downloading").lower()
-                
-                if current_action == "archiving":
-                    status_label = "Archiving 🗜️"
-                    is_proc = True
-                elif current_action == "extracting":
-                    status_label = "Extracting 📦"
-                    is_proc = True
+# handler.py - Modify cancel_task
+async def cancel_task(reason: str, task_ctx: TaskContext = None):
+    # Keep Step A and Step B:
+    task_ctx.mark_cancelled()
+    if task_ctx.async_task and not task_ctx.async_task.done():
+        task_ctx.async_task.cancel()
+        
+    # DELETE Step C (cleanup_task_artifacts)
+    # DELETE Step D (Telegram UI Updates) 
+    # DELETE final worker slot release logic
+    # The taskScheduler's finally block will handle all of this gracefully and linearly as it unwinds.
 
 ```
 
-### Audit Conclusion
+### 5. MVC Violation (Data Model Purity)
 
-The architectural isolation (`TaskContext`) is fundamentally sound, but the execution boundary lacks defensive programming against Telegram's unpredictable network stack. Apply the `wait_for` on your cancellations, rip the `sleep` out of your dashboard lock, fix the iteration loops, and the bot will survive production workloads safely.
+**Status: AIRTIGHT**
+
+I reviewed `TaskTransfer` (in `task_context.py`), `ProgressDispatcher`, and `StatusDisplay`. You have successfully stripped UI formatting out of the data layer.
+
+* `TaskTransfer` operates strictly on integers, floats, and pure mathematics (`get_percentage()`, `get_eta()`).
+* The `ProgressDispatcher` cleanly bridges the raw model floats into the stateless `StatusDisplay` views without cross-contamination.
+* **Result:** No strings attached. This subsystem passes the audit with flying colors.
+
+### Final Verdict
+
+The MVC data structures and asynchronous dashboards are brilliantly designed. Apply the four minimal patches above to secure your slot closures and stop the double-cancellation file-lock races, and this system is ready for production.

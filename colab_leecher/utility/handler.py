@@ -36,12 +36,12 @@ async def Leech(path: str, remove_source: bool, task_ctx: TaskContext = None):
     # globals
     if task_ctx:
         from .. import colab_bot
-        _bot = BOT  # TaskContext doesn't have bot attribute, use global
+        _bot = task_ctx.bot  # ✅ Use strictly isolated bot instance
         _paths = task_ctx.paths  # Use task-specific paths (temp_zip, etc.)
         _messages = task_ctx.messages
         _task_error = task_ctx.error  # Use task_ctx.error, not task_ctx.task_error
         _transfer = task_ctx.transfer
-        _msg = MSG  # TaskContext doesn't have msg attribute, use global
+        _msg = task_ctx.msg  # ✅ Use strictly isolated msg instance
         log.info(f"Leech using TaskContext for task_id: {task_ctx.task_id}")
     else:
         _bot = BOT
@@ -297,12 +297,12 @@ async def Unzip_Handler(
     # Multi-task support: Use task_ctx if provided, otherwise fallback to
     # globals
     if task_ctx:
-        _bot = BOT  # TaskContext doesn't have bot attribute, use global
+        _bot = task_ctx.bot  # ✅ Use strictly isolated bot instance
         _paths = task_ctx.paths  # Use task-specific paths
         _messages = task_ctx.messages
         _task_error = task_ctx.error  # Use task_ctx.error, not task_ctx.task_error
         _transfer = task_ctx.transfer
-        _msg = MSG  # TaskContext doesn't have msg attribute, use global
+        _msg = task_ctx.msg  # ✅ Use strictly isolated msg instance
         log.info(
             f"Unzip_Handler using TaskContext for task_id: {task_ctx.task_id}")
     else:
@@ -516,16 +516,18 @@ async def cancel_task(reason: str, task_ctx: TaskContext = None):
         ):
             log.info(f"Step b: Actively interrupting async task for {task_ctx.get_short_id()}")
             task_ctx.async_task.cancel()
-            # Wait up to 2 seconds for clean socket teardown/graceful abort in target task
-            wait_time = 0.0
-            while not task_ctx.async_task.done() and wait_time < 2.0:
-                await asyncio.sleep(0.1)
-                wait_time += 0.1
-            log.info(f"Step b: Async task cancellation completed. (done={task_ctx.async_task.done()})")
+            log.info(f"Step b: Active task cancellation requested. Short-circuiting cancel_task, deferred to taskScheduler finally block.")
+            return  # ✅ Return immediately to avoid duplicate notifications and let taskScheduler finally block run.
         else:
             log.info("Step b: No active running async task to cancel (or self-cancel skipped).")
     except Exception as e:
         log.error(f"Error in Step b (async_task.cancel): {e}")
+
+    # Prevent duplicate report generation & UI updates
+    if task_ctx.report_dispatched:
+        log.info(f"cancel_task: Report/UI updates already dispatched for task {task_ctx.get_short_id()}. Skipping duplicate.")
+        return
+    task_ctx.report_dispatched = True
 
     # --- Pre-generate Report (In-Memory to bypass disk locks & work_path wipe) ---
     report_stream = None
@@ -612,13 +614,8 @@ async def cancel_task(reason: str, task_ctx: TaskContext = None):
     except Exception as report_err:
         log.error(f"Failed to generate in-memory download report: {report_err}")
 
-    # c) Invoke the artifact cleanup routine (wiping the isolated work_path).
-    try:
-        log.info(f"Step c: Cleaning up task workspace artifacts for {task_ctx.get_short_id()}")
-        cleanup_task_artifacts(task_ctx)
-        log.info(f"Step c: Artifact cleanup successfully invoked.")
-    except Exception as cleanup_err:
-        log.error(f"Error in Step c (cleanup_task_artifacts): {cleanup_err}", exc_info=True)
+    # c) Step c: Workspace cleanup is handled exclusively by taskScheduler's finally block to prevent file-lock races.
+    log.info(f"Step c: Skipping direct artifact cleanup in cancel_task, deferred to taskScheduler finally block.")
 
     # d) Update the Telegram UI to reflect the "Cancelled" state.
     try:
@@ -709,6 +706,7 @@ async def cancel_task(reason: str, task_ctx: TaskContext = None):
                             disable_web_page_preview=True,
                             reply_markup=current_markup
                         )
+                    await asyncio.sleep(0.5)  # Enforce API rate limits
                 log.info("Sent final cancellation/failure message to owner.")
             except Exception as send_err:
                 log.error(f"Failed send cancellation report/summary message: {send_err}")
@@ -744,26 +742,8 @@ async def cancel_task(reason: str, task_ctx: TaskContext = None):
     except Exception as e:
         log.error(f"Error in Step d (UI update): {e}")
 
-    # Free the worker slot & Clean up Dashboard (Final teardown)
-    try:
-        log.info(f"Freeing worker slot and queue for task {task_ctx.get_short_id()}")
-        # Release the worker slot
-        await TASK_QUEUE.release_worker_slot(task_ctx.task_id)
-        # Remove from queue
-        removed = await TASK_QUEUE.remove_task(task_ctx.task_id)
-        if removed:
-            log.info(f"Task {task_ctx.get_short_id()} successfully removed from TASK_QUEUE.")
-        
-        # Update dashboard
-        try:
-            from .task_dashboard import force_update_summary
-            await force_update_summary(colab_bot)
-            log.info("Dashboard summary updated.")
-        except Exception as dashboard_err:
-            log.warning(f"Could not update summary dashboard: {dashboard_err}")
-            
-    except Exception as e:
-        log.error(f"Error freeing worker slot/queue for task {task_ctx.get_short_id()}: {e}")
+    # Teardown logic (slot release, queue removal, dashboard update) is handled exclusively by taskScheduler's finally block to prevent negative worker counts.
+    log.info(f"Teardown: Skipping slot release and queue removal in cancel_task, deferred to taskScheduler finally block.")
 
 
 async def cancelTask(Reason: str, task_ctx: TaskContext = None):
@@ -797,12 +777,12 @@ async def Zip_Handler(
     # Multi-task support: Use task_ctx if provided, otherwise fallback to
     # globals
     if task_ctx:
-        _bot = BOT  # TaskContext doesn't have bot attribute, use global
+        _bot = task_ctx.bot  # ✅ Use strictly isolated bot instance
         _paths = task_ctx.paths  # ✅ Use task-specific paths
         _messages = task_ctx.messages
         _task_error = task_ctx.error  # Use task_ctx.error, not task_ctx.task_error
         _transfer = task_ctx.transfer
-        _msg = MSG  # TaskContext doesn't have msg attribute, use global
+        _msg = task_ctx.msg  # ✅ Use strictly isolated msg instance
         log.info(
             f"Zip_Handler using TaskContext for task_id: {task_ctx.task_id}")
     else:

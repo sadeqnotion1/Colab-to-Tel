@@ -527,7 +527,7 @@ async def taskScheduler(task_ctx: TaskContext):
                 reason_to_report = _task_error.text or "Task stopped unexpectedly."
                 # Wrap in wait_for to guarantee it never blocks the slot release
                 await asyncio.wait_for(cancelTask(reason_to_report, task_ctx), timeout=15.0)
-            except Exception as cancel_dispatch_err:
+            except BaseException as cancel_dispatch_err:
                 log.error(f"taskScheduler finally: Failed to dispatch reports via cancelTask: {cancel_dispatch_err}", exc_info=True)
 
         # 3. Clean up isolated task workspace artifacts to prevent disk leaks
