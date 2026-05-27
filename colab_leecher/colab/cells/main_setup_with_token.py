@@ -77,11 +77,10 @@ def keep_alive(url):
 
 def Loading():
     white = 37
-    black = 0
     while Working:
-        print("\r" + "▓"*white + "▒▓"+ "▒"*black + "▒▓" + "▓"*white, end="")
-        black = (black + 2) % 75
-        white = (white -1) if white != 0 else 37
+        black = 74 - 2 * white
+        print("\r" + "\u2593"*white + "\u2592\u2593" + "\u2592"*black + "\u2592\u2593" + "\u2593"*white, end="", flush=True)
+        white = (white - 1) if white != 0 else 37
         time.sleep(0.5)
     # Only clear if everything is fine, otherwise keep logs for debugging
     if setup_ok:

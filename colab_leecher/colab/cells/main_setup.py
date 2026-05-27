@@ -44,8 +44,12 @@ banner = '''/* ... Banner ... */''' # Banner text omitted for brevity
 print(banner)
 
 def Loading():
-    spinner = ['/', '-', '\\', '|']; i = 0
-    while Working: print("\r" + f"Preparing Environment... {spinner[i % len(spinner)]}", end=""); i += 1; time.sleep(0.2)
+    white = 37
+    while Working:
+        black = 74 - 2 * white
+        print("\r" + "\u2593"*white + "\u2592\u2593" + "\u2592"*black + "\u2592\u2593" + "\u2593"*white, end="", flush=True)
+        white = (white - 1) if white != 0 else 37
+        time.sleep(0.5)
     if setup_ok:
         clear_output()
     else:
