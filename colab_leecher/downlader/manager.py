@@ -460,7 +460,9 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
                       link_success = await aria2_Download(link, i + 1, intended_filename, task_ctx)
                  else:
                       filename_hint = _messages.download_name if _messages.download_name else None
-                      link_success = await aria2_Download(link, i + 1, filename_hint, task_ctx)
+                      sc_headers = getattr(task_ctx, 'session_capture_headers', None) if task_ctx else None
+                      sc_cookies = getattr(task_ctx, 'session_capture_cookies', None) if task_ctx else None
+                      link_success = await aria2_Download(link, i + 1, filename_hint, task_ctx, headers=sc_headers, cookies=sc_cookies)
              except Exception as Error:
                   log.error(f"Auto-detect Error (Link {i+1}): {Error}", exc_info=True)
                   link_success = False

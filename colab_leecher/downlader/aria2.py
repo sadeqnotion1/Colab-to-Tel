@@ -195,7 +195,7 @@ async def on_output(output: str, current_filename: str, task_ctx=None):
              log.error(f"No valid progress info received for ~270s. Assuming dead link for: {current_filename}")
 
 # ----- END OF FUNCTION -----
-async def aria2_Download(link: str, num: int, pre_determined_name: str = None, task_ctx = None) -> bool:
+async def aria2_Download(link: str, num: int, pre_determined_name: str = None, task_ctx = None, headers: dict = None, cookies: dict = None) -> bool:
     # Ensure necessary globals are accessible
     global BotTimes, Messages, TaskError, TRANSFER, Aria2c, Paths, log, clean_filename, apply_dot_style, on_output, is_google_drive, is_mega # Removed unnecessary urlparse, urllib, os here as they are imported
 
@@ -293,17 +293,42 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
     except Exception:
         referer = link
 
+    # Dynamic headers & cookies setup
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    referer_val = referer
+    custom_headers = []
+
+    if headers:
+        for k, v in headers.items():
+            k_lower = k.lower()
+            if k_lower == 'user-agent':
+                user_agent = v
+            elif k_lower == 'referer':
+                referer_val = v
+            elif k_lower == 'cookie':
+                # Handled via cookies dict/header separately
+                custom_headers.append((k, v))
+            else:
+                custom_headers.append((k, v))
+
+    if cookies:
+        cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
+        custom_headers.append(("Cookie", cookie_str))
+
     command = [
         "aria2c", "-x16", "--seed-time=0", "--summary-interval=1", "--max-tries=3",
         "--console-log-level=warn", "--file-allocation=none",
         "--content-disposition=false",
-        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "--user-agent", user_agent,
         "--header", "Accept: */*",
         "--header", "Accept-Language: en-US,en;q=0.9",
         "--header", "Accept-Encoding: gzip, deflate, br",
-        "--header", f"Referer: {referer}",
+        "--header", f"Referer: {referer_val}",
         "-d", _paths.down_path
     ]
+
+    for hk, hv in custom_headers:
+        command.extend(["--header", f"{hk}: {hv}"])
 
     # Add Cloudflare cookie and headers for NZBCloud downloads (Aria2c)
     if 'nzbcloud.com' in link.lower():

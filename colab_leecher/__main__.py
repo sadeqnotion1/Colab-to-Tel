@@ -1796,6 +1796,61 @@ async def handle_reply(client: Client, message: Message):
             # No need to log if the reply wasn't for our prompt anyway
 
 
+def parse_session_capture_gist(lines: list[str]) -> dict:
+    """
+    Parses a session capture gist and extracts:
+    - url: The target download URL
+    - headers: Dict of headers (User-Agent, Referer, etc.)
+    - cookies: Dict of cookies
+    - title: Optional title / filename
+    """
+    result = {
+        "url": None,
+        "headers": {},
+        "cookies": {},
+        "title": None
+    }
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        if line.upper().startswith("TITLE="):
+            result["title"] = line.split("=", 1)[1].strip()
+        elif line.upper().startswith("DOWNLOAD_TYPE="):
+            pass
+        elif line.upper().startswith("URL="):
+            result["url"] = line.split("=", 1)[1].strip()
+        elif line.upper().startswith("COOKIE="):
+            cookie_str = line.split("=", 1)[1].strip()
+            for item in cookie_str.split(";"):
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    result["cookies"][k.strip()] = v.strip()
+        elif line.upper().startswith("USER_AGENT="):
+            result["headers"]["User-Agent"] = line.split("=", 1)[1].strip()
+        elif line.upper().startswith("REFERER="):
+            result["headers"]["Referer"] = line.split("=", 1)[1].strip()
+        elif line.upper().startswith("HEADER="):
+            header_line = line.split("=", 1)[1].strip()
+            if ":" in header_line:
+                k, v = header_line.split(":", 1)
+                result["headers"][k.strip()] = v.strip()
+            elif "=" in header_line:
+                k, v = header_line.split("=", 1)
+                result["headers"][k.strip()] = v.strip()
+                
+    if not result["url"]:
+        for line in lines:
+            line_strip = line.strip()
+            if line_strip.lower().startswith(("http://", "https://")) and not any(line_strip.upper().startswith(prefix) for prefix in ["TITLE=", "DOWNLOAD_TYPE=", "URL=", "COOKIE=", "USER_AGENT=", "REFERER=", "HEADER="]):
+                result["url"] = line_strip
+                break
+                
+    return result
+
+
 async def fetch_and_parse_links(url: str) -> list[str] | None:
     """
     Fetches content from supported raw text URLs (Pastebin, Gist, Rentry)
@@ -1996,11 +2051,39 @@ async def handle_url(client: Client, message: Message):
                 log.warning(f"Failed to delete prompt message for task {task_ctx.get_short_id()}: {e}")
 
         try:
-            # Parse URLs from message
             input_text = message.text.strip() if message.text else ""
             if not input_text:
                 await message.reply_text("❌ Input cannot be empty.")
                 return
+
+            # Check if input is a Gist and if it contains session capture metadata
+            if any(x in input_text for x in ['gist.github', 'pastebin.com', 'rentry.co']):
+                try:
+                    gist_lines = await fetch_filenames_from_url(input_text)
+                    if gist_lines:
+                        is_session_capture = False
+                        for line in gist_lines[:5]:
+                            line_upper = line.strip().upper()
+                            if "DOWNLOAD_TYPE=SESSION-CAPTURE" in line_upper or "DOWNLOAD_TYPE=SESSION_CAPTURE" in line_upper or line_upper.startswith("URL="):
+                                is_session_capture = True
+                                break
+                        
+                        if is_session_capture:
+                            log.info(f"Session capture Gist detected for pending task {task_ctx.get_short_id()}")
+                            parsed_session = parse_session_capture_gist(gist_lines)
+                            target_url = parsed_session.get("url")
+                            if target_url:
+                                task_ctx.service_type = "direct"
+                                task_ctx.source_urls = [target_url]
+                                task_ctx.session_capture_headers = parsed_session.get("headers", {})
+                                task_ctx.session_capture_cookies = parsed_session.get("cookies", {})
+                                title = parsed_session.get("title")
+                                if title:
+                                    task_ctx.filenames = [title]
+                                input_text = target_url  # Replace input_text with parsed direct URL so downstream uses it!
+                                log.info(f"Successfully processed session capture for pending task. Target URL: {target_url[:100]}...")
+                except Exception as detect_err:
+                    log.error(f"Error checking session capture for pending task Gist: {detect_err}")
 
             # === NEW: Check if input is a gist/pastebin with multiple links ===
             parsed_links = None
@@ -2143,6 +2226,76 @@ async def handle_url(client: Client, message: Message):
                             user_tasks[user_id] = task_ctx
                         # Re-call handle_url which will now catch the task_ctx at the top
                         return await handle_url(client, message)
+
+                    # Detection 3: Session Capture (DOWNLOAD_TYPE=SESSION-CAPTURE)
+                    is_session_capture = False
+                    for line in gist_lines[:5]:
+                        line_upper = line.strip().upper()
+                        if "DOWNLOAD_TYPE=SESSION-CAPTURE" in line_upper or "DOWNLOAD_TYPE=SESSION_CAPTURE" in line_upper:
+                            is_session_capture = True
+                            break
+                        if line_upper.startswith("URL="):
+                            is_session_capture = True
+                            break
+
+                    if is_session_capture:
+                        log.info(f"Auto-detected Session-Capture mode for gist: {input_text}")
+                        parsed_session = parse_session_capture_gist(gist_lines)
+                        target_url = parsed_session.get("url")
+                        
+                        if not target_url:
+                            log.error("Session capture Gist did not contain a valid download URL.")
+                            await message.reply_text("❌ Error: Gist does not contain a valid URL= link.")
+                            return
+                            
+                        # Setup task context
+                        task_ctx = create_task_context(user_id, message.chat.id, mode="leech")
+                        task_ctx.service_type = "direct"
+                        task_ctx.source_urls = [target_url]
+                        task_ctx.session_capture_headers = parsed_session.get("headers", {})
+                        task_ctx.session_capture_cookies = parsed_session.get("cookies", {})
+                        
+                        title = parsed_session.get("title")
+                        if title:
+                            task_ctx.filenames = [title]
+                            
+                        # Delete the source prompt message (if any)
+                        await _clear_source_waiting(client, user_id)
+                        
+                        # Send initial status message
+                        processing_msg = await message.reply_text(
+                            "<b>Processing Session-Captured Request...</b>\n\n"
+                            f"<b>Task ID:</b> <code>{task_ctx.get_short_id()}</code>\n"
+                            "<b>Mode:</b> Leech (Telegram Upload)\n\n"
+                            "<i>Authentication credentials loaded successfully! Starting download...</i>",
+                            parse_mode=enums.ParseMode.HTML,
+                        )
+                        task_ctx.status_msg = processing_msg
+                        
+                        # Initialize isolated configuration
+                        _prepare_task_context(
+                            task_ctx=task_ctx,
+                            source_links=[target_url],
+                            filenames=task_ctx.filenames,
+                            custom_name=title if title else (BOT.Options.custom_name if hasattr(BOT.Options, 'custom_name') else ''),
+                            zip_pswd=BOT.Options.zip_pswd if hasattr(BOT.Options, 'zip_pswd') else '',
+                            unzip_pswd=BOT.Options.unzip_pswd if hasattr(BOT.Options, 'unzip_pswd') else '',
+                            archive_format=BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else '7z',
+                        )
+                        
+                        task_ctx.bot.Options.service_type = "direct"
+                        if title:
+                            task_ctx.bot.Options.filenames = [title]
+                        
+                        # Launch task in background
+                        async_task = TASK_QUEUE.create_background_task(
+                            run_parallel_task(client, message, task_ctx),
+                            name=f"task-{task_ctx.get_short_id()}"
+                        )
+                        task_ctx.async_task = async_task
+                        _attach_task_exception_handler(async_task, task_ctx)
+                        
+                        raise ContinuePropagation
             except ContinuePropagation:
                 raise
             except Exception as e:

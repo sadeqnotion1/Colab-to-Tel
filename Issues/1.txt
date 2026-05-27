@@ -1,149 +1,199 @@
-This is a solid architectural foundation. Moving from global state to `AsyncIO` contexts with strict boundary isolation is notoriously difficult in Python, and you've successfully bypassed the most common pitfalls (like mutable default arguments in dataclasses and shared `TaskQueue` locks).
+2026-05-27 11:13:06,847 - INFO - ======================================================================
+INFO:ColabLeecherSetup:======================================================================
+2026-05-27 11:13:06,850 - INFO - STARTING BOT...
+INFO:ColabLeecherSetup:STARTING BOT...
+2026-05-27 11:13:06,853 - INFO - ======================================================================
+INFO:ColabLeecherSetup:======================================================================
+2026-05-27 11:13:06,858 - INFO - Changed directory to /content/Colab-to-Tel
+INFO:ColabLeecherSetup:Changed directory to /content/Colab-to-Tel
+2026-05-27 11:13:06,861 - INFO - Executing: python3 -m colab_leecher
+INFO:ColabLeecherSetup:Executing: python3 -m colab_leecher
+2026-05-27 11:13:06,863 - INFO - ======================================================================
 
-However, during this audit, I found **three critical execution vulnerabilities** and **one major state leak** that will cause catastrophic failures, deadlocks, or file-lock races in production.
+INFO:ColabLeecherSetup:======================================================================
 
-Here is the merciless breakdown of the 5 failure vectors.
+/content/Colab-to-Tel
+/usr/local/lib/python3.12/dist-packages/moviepy/config_defaults.py:47: SyntaxWarning: invalid escape sequence '\P'
+  IMAGEMAGICK_BINARY = r"C:\Program Files\ImageMagick-6.8.8-Q16\magick.exe"
+/usr/local/lib/python3.12/dist-packages/moviepy/video/io/ffmpeg_reader.py:294: SyntaxWarning: invalid escape sequence '\d'
+  lines_video = [l for l in lines if ' Video: ' in l and re.search('\d+x\d+', l)]
+/usr/local/lib/python3.12/dist-packages/moviepy/video/io/ffmpeg_reader.py:367: SyntaxWarning: invalid escape sequence '\d'
+  rotation_lines = [l for l in lines if 'rotate          :' in l and re.search('\d+$', l)]
+/usr/local/lib/python3.12/dist-packages/moviepy/video/io/ffmpeg_reader.py:370: SyntaxWarning: invalid escape sequence '\d'
+  match = re.search('\d+$', rotation_line)
+2026-05-27 11:13:10,270 - py.warnings - WARNING - /usr/local/lib/python3.12/dist-packages/moviepy/video/io/sliders.py:61: SyntaxWarning: "is" with 'str' literal. Did you mean "=="?
+  if event.key is 'enter':
 
----
-
-### 1. State Leakage: The `BOT` Global Fallback Leak
-
-**Status: VULNERABLE**
-
-Despite the extensive work done in `task_context.py` to create a deeply copied, strictly isolated `IsolatedBot`, the archive handlers completely ignore it and explicitly inject the monolithic global `BOT` back into parallel execution.
-
-**The Vulnerability:**
-In `colab_leecher/utility/handler.py`, across the `Leech`, `Unzip_Handler`, and `Zip_Handler` definitions, you have this hardcoded fallback:
-
-```python
-# handler.py (Lines ~33, 424, 572)
-if task_ctx:
-    _bot = BOT  # TaskContext doesn't have bot attribute, use global
-
-```
-
-**Why it fails:** The comment is mathematically false. `TaskContext` *does* have a `.bot` property (defined in `task_context.py` at line 372). By pointing `_bot` to the global `BOT`, if Task A is downloading a Telegram file (requiring `BOT.Options.service_type = 'telegram'`) and Task B is simultaneously unpacking a zip, Task B is reading/mutating Task A's monolithic global state.
-
-**The Fix:**
-
-```python
-# Apply this to Leech, Unzip_Handler, and Zip_Handler in handler.py
-if task_ctx:
-    _bot = task_ctx.bot  # Use the strictly isolated instance
-
-```
-
-### 2. The "Zombie Slot" Trap
-
-**Status: CRITICAL VULNERABILITY**
-
-You have a severe leak in `task_manager.py` that will permanently lock worker slots and bloat the queue until the entire bot requires a hard restart.
-
-**The Vulnerability:**
-Inside the `taskScheduler` `finally` block, you attempt to dispatch UI updates securely before releasing the slot:
-
-```python
-# task_manager.py (Lines 284-286)
-if _task_error.state or task_ctx.is_cancelled:
-    try:
-        await asyncio.wait_for(cancelTask(reason_to_report, task_ctx), timeout=15.0)
-    except Exception as cancel_dispatch_err:
-        log.error(...)
-
-```
-
-**Why it fails:** If a task is forcefully killed, Python injects an `asyncio.CancelledError`. Because `CancelledError` inherits from `BaseException` (not `Exception` in modern Python), if the cancellation hits while inside this `wait_for` dispatch, the exception completely bypasses your `except Exception` block. Execution immediately flies out of the `finally` block, **skipping the worker slot release and queue removal entirely.**
-
-**The Fix:**
-Catch `BaseException` so the `finally` block guarantees slot release:
-
-```python
-    try:
-        await asyncio.wait_for(cancelTask(reason_to_report, task_ctx), timeout=15.0)
-    except BaseException as cancel_dispatch_err:  # Catches CancelledError safely
-        log.error(f"Failed dispatch: {cancel_dispatch_err}")
-
-```
-
-### 3. Throttling Deadlocks & API Crashes
-
-**Status: PARTIALLY SECURE, PARTIALLY FATAL**
-
-**The Good:** The debounce logic in `task_dashboard.py` (`force_update_summary`) is architecturally sound. It securely utilizes a `create_background_task` atomic pointer to avoid leaking tasks, successfully filtering 20 completions down to a single UI render.
-
-**The Fatal Flaw:** The `FloodWait` crash vector still exists, but it moved to `handler.py` during mass-cancellations.
-
-```python
-# handler.py (Line 635+)
-summary_chunks = split_html_message(final_summary_text)
-for i, chunk in enumerate(summary_chunks):
-    ...
-    await colab_bot.send_message(OWNER, chunk, ...)
-
-```
-
-**Why it fails:** If the system attempts a graceful shutdown or a user clicks "Cancel All Tasks", `cancel_task` is fired concurrently for every active worker. If 10 tasks are cancelled, this loop instantaneously blasts 10-20+ synchronous `send_message` requests over the single Pyrogram socket. Telegram will hit you with a massive `FloodWait (429)`, exceptions will be swallowed, and the bot will go dark.
-
-**The Fix:**
-You already added `await asyncio.sleep(0.5)` in `SendLogs` (Line 847) to prevent this exact issue. You missed it in `cancel_task`. Add it to the chunk iteration in `cancel_task`:
-
-```python
-# handler.py (inside cancel_task loop)
-for i, chunk in enumerate(summary_chunks):
-    # ... send_message logic ...
-    await asyncio.sleep(0.5)  # Enforce API rate limits
-
-```
-
-### 4. Kill Switch Integrity (The Double-Cancellation Race)
-
-**Status: CRITICAL RACE CONDITION**
-
-Your cancellation flow is currently tearing itself apart because `cancel_task` is acting as both the *trigger* and the *reactor*.
-
-**The Vulnerability:**
-When `cancel_task` in `handler.py` is invoked externally, it does this:
-
-1. Calls `task_ctx.async_task.cancel()` (Injecting a `CancelledError` into the main loop).
-2. Calls `cleanup_task_artifacts(task_ctx)` (Deleting files on disk).
-3. Calls `TASK_QUEUE.release_worker_slot()`.
-
-Meanwhile, the main `taskScheduler` loop receives the `CancelledError`, drops into its `finally` block, and does this:
-
-1. Calls `cancelTask(...)` AGAIN. (Recursive loop)
-2. Calls `cleanup_task_artifacts(task_ctx)` AGAIN.
-3. Calls `TASK_QUEUE.release_worker_slot()` AGAIN.
-
-**Why it fails:** This guarantees a recursive feedback loop, duplicate Telegram notifications, negative worker counts, and severe OS-level file lock crashes because two parallel threads are attempting `shutil.rmtree()` on the exact same directory while Pyrogram is still attempting to close the open file descriptors.
-
-**The Fix:**
-`taskScheduler`'s `finally` block is the *only* place teardown should occur. Strip the manual teardown out of `cancel_task` and let the injected `CancelledError` do the heavy lifting naturally:
-
-```python
-# handler.py - Modify cancel_task
-async def cancel_task(reason: str, task_ctx: TaskContext = None):
-    # Keep Step A and Step B:
-    task_ctx.mark_cancelled()
-    if task_ctx.async_task and not task_ctx.async_task.done():
-        task_ctx.async_task.cancel()
-        
-    # DELETE Step C (cleanup_task_artifacts)
-    # DELETE Step D (Telegram UI Updates) 
-    # DELETE final worker slot release logic
-    # The taskScheduler's finally block will handle all of this gracefully and linearly as it unwinds.
-
-```
-
-### 5. MVC Violation (Data Model Purity)
-
-**Status: AIRTIGHT**
-
-I reviewed `TaskTransfer` (in `task_context.py`), `ProgressDispatcher`, and `StatusDisplay`. You have successfully stripped UI formatting out of the data layer.
-
-* `TaskTransfer` operates strictly on integers, floats, and pure mathematics (`get_percentage()`, `get_eta()`).
-* The `ProgressDispatcher` cleanly bridges the raw model floats into the stateless `StatusDisplay` views without cross-contamination.
-* **Result:** No strings attached. This subsystem passes the audit with flying colors.
-
-### Final Verdict
-
-The MVC data structures and asynchronous dashboards are brilliantly designed. Apply the four minimal patches above to secure your slot closures and stop the double-cancellation file-lock races, and this system is ready for production.
+error: XDG_RUNTIME_DIR not set in the environment.
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5178:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5178:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1334:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5178:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5701:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2664:(snd_pcm_open_noupdate) Unknown PCM default
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5178:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5178:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1334:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5178:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5701:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2664:(snd_pcm_open_noupdate) Unknown PCM default
+2026-05-27 11:13:12,565 - colab_leecher.utility.task_manager - INFO - Loaded 9 thumbnail URLs from /content/Colab-to-Tel/colab_leecher/utility/thumbnail_urls.txt
+2026-05-27 11:13:12,567 - colab_leecher - INFO - uvloop installed.
+2026-05-27 11:13:12,573 - colab_leecher - INFO - Pyrogram client initialized.
+2026-05-27 11:13:12,603 - __main__ - INFO - --> MERGED V1: colab_bot instance used in __main__.py: ID = 136396639386080
+2026-05-27 11:13:12,606 - __main__ - INFO - Colab Leecher Script Starting as main...
+2026-05-27 11:13:12,606 - __main__ - INFO - colab_bot instance found, attempting run()...
+2026-05-27 11:13:12,617 - colab_leecher.utility.sabnzbd_autodetect - INFO - Auto-detecting SABnzbd...
+2026-05-27 11:13:12,626 - colab_leecher.utility.sabnzbd_autodetect - INFO - SABnzbd not detected
+2026-05-27 11:13:12,627 - __main__ - INFO - SABnzbd not detected - will use custom NNTP downloader
+2026-05-27 11:13:13,703 - pyrogram.session.auth - INFO - Start creating a new auth key on DC2
+2026-05-27 11:13:13,703 - pyrogram.connection.connection - INFO - Connecting...
+2026-05-27 11:13:13,866 - pyrogram.connection.connection - INFO - Connected! Production DC2 - IPv4
+2026-05-27 11:13:15,326 - pyrogram.session.auth - INFO - Done auth key exchange: DhGenOk
+2026-05-27 11:13:15,326 - pyrogram.connection.connection - INFO - Disconnected
+2026-05-27 11:13:15,537 - pyrogram.connection.connection - INFO - Connecting...
+2026-05-27 11:13:15,697 - pyrogram.connection.connection - INFO - Connected! Production DC2 - IPv4
+2026-05-27 11:13:15,698 - pyrogram.session.session - INFO - NetworkTask started
+2026-05-27 11:13:16,299 - pyrogram.session.session - INFO - Session initialized: Layer 220
+2026-05-27 11:13:16,299 - pyrogram.session.session - INFO - Device: CPython 3.12.13 - Pyrogram 2.3.69
+2026-05-27 11:13:16,299 - pyrogram.session.session - INFO - System: Linux 6.6.122+ (en)
+2026-05-27 11:13:16,299 - pyrogram.session.session - INFO - Session started
+2026-05-27 11:13:16,336 - pyrogram.session.session - INFO - PingTask started
+2026-05-27 11:13:16,506 - pyrogram.session.session - INFO - PingTask stopped
+2026-05-27 11:13:16,506 - pyrogram.session.session - INFO - NetworkTask stopped
+2026-05-27 11:13:16,506 - pyrogram.connection.connection - INFO - Disconnected
+2026-05-27 11:13:16,506 - pyrogram.session.session - INFO - Session stopped
+2026-05-27 11:13:16,619 - pyrogram.session.auth - INFO - Start creating a new auth key on DC4
+2026-05-27 11:13:16,619 - pyrogram.connection.connection - INFO - Connecting...
+2026-05-27 11:13:16,781 - pyrogram.connection.connection - INFO - Connected! Production DC4 - IPv4
+2026-05-27 11:13:18,250 - pyrogram.session.auth - INFO - Done auth key exchange: DhGenOk
+2026-05-27 11:13:18,251 - pyrogram.connection.connection - INFO - Disconnected
+2026-05-27 11:13:18,397 - pyrogram.connection.connection - INFO - Connecting...
+2026-05-27 11:13:18,561 - pyrogram.connection.connection - INFO - Connected! Production DC4 - IPv4
+2026-05-27 11:13:18,562 - pyrogram.session.session - INFO - NetworkTask started
+2026-05-27 11:13:19,103 - pyrogram.session.session - INFO - Session initialized: Layer 220
+2026-05-27 11:13:19,103 - pyrogram.session.session - INFO - Device: CPython 3.12.13 - Pyrogram 2.3.69
+2026-05-27 11:13:19,103 - pyrogram.session.session - INFO - System: Linux 6.6.122+ (en)
+2026-05-27 11:13:19,104 - pyrogram.session.session - INFO - Session started
+2026-05-27 11:13:19,104 - pyrogram.session.session - INFO - PingTask started
+2026-05-27 11:13:19,828 - pyrogram.dispatcher - INFO - Started 16 HandlerTasks
+2026-05-27 11:13:31,625 - __main__ - INFO - Asking user 121110934 to select mode for raw link input...
+2026-05-27 11:13:31,819 - __main__ - INFO - DEBUG: Received message from user 121110934, chat 121110934, text_len=232, has_caption=False, media=none
+2026-05-27 11:13:33,748 - __main__ - INFO - Handling callback query: modepick_leech from user 121110934
+2026-05-27 11:13:34,136 - __main__ - INFO - Handling URL/Path message from user 121110934. Current Mode: leech
+2026-05-27 11:13:34,137 - __main__ - INFO - Processing input as URL(s) for leech/mirror mode...
+2026-05-27 11:13:34,137 - __main__ - INFO - Input not recognized as external list URL, processing directly.
+2026-05-27 11:13:34,137 - __main__ - INFO - Received 1 URLs for mode leech in handle_url.
+2026-05-27 11:13:34,137 - __main__ - INFO - Asking user to select download service...
+2026-05-27 11:13:36,246 - __main__ - INFO - Handling callback query: service_direct from user 121110934
+2026-05-27 11:13:36,414 - __main__ - INFO - User selected service: direct
+2026-05-27 11:13:36,585 - __main__ - INFO - Service 'direct' selected. Proceeding to ask leech type.
+2026-05-27 11:13:36,585 - __main__ - INFO - Asking leech type (Mode: leech) for chat 121110934
+2026-05-27 11:13:38,902 - __main__ - INFO - Handling callback query: leechtype_normal from user 121110934
+2026-05-27 11:13:39,072 - __main__ - INFO - User selected leech type: normal
+2026-05-27 11:13:39,073 - colab_leecher.utility.task_context - INFO - Created Strictly Isolated TaskContext ef7d0b9e for user 121110934
+2026-05-27 11:13:39,250 - __main__ - INFO - Proceeding to start task via TaskContext...
+2026-05-27 11:13:39,448 - __main__ - INFO - [task-ef7d0b9e] Starting parallel task | user_id=7772724138 task_id=ef7d0b9e-a982-4789-a274-ee3a08bd2f5e
+2026-05-27 11:13:39,448 - colab_leecher.utility.task_context - INFO - Task ef7d0b9e added to queue. Total active: 1
+2026-05-27 11:13:39,448 - __main__ - INFO - [task-ef7d0b9e] Task registered in TASK_QUEUE | active_count=1
+2026-05-27 11:13:39,448 - colab_leecher.utility.task_context - INFO - Task ef7d0b9e acquired worker slot. (1/2)
+2026-05-27 11:13:39,448 - __main__ - INFO - [task-ef7d0b9e] Calling taskScheduler
+2026-05-27 11:13:39,448 - colab_leecher.utility.task_manager - INFO - taskScheduler started using TaskContext for task_id: ef7d0b9e-a982-4789-a274-ee3a08bd2f5e
+2026-05-27 11:13:39,448 - colab_leecher.utility.task_manager - INFO - taskScheduler entered. Mode: leech, Type: normal, Service: direct
+2026-05-27 11:13:39,448 - colab_leecher.utility.task_manager - INFO - Link mode. Processing 1 sources.
+2026-05-27 11:13:39,471 - colab_leecher.utility.task_manager - INFO - Prepared 1 message(s) for dump channel (total chars: 369)
+2026-05-27 11:13:39,471 - colab_leecher.utility.task_manager - INFO - Setting up work environment...
+2026-05-27 11:13:39,472 - colab_leecher.utility.task_manager - INFO - Choosing random thumbnail from list.
+2026-05-27 11:13:39,472 - colab_leecher.utility.task_manager - INFO - Randomly selected thumbnail URL: https://simp6.cuckcapital.cr/images4/kathrynelizabethwatts-20251209-0001e4916c01ab25a3c0.jpg
+2026-05-27 11:13:39,472 - colab_leecher.utility.task_manager - INFO - Attempting asynchronous download of thumbnail from: https://simp6.cuckcapital.cr/images4/kathrynelizabethwatts-20251209-0001e4916c01ab25a3c0.jpg
+2026-05-27 11:13:39,729 - colab_leecher.utility.task_manager - INFO - Successfully downloaded thumbnail to /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/hero_ef7d0b9e.jpg via aiohttp.
+2026-05-27 11:13:39,729 - colab_leecher.utility.task_manager - INFO - Sending initial task messages...
+2026-05-27 11:13:40,188 - colab_leecher.utility.task_manager - INFO - Parallel mode detected - keeping existing status message for task ef7d0b9e
+2026-05-27 11:13:40,188 - colab_leecher.utility.task_manager - INFO - Running pre-checks (size/name)...
+2026-05-27 11:13:40,188 - colab_leecher.downlader.manager - INFO - Calculating download size...
+2026-05-27 11:13:40,189 - colab_leecher.utility.helper - INFO - Using filename from URL Path: 05.23.2026&_41_.mp4
+2026-05-27 11:13:40,189 - colab_leecher.downlader.manager - INFO - Guessed name: 05.23.2026&_41_.mp4
+2026-05-27 11:13:40,189 - colab_leecher.utility.task_manager - INFO - Zip mode: Download target subfolder: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/Downloads/05.23.2026&_41_.mp4
+2026-05-27 11:13:40,189 - colab_leecher.utility.task_manager - INFO - Starting main task execution: Mode=leech, Service=direct, is_ytdl=False
+2026-05-27 11:13:40,189 - colab_leecher.utility.task_manager - INFO - Do_Leech (Orchestrator) started. is_dir=False
+2026-05-27 11:13:40,189 - colab_leecher.utility.task_manager - INFO - Do_Leech [Link Mode]: Orchestrating 1 links in batches of 1.
+2026-05-27 11:13:40,190 - colab_leecher.utility.task_manager - INFO - --- Processing Batch 1 / 1 ---
+2026-05-27 11:13:40,190 - colab_leecher.utility.task_manager - INFO - [Pipeline] Cleaning work directories for batch... Target: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/Downloads/05.23.2026&_41_.mp4
+2026-05-27 11:13:40,190 - colab_leecher.utility.task_manager - INFO - [Pipeline] Downloading batch links... is_ytdl=False
+2026-05-27 11:13:40,190 - colab_leecher.downlader.manager - INFO - downloadManager() using TaskContext for task_id: ef7d0b9e-a982-4789-a274-ee3a08bd2f5e
+2026-05-27 11:13:40,190 - colab_leecher.downlader.manager - INFO - Download Manager routing. Service: 'direct', Sources: 1
+2026-05-27 11:13:40,190 - colab_leecher.downlader.aria2 - INFO - aria2_Download() using TaskContext for task_id: ef7d0b9e-a982-4789-a274-ee3a08bd2f5e
+2026-05-27 11:13:40,190 - colab_leecher.downlader.aria2 - INFO - Derived raw name from URL path for link index 1: '_05.23.2026&_41_.mp4'
+2026-05-27 11:13:40,190 - colab_leecher.downlader.aria2 - INFO - Starting Aria2c download for link index 1 (Expecting: '05.23.2026&_41_.mp4')
+2026-05-27 11:13:42,274 - colab_leecher.downlader.aria2 - ERROR - Aria2 success code 0 but check failed for: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/Downloads/05.23.2026&_41_.mp4/05.23.2026&_41_.mp4
+2026-05-27 11:13:42,274 - colab_leecher.downlader.aria2 - WARNING - Details: File Exists? False, File Size: 0
+2026-05-27 11:13:42,274 - colab_leecher.downlader.aria2 - WARNING - Contents of download directory (/content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/Downloads/05.23.2026&_41_.mp4): ['_05.23.2026&_41_.mp4']
+2026-05-27 11:13:42,275 - colab_leecher.downlader.aria2 - WARNING - Expected file missing; using actual output '_05.23.2026&_41_.mp4' for link 1.
+2026-05-27 11:13:42,275 - colab_leecher.utility.task_manager - INFO - [Pipeline] Updating download name from: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/Downloads/05.23.2026&_41_.mp4
+2026-05-27 11:13:42,275 - colab_leecher.utility.helper - INFO - Found 1 file(s) in /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/Downloads/05.23.2026&_41_.mp4: ['_05.23.2026&_41_.mp4']
+2026-05-27 11:13:42,275 - colab_leecher.utility.helper - INFO - Single file detected, using name: _05.23.2026&_41_ (from _05.23.2026&_41_.mp4)
+2026-05-27 11:13:42,275 - colab_leecher.utility.task_manager - INFO - [Pipeline] Smart name determined: _05.23.2026&_41_
+2026-05-27 11:13:42,275 - colab_leecher.utility.task_manager - INFO - [Pipeline] Processing. Size: 14.00 B, Type: normal
+2026-05-27 11:13:42,276 - colab_leecher.utility.task_manager - INFO - [Process] Archive action 'zip' started. Source: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/Downloads/05.23.2026&_41_.mp4, is_dir: False
+2026-05-27 11:13:42,276 - colab_leecher.utility.handler - INFO - Zip_Handler using TaskContext for task_id: ef7d0b9e-a982-4789-a274-ee3a08bd2f5e
+2026-05-27 11:13:42,276 - colab_leecher.utility.handler - INFO - Zip Handler started for: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/Downloads/05.23.2026&_41_.mp4
+2026-05-27 11:13:42,276 - colab_leecher.utility.converters - INFO - archive() using TaskContext for task_id: ef7d0b9e-a982-4789-a274-ee3a08bd2f5e
+2026-05-27 11:13:42,276 - colab_leecher.utility.converters - INFO - Using download_name for archive: _05.23.2026&_41_ (from _05.23.2026&_41_.mp4)
+2026-05-27 11:13:42,276 - colab_leecher.utility.converters - INFO - Using 7z to create non-password 7Z archive: 05.23.2026&_41.7z
+2026-05-27 11:13:42,276 - colab_leecher.utility.converters - INFO - Archive pre-flight checks:
+2026-05-27 11:13:42,276 - colab_leecher.utility.converters - INFO -   Source path: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/Downloads/05.23.2026&_41_.mp4
+2026-05-27 11:13:42,276 - colab_leecher.utility.converters - INFO -   Source exists: True
+2026-05-27 11:13:42,276 - colab_leecher.utility.converters - INFO -   Source is file: False
+2026-05-27 11:13:42,276 - colab_leecher.utility.converters - INFO -   Source is dir: True
+2026-05-27 11:13:42,277 - colab_leecher.utility.converters - INFO -   Items in source dir: 1
+2026-05-27 11:13:42,277 - colab_leecher.utility.converters - INFO -   Output path: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/temp_zip/05.23.2026&_41.7z
+2026-05-27 11:13:42,277 - colab_leecher.utility.converters - INFO -   Output dir: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/temp_zip
+2026-05-27 11:13:42,277 - colab_leecher.utility.converters - INFO -   Output dir exists: True
+2026-05-27 11:13:42,277 - colab_leecher.utility.converters - INFO - Splitting enabled: 950.00 MiB per part.
+2026-05-27 11:13:42,277 - colab_leecher.utility.converters - INFO - Running 7z command: 7z a -mx=1 -t7z -y -v996147200b -bsp1 /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/temp_zip/05.23.2026&_41.7z /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/Downloads/05.23.2026&_41_.mp4
+2026-05-27 11:13:42,853 - colab_leecher.utility.converters - INFO - Split archiving completed: 1 parts, Total Size: 194.00 B
+2026-05-27 11:13:42,853 - colab_leecher.utility.converters - INFO - Archiving completed successfully: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/temp_zip/05.23.2026&_41.7z.001, Size: 194.00 B
+2026-05-27 11:13:42,853 - colab_leecher.utility.converters - INFO - 🔍 Verifying archive integrity before upload: 05.23.2026&_41.7z
+2026-05-27 11:13:42,853 - colab_leecher.utility.helper - INFO - 📊 status_bar [ef7d0b9e] called. Pct=0%, Speed=N/A
+2026-05-27 11:13:42,853 - colab_leecher.utility.helper - INFO - ✅ status_bar [ef7d0b9e]: Timer OK, proceeding.
+2026-05-27 11:13:43,102 - colab_leecher.utility.converters - INFO - ✅ Archive integrity verified successfully: 05.23.2026&_41.7z
+2026-05-27 11:13:43,102 - colab_leecher.utility.helper - INFO - 📊 status_bar [ef7d0b9e] called. Pct=0%, Speed=N/A
+2026-05-27 11:13:43,103 - colab_leecher.utility.helper - INFO - ✅ status_bar [ef7d0b9e]: Timer OK, proceeding.
+2026-05-27 11:13:43,303 - colab_leecher.utility.converters - INFO - Removing original source after archiving: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/Downloads/05.23.2026&_41_.mp4
+2026-05-27 11:13:43,304 - colab_leecher.utility.handler - INFO - Zipping complete. Output size: 194.00 B
+2026-05-27 11:13:43,304 - colab_leecher.utility.task_manager - INFO - [Pipeline] Starting Leech handler for path: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/temp_zip, cleanup_after_leech=True
+2026-05-27 11:13:43,304 - colab_leecher.utility.handler - INFO - Leech using TaskContext for task_id: ef7d0b9e-a982-4789-a274-ee3a08bd2f5e
+2026-05-27 11:13:43,304 - colab_leecher.utility.handler - INFO - Leech: Handler started for path: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/temp_zip
+2026-05-27 11:13:43,312 - colab_leecher.utility.handler - INFO - Leech: Found 1 potential item(s) to process/upload from initial path: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/temp_zip
+2026-05-27 11:13:43,313 - colab_leecher.utility.handler - INFO - Leech: Processing item 1/1: 05.23.2026&_41.7z.001
+2026-05-27 11:13:43,313 - colab_leecher.utility.converters - INFO - sizeChecker() using TaskContext for task_id: ef7d0b9e-a982-4789-a274-ee3a08bd2f5e
+2026-05-27 11:13:43,313 - colab_leecher.utility.converters - INFO - sizeChecker started for: 05.23.2026&_41.7z.001
+2026-05-27 11:13:43,313 - colab_leecher.utility.handler - INFO - Leech: No processing needed for '05.23.2026&_41.7z.001'. Uploading from: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/temp_zip/05.23.2026&_41.7z.001
+2026-05-27 11:13:43,313 - colab_leecher.utility.handler - INFO - Leech: Uploading single file: /content/Colab-to-Tel/BOT_WORK/ef7d0b9e-a982-4789-a274-ee3a08bd2f5e/temp_zip/05.23.2026&_41.7z.001 (Display: 05.23.2026&_41.7z.001)
+2026-05-27 11:13:43,313 - colab_leecher.uploader.telegram - INFO - Preparing to upload [ef7d0b9e]: 05.23.2026&_41.7z.001 (Display Name: 05.23.2026&_41.7z.001) Size: 194.00 B
+2026-05-27 11:13:43,437 - pyrogram.connection.connection - INFO - Connecting...
+2026-05-27 11:13:43,603 - pyrogram.connection.connection - INFO - Connected! Production DC4 (media) - IPv4
+2026-05-27 11:13:43,604 - pyrogram.session.session - INFO - NetworkTask started
+2026-05-27 11:13:44,166 - pyrogram.session.session - INFO - Session initialized: Layer 220
+2026-05-27 11:13:44,166 - pyrogram.session.session - INFO - Device: CPython 3.12.13 - Pyrogram 2.3.69
+2026-05-27 11:13:44,166 - pyrogram.session.session - INFO - System: Linux 6.6.122+ (en)
+2026-05-27 11:13:44,166 - pyrogram.session.session - INFO - Session started
+2026-05-27 11:13:44,167 - pyrogram.session.session - INFO - PingTask started
+2026-05-27 11:13:44,842 - pyrogram.session.session - INFO - PingTask stopped
+2026-05-27 11:13:44,842 - pyrogram.session.session - INFO - NetworkTask stopped
+2026-05-27 11:13:44,842 - pyrogram.connection.connection - INFO - Disconnected
+2026-05-27 11:13:44,842 - pyrogram.session.session - INFO - Session stopped
+2026-05-27 11:13:44,959 - pyrogram.connection.connection - INFO - Connecting...
+2026-05-27 11:13:45,123 - pyrogram.connection.connection - INFO - Connected! Production DC4 (media) - IPv4
+2026-05-27 11:13:45,124 - pyrogram.session.session - INFO - NetworkTask started
+2026-05-27 11:13:45,668 - pyrogram.session.session - INFO - Session initialized: Layer 220
+2026-05-27 11:13:45,669 - pyrogram.session.session - INFO - Device: CPython 3.12.13 - Pyrogram 2.3.69
+2026-05-27 11:13:45,669 - pyrogram.session.session - INFO - System: Linux 6.6.122+ (en)
+2026-05-27 11:13:45,669 - pyrogram.session.session - INFO - Session started
+2026-05-27 11:13:45,669 - colab_leecher.utility.helper - INFO - 📊 status_bar [ef7d0b9e] called. Pct=100%, Speed=82.35 B/s
+2026-05-27 11:13:45,669 - colab_leecher.utility.helper - INFO - ✅ status_bar [ef7d0b9e]: Timer OK, proceeding.
+2026-05-27 11:13:45,670 - pyrogram.session.session - INFO - PingTask started

@@ -448,6 +448,8 @@ class TaskContext:
     source_urls: List[str] = field(default_factory=list)
     filenames: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    session_capture_headers: Dict[str, str] = field(default_factory=dict)
+    session_capture_cookies: Dict[str, str] = field(default_factory=dict)
     
     work_path: str = ""
     down_path: str = ""
