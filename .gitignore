@@ -12,6 +12,7 @@ instagram_cookies*.txt
 .env
 .env.local
 *.pickle
+notebooks/
 
 # ===================================
 # Logs
