@@ -559,7 +559,7 @@ async def taskScheduler(task_ctx: TaskContext):
             except Exception as dashboard_err:
                 log.warning(f"taskScheduler finally: Failed to force update dashboard: {dashboard_err}")
 
-        asyncio.create_task(_async_cleanup())
+        TASK_QUEUE.create_background_task(_async_cleanup(), name=f"shielded_cleanup_{task_id[:8]}")
 
        # --- Pipeline Architecture Helper Functions ---
 
