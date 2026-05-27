@@ -164,7 +164,7 @@ if valid_creds and ipython:
     if not os.path.exists(repo_path):
         log.info(f"Cloning {github_user}/{repository_name} (branch: {branch_name})...")
         cmd_clone = f"git clone -b {branch_name} {clone_url} {repo_path}"
-        proc_clone = subprocess.run(cmd_clone, shell=True, capture_output=True, text=True)
+        proc_clone = subprocess.run(cmd_clone, shell=True)
 
         if proc_clone.returncode != 0:
             log.error(f"Git clone failed:\n{proc_clone.stderr}")
@@ -181,10 +181,10 @@ if valid_creds and ipython:
 
         if GITHUB_TOKEN and GITHUB_TOKEN.strip():
             cmd_set_url = f"git remote set-url origin {clone_url}"
-            subprocess.run(cmd_set_url, shell=True, capture_output=True, text=True)
+            subprocess.run(cmd_set_url, shell=True)
 
         cmd_pull = f"git fetch origin {branch_name} && git reset --hard origin/{branch_name}"
-        proc_pull = subprocess.run(cmd_pull, shell=True, capture_output=True, text=True)
+        proc_pull = subprocess.run(cmd_pull, shell=True)
 
         if proc_pull.returncode != 0:
             log.warning(f"Git fetch/reset issues:\n{proc_pull.stderr}")
@@ -194,10 +194,15 @@ if valid_creds and ipython:
     # Install system dependencies
     if Working and os.path.exists(repo_path):
         log.info("Installing system packages (ffmpeg, aria2)...")
-        cmd_apt = "add-apt-repository -y universe && apt-get update -qq && apt-get install -y -qq ffmpeg aria2 megatools"
-        proc_apt = subprocess.run(cmd_apt, shell=True, capture_output=True, text=True)
-        print("megatools in PATH:", shutil.which("megatools"))
-        os.environ["MEGATOOLS_EXECUTABLE"] = "/usr/bin/megatools"
+        cmd_apt = "add-apt-repository -y universe && apt-get update && apt-get install -y ffmpeg aria2 megatools"
+        proc_apt = subprocess.run(cmd_apt, shell=True)
+        megatools_bin = shutil.which("megatools") or shutil.which("megadl")
+        print("megatools in PATH:", megatools_bin)
+        if megatools_bin:
+            os.environ["MEGATOOLS_EXECUTABLE"] = megatools_bin
+            log.info(f"Set MEGATOOLS_EXECUTABLE to: {megatools_bin}")
+        else:
+            log.warning("megatools or megadl not found in PATH!")
         if proc_apt.returncode != 0:
             log.warning(f"Some apt packages may have issues:\n{proc_apt.stderr[:200]}")
         else:
@@ -208,8 +213,8 @@ if valid_creds and ipython:
         # attempt optional ones individually so a single bad package cannot block setup.
         log.info("Installing Python dependencies...")
         if os.path.exists(requirements_file):
-            cmd_pip = f"pip3 install --no-cache-dir -q -r {requirements_file}"
-            proc_pip = subprocess.run(cmd_pip, shell=True, capture_output=True, text=True)
+            cmd_pip = f"pip3 install --no-cache-dir -r {requirements_file}"
+            proc_pip = subprocess.run(cmd_pip, shell=True)
 
             if proc_pip.returncode != 0:
                 log.warning(f"Full requirements install had issues:\n{proc_pip.stderr[:500]}")
@@ -233,8 +238,8 @@ if valid_creds and ipython:
                     "rarfile>=4.2",
                     "moviepy",
                 ]
-                cmd_critical = "pip3 install --no-cache-dir -q " + " ".join(critical_packages)
-                proc_critical = subprocess.run(cmd_critical, shell=True, capture_output=True, text=True)
+                cmd_critical = "pip3 install --no-cache-dir " + " ".join(critical_packages)
+                proc_critical = subprocess.run(cmd_critical, shell=True)
 
                 if proc_critical.returncode != 0:
                     log.error(f"Critical package install failed:\n{proc_critical.stderr}")
@@ -253,8 +258,8 @@ if valid_creds and ipython:
                 ]
                 for pkg in optional_packages:
                     proc_opt = subprocess.run(
-                        f"pip3 install --no-cache-dir -q {pkg}",
-                        shell=True, capture_output=True, text=True
+                        f"pip3 install --no-cache-dir {pkg}",
+                        shell=True
                     )
                     if proc_opt.returncode != 0:
                         log.warning(f"Optional package '{pkg}' failed to install (non-fatal)")
@@ -267,7 +272,7 @@ if valid_creds and ipython:
 
         # Additional packages
         log.info("Installing instaloader (Instagram support)...")
-        subprocess.run("pip3 install --no-cache-dir -q instaloader", shell=True, capture_output=True, text=True)
+        subprocess.run("pip3 install --no-cache-dir instaloader", shell=True)
         log.info("Additional packages installed")
 
     # Write credentials file

@@ -141,7 +141,7 @@ if valid_creds and ipython:
     if not os.path.exists(repo_path):
         log.info(f"Cloning repository from {github_user}/{repository_name}...")
         cmd_clone = f"git clone -b {branch_name} {clone_url} {repo_path}"
-        proc_clone = subprocess.run(cmd_clone, shell=True, capture_output=True, text=True)
+        proc_clone = subprocess.run(cmd_clone, shell=True)
         if proc_clone.returncode != 0:
             log.error(f"Git clone failed:\n{proc_clone.stderr}")
             if "could not read Username" in proc_clone.stderr or "Authentication failed" in proc_clone.stderr:
@@ -156,10 +156,10 @@ if valid_creds and ipython:
         # Update remote URL with token if provided
         if GITHUB_TOKEN and GITHUB_TOKEN.strip():
             cmd_set_url = f"git remote set-url origin {clone_url}"
-            subprocess.run(cmd_set_url, shell=True, capture_output=True, text=True)
+            subprocess.run(cmd_set_url, shell=True)
 
         cmd_pull = f"git pull origin {branch_name}"
-        proc_pull = subprocess.run(cmd_pull, shell=True, capture_output=True, text=True)
+        proc_pull = subprocess.run(cmd_pull, shell=True)
         if proc_pull.returncode != 0:
             log.warning(f"Git pull issues:\n{proc_pull.stderr}")
         else:
@@ -168,8 +168,8 @@ if valid_creds and ipython:
     # Install dependencies
     if Working and os.path.exists(repo_path):
         log.info("📦 Installing system packages (ffmpeg, aria2)...")
-        cmd_apt = "add-apt-repository -y universe && apt-get update -qq && apt-get install -y -qq ffmpeg aria2 megatools"
-        proc_apt = subprocess.run(cmd_apt, shell=True, capture_output=True, text=True)
+        cmd_apt = "add-apt-repository -y universe && apt-get update && apt-get install -y ffmpeg aria2 megatools"
+        proc_apt = subprocess.run(cmd_apt, shell=True)
         if proc_apt.returncode != 0:
             log.warning(f"Apt install issues:\n{proc_apt.stderr}")
         else:
@@ -180,7 +180,7 @@ if valid_creds and ipython:
         if os.path.exists(mindvalley_script):
             log.info("Installing Mindvalley downloader dependencies...")
             cmd_mindvalley = f"bash {mindvalley_script}"
-            proc_mindvalley = subprocess.run(cmd_mindvalley, shell=True, capture_output=True, text=True)
+            proc_mindvalley = subprocess.run(cmd_mindvalley, shell=True)
             if proc_mindvalley.returncode != 0:
                 log.warning(f"Mindvalley deps install issues:\n{proc_mindvalley.stderr}")
             else:
@@ -190,8 +190,8 @@ if valid_creds and ipython:
 
         log.info("Installing Python requirements...")
         if os.path.exists(requirements_file):
-            cmd_pip = f"pip3 install --no-cache-dir -q -r {requirements_file}"
-            proc_pip = subprocess.run(cmd_pip, shell=True, capture_output=True, text=True)
+            cmd_pip = f"pip3 install --no-cache-dir -r {requirements_file}"
+            proc_pip = subprocess.run(cmd_pip, shell=True)
             if proc_pip.returncode != 0:
                 log.error(f"pip install failed:\n{proc_pip.stderr}")
                 Working = False
@@ -199,8 +199,8 @@ if valid_creds and ipython:
                 log.info("✅ Python packages installed")
 
         log.info("Installing instaloader for Instagram support...")
-        cmd_insta = "pip3 install --no-cache-dir -q instaloader"
-        subprocess.run(cmd_insta, shell=True, capture_output=True, text=True)
+        cmd_insta = "pip3 install --no-cache-dir instaloader"
+        subprocess.run(cmd_insta, shell=True)
         log.info("✅ Instaloader installed")
 
     # Write credentials file with UPPERCASE keys

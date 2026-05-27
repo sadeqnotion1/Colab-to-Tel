@@ -174,7 +174,7 @@ if valid_creds and ipython:
           # Construct the git clone command
           cmd_clone = f"git clone -b {branch_name} {git_url} {repo_path}"
           # --- END MODIFICATION ---
-          proc_clone = subprocess.run(cmd_clone, shell=True, capture_output=True, text=True)
+          proc_clone = subprocess.run(cmd_clone, shell=True)
           if proc_clone.returncode != 0:
               log.error(f"Git clone failed:\n{proc_clone.stderr}")
               if "could not read Username" in proc_clone.stderr or "Authentication failed" in proc_clone.stderr:
@@ -196,13 +196,13 @@ if valid_creds and ipython:
 
      # --- Install Dependencies ---
      if Working and os.path.exists(repo_path):
-          log.info("Checking/Installing OS packages..."); cmd_apt = "add-apt-repository -y universe && apt-get update && apt-get install -y ffmpeg aria2 megatools"; proc_apt = subprocess.run(cmd_apt, shell=True, capture_output=True, text=True)
+          log.info("Checking/Installing OS packages..."); cmd_apt = "add-apt-repository -y universe && apt-get update && apt-get install -y ffmpeg aria2 megatools"; proc_apt = subprocess.run(cmd_apt, shell=True)
           if proc_apt.returncode != 0: log.warning(f"Apt install issues:\n{proc_apt.stderr}")
           else: log.info("OS packages checked/installed.")
 
           log.info("Installing Mindvalley downloader dependencies...")
           cmd_mindvalley = f"bash {repo_path}/install_mindvalley_deps.sh"
-          proc_mindvalley = subprocess.run(cmd_mindvalley, shell=True, capture_output=True, text=True)
+          proc_mindvalley = subprocess.run(cmd_mindvalley, shell=True)
           if proc_mindvalley.returncode != 0:
               log.warning(f"Mindvalley deps install issues:\n{proc_mindvalley.stderr}")
           else:
@@ -210,7 +210,7 @@ if valid_creds and ipython:
 
           log.info("Installing Python requirements...");
           if os.path.exists(requirements_file):
-              cmd_pip = f"pip3 install --no-cache-dir -r {requirements_file}"; proc_pip = subprocess.run(cmd_pip, shell=True, capture_output=True, text=True)
+              cmd_pip = f"pip3 install --no-cache-dir -r {requirements_file}"; proc_pip = subprocess.run(cmd_pip, shell=True)
               if proc_pip.returncode != 0: log.error(f"pip install failed:\n{proc_pip.stderr}"); Working = False
               else: log.info("Python requirements installed.")
           else: log.error(f"Requirements file not found: {requirements_file}"); Working = False
@@ -260,8 +260,8 @@ if valid_creds and ipython:
          try:
              # Install SABnzbd system dependencies
              log.info("Installing SABnzbd system dependencies...")
-             cmd_apt_sabnzbd = "apt-get update -qq && apt-get install -y -qq python3-dev par2 unrar unzip p7zip-full"
-             proc_apt_sab = subprocess.run(cmd_apt_sabnzbd, shell=True, capture_output=True, text=True)
+             cmd_apt_sabnzbd = "apt-get update && apt-get install -y python3-dev par2 unrar unzip p7zip-full"
+             proc_apt_sab = subprocess.run(cmd_apt_sabnzbd, shell=True)
              if proc_apt_sab.returncode != 0:
                  log.warning(f"SABnzbd apt install issues:\n{proc_apt_sab.stderr}")
                  raise Exception("Failed to install SABnzbd system dependencies")
@@ -269,8 +269,8 @@ if valid_creds and ipython:
 
              # Install SABnzbd Python package
              log.info("Installing SABnzbd Python package...")
-             cmd_pip_sabnzbd = "pip3 install sabnzbd --quiet"
-             proc_pip_sab = subprocess.run(cmd_pip_sabnzbd, shell=True, capture_output=True, text=True)
+             cmd_pip_sabnzbd = "pip3 install sabnzbd"
+             proc_pip_sab = subprocess.run(cmd_pip_sabnzbd, shell=True)
              if proc_pip_sab.returncode != 0:
                  log.warning(f"SABnzbd pip install issues:\n{proc_pip_sab.stderr}")
                  raise Exception("Failed to install SABnzbd Python package")

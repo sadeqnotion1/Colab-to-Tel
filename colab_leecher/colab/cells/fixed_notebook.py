@@ -140,7 +140,7 @@ if valid_creds and ipython:
           repository_name = "Colab-to-Tel"
           branch_name = "master"
           cmd_clone = f"git clone -b {branch_name} https://github.com/{github_user}/{repository_name}"
-          proc_clone = subprocess.run(cmd_clone, shell=True, capture_output=True, text=True)
+          proc_clone = subprocess.run(cmd_clone, shell=True)
           if proc_clone.returncode != 0: log.error(f"Git clone failed:\n{proc_clone.stderr}"); Working = False
           else: log.info("Repository cloned.")
           log.info(f"Using repository path: {repo_path}")
@@ -149,13 +149,13 @@ if valid_creds and ipython:
 
      # --- Install Dependencies ---
      if Working and os.path.exists(repo_path):
-          log.info("Checking/Installing OS packages..."); cmd_apt = "add-apt-repository -y universe && apt-get update && apt-get install -y ffmpeg aria2 megatools"; proc_apt = subprocess.run(cmd_apt, shell=True, capture_output=True, text=True)
+          log.info("Checking/Installing OS packages..."); cmd_apt = "add-apt-repository -y universe && apt-get update && apt-get install -y ffmpeg aria2 megatools"; proc_apt = subprocess.run(cmd_apt, shell=True)
           if proc_apt.returncode != 0: log.warning(f"Apt install issues:\n{proc_apt.stderr}")
           else: log.info("OS packages checked/installed.")
 
           log.info("Installing Mindvalley downloader dependencies...")
           cmd_mindvalley = f"bash {repo_path}/install_mindvalley_deps.sh"
-          proc_mindvalley = subprocess.run(cmd_mindvalley, shell=True, capture_output=True, text=True)
+          proc_mindvalley = subprocess.run(cmd_mindvalley, shell=True)
           if proc_mindvalley.returncode != 0:
               log.warning(f"Mindvalley deps install issues:\n{proc_mindvalley.stderr}")
           else:
@@ -163,7 +163,7 @@ if valid_creds and ipython:
 
           log.info("Installing Python requirements...");
           if os.path.exists(requirements_file):
-              cmd_pip = f"pip3 install --no-cache-dir -r {requirements_file}"; proc_pip = subprocess.run(cmd_pip, shell=True, capture_output=True, text=True)
+              cmd_pip = f"pip3 install --no-cache-dir -r {requirements_file}"; proc_pip = subprocess.run(cmd_pip, shell=True)
               if proc_pip.returncode != 0: log.error(f"pip install failed:\n{proc_pip.stderr}"); Working = False
               else: log.info("Python requirements installed.")
           else: log.error(f"Requirements file not found: {requirements_file}"); Working = False

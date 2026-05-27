@@ -160,7 +160,7 @@ if valid_creds and ipython:
     if not os.path.exists(repo_path):
         log.info(f"📥 Cloning {github_user}/{repository_name} (branch: {branch_name})...")
         cmd_clone = f"git clone -b {branch_name} {clone_url} {repo_path}"
-        proc_clone = subprocess.run(cmd_clone, shell=True, capture_output=True, text=True)
+        proc_clone = subprocess.run(cmd_clone, shell=True)
 
         if proc_clone.returncode != 0:
             log.error(f"❌ Git clone failed:\n{proc_clone.stderr}")
@@ -178,10 +178,10 @@ if valid_creds and ipython:
         # Update remote URL with token if provided
         if GITHUB_TOKEN and GITHUB_TOKEN.strip():
             cmd_set_url = f"git remote set-url origin {clone_url}"
-            subprocess.run(cmd_set_url, shell=True, capture_output=True, text=True)
+            subprocess.run(cmd_set_url, shell=True)
 
         cmd_pull = f"git pull origin {branch_name}"
-        proc_pull = subprocess.run(cmd_pull, shell=True, capture_output=True, text=True)
+        proc_pull = subprocess.run(cmd_pull, shell=True)
 
         if proc_pull.returncode != 0:
             log.warning(f"⚠️ Git pull issues:\n{proc_pull.stderr}")
@@ -191,8 +191,8 @@ if valid_creds and ipython:
     # Install system dependencies
     if Working and os.path.exists(repo_path):
         log.info("📦 Installing system packages (ffmpeg, aria2)...")
-        cmd_apt = "add-apt-repository -y universe && apt-get update -qq && apt-get install -y -qq ffmpeg aria2 megatools"
-        proc_apt = subprocess.run(cmd_apt, shell=True, capture_output=True, text=True)
+        cmd_apt = "add-apt-repository -y universe && apt-get update && apt-get install -y ffmpeg aria2 megatools"
+        proc_apt = subprocess.run(cmd_apt, shell=True)
 
         if proc_apt.returncode != 0:
             log.warning(f"⚠️ Some apt packages may have issues:\n{proc_apt.stderr[:200]}")
@@ -202,8 +202,8 @@ if valid_creds and ipython:
         # Install Python requirements
         log.info("🐍 Installing Python dependencies...")
         if os.path.exists(requirements_file):
-            cmd_pip = f"pip3 install --no-cache-dir -q -r {requirements_file}"
-            proc_pip = subprocess.run(cmd_pip, shell=True, capture_output=True, text=True)
+            cmd_pip = f"pip3 install --no-cache-dir -r {requirements_file}"
+            proc_pip = subprocess.run(cmd_pip, shell=True)
 
             if proc_pip.returncode != 0:
                 log.error(f"❌ pip install failed:\n{proc_pip.stderr}")
@@ -215,8 +215,8 @@ if valid_creds and ipython:
 
         # Install additional packages
         log.info("📸 Installing instaloader (Instagram support)...")
-        cmd_insta = "pip3 install --no-cache-dir -q instaloader"
-        subprocess.run(cmd_insta, shell=True, capture_output=True, text=True)
+        cmd_insta = "pip3 install --no-cache-dir instaloader"
+        subprocess.run(cmd_insta, shell=True)
         log.info("✅ Additional packages installed")
 
     # Write credentials file
