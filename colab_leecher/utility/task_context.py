@@ -85,7 +85,10 @@ class TaskTransfer:
         self.last_speed = 0.0
 
     def get_current_bytes(self) -> int:
-        return max(self.down_bytes, self.up_bytes)
+        down = sum(self.down_bytes) if isinstance(self.down_bytes, (list, tuple, set)) else self.down_bytes
+        up = sum(self.up_bytes) if isinstance(self.up_bytes, (list, tuple, set)) else self.up_bytes
+        return max(down or 0, up or 0)
+
 
     def get_percentage(self, total_size: int = 0) -> float:
         size_to_use = total_size if total_size > 0 else self.total_size
