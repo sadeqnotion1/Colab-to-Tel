@@ -285,10 +285,25 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
         return False
 
     # --- Build command WITH --content-disposition=false ---
-    command = [ "aria2c", "-x16", "--seed-time=0", "--summary-interval=1", "--max-tries=3",
-                "--console-log-level=warn", "--file-allocation=none",
-                "--content-disposition=false",
-                "-d", _paths.down_path ]
+    # Always send browser-mimicking headers so servers that block bot User-Agents
+    # (like aria2/1.x.x) behave the same as they do with IDM or a real browser.
+    try:
+        parsed_for_referer = urllib.parse.urlparse(link)
+        referer = f"{parsed_for_referer.scheme}://{parsed_for_referer.netloc}/"
+    except Exception:
+        referer = link
+
+    command = [
+        "aria2c", "-x16", "--seed-time=0", "--summary-interval=1", "--max-tries=3",
+        "--console-log-level=warn", "--file-allocation=none",
+        "--content-disposition=false",
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "--header", "Accept: */*",
+        "--header", "Accept-Language: en-US,en;q=0.9",
+        "--header", "Accept-Encoding: gzip, deflate, br",
+        "--header", f"Referer: {referer}",
+        "-d", _paths.down_path
+    ]
 
     # Add Cloudflare cookie and headers for NZBCloud downloads (Aria2c)
     if 'nzbcloud.com' in link.lower():
@@ -303,7 +318,7 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
                 "--header", "Sec-Fetch-Dest: video",
                 "--header", "Sec-Fetch-Mode: no-cors",
                 "--header", "Sec-Fetch-Site: same-site",
-                "--header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+                "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
             ])
             log.debug(f"📋 Aria2c command has {len(command)} arguments including {sum(1 for x in command if x == '--header')} headers")
         else:
@@ -312,6 +327,7 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
     # Add the link as the final argument
     command.append(link)
     # --- End Command ---
+
     # Exit codes that are safe to retry (transient network/connection failures).
     # Permanent codes (3=404, 9=disk full, 24=auth, etc.) are not retried.
     _RETRYABLE_CODES = {1, 29}
