@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Dict, Optional, List, Set, Deque, Any
 from pyrogram.types import Message
 from .ui_copy import build_health_summary_text
+from .transfer_state import SmartBytes
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class SystemMetrics:
         self.cancelled_tasks_total += 1
 
     def get_success_rate(self) -> float:
-        total = self.completed_tasks_total + self.failed_tasks_total
+        total = self.completed_tasks_total + self.failed_tasks_total + self.cancelled_tasks_total
         if total == 0:
             return 100.0
         return (self.completed_tasks_total / total) * 100
@@ -64,8 +65,8 @@ class SystemMetrics:
 @dataclass
 class TaskTransfer:
     """Per-task transfer statistics"""
-    down_bytes: int = 0
-    up_bytes: int = 0
+    down_bytes: Any = field(default_factory=lambda: SmartBytes(0))
+    up_bytes: Any = field(default_factory=lambda: SmartBytes(0))
     total_size: int = 0
     sent_file: List = field(default_factory=list)
     sent_file_names: List[str] = field(default_factory=list)
@@ -75,8 +76,8 @@ class TaskTransfer:
     last_speed_bytes: float = 0.0
 
     def reset(self):
-        self.down_bytes = 0
-        self.up_bytes = 0
+        self.down_bytes = SmartBytes(0)
+        self.up_bytes = SmartBytes(0)
         self.total_size = 0
         self.sent_file = []
         self.sent_file_names = []
