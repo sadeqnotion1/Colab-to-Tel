@@ -439,7 +439,6 @@ async def Unzip_Handler(
                     fail_reason = _task_error.text if _task_error.state else "Unknown (from extract)"
                     extraction_errors.append(
                         f"Failed: {item_name} - {fail_reason}")
-                    _task_error.state = False  # Reset _task_error state after logging it for this file
 
             except Exception as extract_call_err:
                 # Catch errors calling the extract function itself

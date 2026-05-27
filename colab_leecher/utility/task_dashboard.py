@@ -219,18 +219,6 @@ async def update_summary_dashboard(
                 elif current_action == "splitting":
                     status_label = "Splitting ✂️"
                     is_proc = True
-                elif task_ctx.messages and task_ctx.messages.status_head:
-                    # Fallback to stringly-typed matching for legacy paths
-                    sh = task_ctx.messages.status_head.lower()
-                    if any(k in sh for k in ['archiving', 'zipping', 'compressing']):
-                        status_label = "Archiving 🗜️"
-                        is_proc = True
-                    elif any(k in sh for k in ['extracting', 'unzipping', 'unpacking']):
-                        status_label = "Extracting 📦"
-                        is_proc = True
-                    elif any(k in sh for k in ['splitting']):
-                        status_label = "Splitting ✂️"
-                        is_proc = True
                 
                 if is_proc:
                     percentage = 0.0

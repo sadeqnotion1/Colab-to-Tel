@@ -660,7 +660,8 @@ class TaskQueue:
         try:
             await asyncio.shield(asyncio.gather(task, return_exceptions=True))
         except asyncio.CancelledError:
-            pass
+            log.warning("cancel_scheduled_update: CancelledError raised, re-raising to ensure token bubbles up.")
+            raise
         finally:
             self._scheduled_update_task = None
 

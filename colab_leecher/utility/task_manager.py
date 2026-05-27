@@ -537,28 +537,74 @@ async def taskScheduler(task_ctx: TaskContext):
         except Exception as cleanup_err:
             log.error(f"taskScheduler finally: Failed to run cleanup_task_artifacts: {cleanup_err}", exc_info=True)
 
-        # 4. ABSOLUTE GUARANTEE: Release worker slot
-        try:
-            log.info(f"taskScheduler finally: Guaranteeing release of worker slot for task {task_id[:8]}")
-            await TASK_QUEUE.release_worker_slot(task_id)
-        except Exception as slot_err:
-            log.error(f"taskScheduler finally: Failed to release worker slot: {slot_err}", exc_info=True)
+        # 4, 5, 6. ABSOLUTE GUARANTEES: Release slot, remove task, and update dashboard
+        # scheduled safely as a shielded background task so it executes fully outside the cancelled context.
+        async def _async_cleanup():
+            try:
+                log.info(f"taskScheduler finally: Guaranteeing release of worker slot for task {task_id[:8]}")
+                await TASK_QUEUE.release_worker_slot(task_id)
+            except Exception as slot_err:
+                log.error(f"taskScheduler finally: Failed to release worker slot: {slot_err}", exc_info=True)
 
-        # 5. ABSOLUTE GUARANTEE: Remove task from TASK_QUEUE
-        try:
-            log.info(f"taskScheduler finally: Guaranteeing removal of task {task_id[:8]} from active queue")
-            await TASK_QUEUE.remove_task(task_id)
-        except Exception as remove_err:
-            log.error(f"taskScheduler finally: Failed to remove task from queue: {remove_err}", exc_info=True)
+            try:
+                log.info(f"taskScheduler finally: Guaranteeing removal of task {task_id[:8]} from active queue")
+                await TASK_QUEUE.remove_task(task_id)
+            except Exception as remove_err:
+                log.error(f"taskScheduler finally: Failed to remove task from queue: {remove_err}", exc_info=True)
 
-        # 6. Force summary dashboard update to reflect freed concurrency slots
-        try:
-            log.info(f"taskScheduler finally: Forcing summary dashboard update")
-            from .task_dashboard import force_update_summary
-            await force_update_summary(colab_bot)
-        except Exception as dashboard_err:
-            log.warning(f"taskScheduler finally: Failed to force update dashboard: {dashboard_err}")
+            try:
+                log.info(f"taskScheduler finally: Forcing summary dashboard update")
+                from .task_dashboard import force_update_summary
+                await force_update_summary(colab_bot)
+            except Exception as dashboard_err:
+                log.warning(f"taskScheduler finally: Failed to force update dashboard: {dashboard_err}")
+
+        asyncio.create_task(_async_cleanup())
+
        # --- Pipeline Architecture Helper Functions ---
+
+async def async_copy(src, dst, task_ctx: TaskContext = None):
+    """Asynchronously copies a file or directory with support for cancellation.
+
+    If src is a directory, it recursively copies files and directories.
+    Yields control to the event loop during copies to keep the application responsive.
+    """
+    if task_ctx and task_ctx.cancel_event.is_set():
+        raise asyncio.CancelledError("Copy cancelled actively.")
+
+    if ospath.isdir(src):
+        makedirs(dst, exist_ok=True)
+        items = await asyncio.to_thread(os.listdir, src)
+        for item in items:
+            s_item = ospath.join(src, item)
+            d_item = ospath.join(dst, item)
+            await async_copy(s_item, d_item, task_ctx)
+    else:
+        if ospath.isdir(dst):
+            dst = ospath.join(dst, ospath.basename(src))
+
+        parent_dir = ospath.dirname(dst)
+        if parent_dir:
+            makedirs(parent_dir, exist_ok=True)
+
+        def _copy_stats(s, d):
+            try:
+                shutil.copystat(s, d)
+            except Exception:
+                pass
+
+        with open(src, 'rb') as fsrc, open(dst, 'wb') as fdst:
+            while True:
+                if task_ctx and task_ctx.cancel_event.is_set():
+                    raise asyncio.CancelledError("Copy cancelled actively.")
+                chunk = await asyncio.to_thread(fsrc.read, 1 * 1024 * 1024)
+                if not chunk:
+                    break
+                await asyncio.to_thread(fdst.write, chunk)
+                await asyncio.sleep(0)
+
+        await asyncio.to_thread(_copy_stats, src, dst)
+
 
 async def _stage_download(batch_links, task_ctx: TaskContext) -> str | None:
     """Download stage: cleans work paths and downloads a batch of links.
@@ -726,8 +772,8 @@ async def _handle_archive_processing(download_path: str, action: str, task_ctx: 
             await Zip_Handler(_paths.temp_unzip_path, is_split=True, remove=True, task_ctx=task_ctx, max_split_size=chunk_size_bytes)
             return _paths.temp_zpath if not _task_error.state else None
 
-    _task_error.set_error(f"Unknown archive action: {action}")
-    return None
+        _task_error.set_error(f"Unknown archive action: {action}")
+        return None
 
 
 async def _handle_normal_processing(download_path: str, task_ctx: TaskContext) -> str | None:
@@ -748,10 +794,7 @@ async def _handle_normal_processing(download_path: str, task_ctx: TaskContext) -
             if not ospath.exists(_paths.temp_dirleech_path):
                 makedirs(_paths.temp_dirleech_path, exist_ok=True)
             try:
-                if task_ctx.cancel_event.is_set():
-                    log.warning("File copy cancelled actively before start.")
-                    return None
-                await asyncio.to_thread(shutil.copy2, download_path, _paths.temp_dirleech_path)
+                await async_copy(download_path, _paths.temp_dirleech_path, task_ctx)
                 if task_ctx.cancel_event.is_set():
                     log.warning("File copy finished but task was actively cancelled.")
                     return None
@@ -1146,10 +1189,7 @@ async def Do_Mirror(
                         break
                     s_item = ospath.join(source_path_for_copy, item)
                     d_item = ospath.join(mirror_dir_final, item)
-                    if ospath.isdir(s_item):
-                        await asyncio.to_thread(shutil.copytree, s_item, d_item, dirs_exist_ok=True)
-                    elif ospath.isfile(s_item):
-                        await asyncio.to_thread(shutil.copy2, s_item, d_item)
+                    await async_copy(s_item, d_item, task_ctx)
                 if not _task_error.state:
                     log.info(
                         f"Successfully mirrored content to {mirror_dir_final}")
@@ -1294,9 +1334,10 @@ async def Do_GDrive_Upload(
                     if not ospath.exists(_paths.temp_dirleech_path):
                         makedirs(_paths.temp_dirleech_path, exist_ok=True)
                     try:
-                        shutil.copy2(
+                        await async_copy(
                             process_source_path,
-                            _paths.temp_dirleech_path)
+                            _paths.temp_dirleech_path,
+                            task_ctx)
                         gdrive_upload_path = _paths.temp_dirleech_path
                     except Exception as copy_err:
                         log.error(
