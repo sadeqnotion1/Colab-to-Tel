@@ -1851,6 +1851,64 @@ def parse_session_capture_gist(lines: list[str]) -> dict:
     return result
 
 
+async def resolve_host_direct_url(target_url: str, headers: dict, cookies: dict) -> str:
+    """
+    If the target URL is a hoster page (like playmogo.com) or if the referer is a
+    playmogo.com page (when target_url is an IP-locked CDN link), fetches the HTML page
+    using the premium cookies from the current bot IP (Google Colab), parses the
+    direct CDN download link, and returns it. Otherwise returns the original URL.
+    """
+    import re
+    import aiohttp
+    import logging
+    log = logging.getLogger(__name__)
+    
+    resolve_url = None
+    if "playmogo.com" in target_url.lower():
+        resolve_url = target_url
+    else:
+        # Check if playmogo.com is in the referer header
+        if headers:
+            for k, v in headers.items():
+                if k.lower() == "referer" and "playmogo.com" in v.lower():
+                    resolve_url = v
+                    break
+                    
+    if resolve_url:
+        log.info(f"Resolving Playmogo host page: {resolve_url}")
+        try:
+            async with aiohttp.ClientSession() as session:
+                req_headers = dict(headers) if headers else {}
+                if "User-Agent" not in req_headers:
+                    req_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                
+                async with session.get(resolve_url, headers=req_headers, cookies=cookies, timeout=20) as response:
+                    if response.status == 200:
+                        html_text = await response.text()
+                        
+                        # Look for cloudatacdn.com links or general direct video links
+                        cdn_match = re.search(r'https?://[a-zA-Z0-9.-]+\.cloudatacdn\.com/[^\s"\'>]+', html_text)
+                        if cdn_match:
+                            resolved_url = cdn_match.group(0).replace('&amp;', '&').strip()
+                            log.info(f"Successfully resolved Playmogo direct CDN link: {resolved_url[:100]}...")
+                            return resolved_url
+                        
+                        # Fallback direct video search
+                        video_links = re.findall(r'https?://[^\s"\'>]+\.(?:mp4|mkv|zip|rar|7z)(?:\?[^\s"\'>]*)?', html_text, re.IGNORECASE)
+                        if video_links:
+                            resolved_url = video_links[0].replace('&amp;', '&').strip()
+                            log.info(f"Resolved Playmogo fallback direct link: {resolved_url[:100]}...")
+                            return resolved_url
+                        
+                        log.warning("No direct download links found in Playmogo page HTML.")
+                    else:
+                        log.error(f"Failed to fetch Playmogo page: HTTP {response.status}")
+        except Exception as e:
+            log.error(f"Error resolving Playmogo page: {e}", exc_info=True)
+            
+    return target_url
+
+
 async def fetch_and_parse_links(url: str) -> list[str] | None:
     """
     Fetches content from supported raw text URLs (Pastebin, Gist, Rentry)
@@ -2074,9 +2132,11 @@ async def handle_url(client: Client, message: Message):
                             target_url = parsed_session.get("url")
                             if target_url:
                                 task_ctx.service_type = "direct"
-                                task_ctx.source_urls = [target_url]
                                 task_ctx.session_capture_headers = parsed_session.get("headers", {})
                                 task_ctx.session_capture_cookies = parsed_session.get("cookies", {})
+                                # Resolve IP-locked direct link if needed
+                                target_url = await resolve_host_direct_url(target_url, task_ctx.session_capture_headers, task_ctx.session_capture_cookies)
+                                task_ctx.source_urls = [target_url]
                                 title = parsed_session.get("title")
                                 if title:
                                     task_ctx.filenames = [title]
@@ -2233,9 +2293,12 @@ async def handle_url(client: Client, message: Message):
                         # Setup task context
                         task_ctx = create_task_context(user_id, message.chat.id, mode="leech")
                         task_ctx.service_type = "direct"
-                        task_ctx.source_urls = [target_url]
                         task_ctx.session_capture_headers = parsed_session.get("headers", {})
                         task_ctx.session_capture_cookies = parsed_session.get("cookies", {})
+                        
+                        # Resolve IP-locked direct link if needed
+                        target_url = await resolve_host_direct_url(target_url, task_ctx.session_capture_headers, task_ctx.session_capture_cookies)
+                        task_ctx.source_urls = [target_url]
                         
                         title = parsed_session.get("title")
                         if title:
