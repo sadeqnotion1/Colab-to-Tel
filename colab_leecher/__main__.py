@@ -1859,7 +1859,6 @@ async def resolve_host_direct_url(target_url: str, headers: dict, cookies: dict)
     direct CDN download link, and returns it. Otherwise returns the original URL.
     """
     import re
-    import aiohttp
     import logging
     log = logging.getLogger(__name__)
     
@@ -1867,7 +1866,6 @@ async def resolve_host_direct_url(target_url: str, headers: dict, cookies: dict)
     if "playmogo.com" in target_url.lower():
         resolve_url = target_url
     else:
-        # Check if playmogo.com is in the referer header
         if headers:
             for k, v in headers.items():
                 if k.lower() == "referer" and "playmogo.com" in v.lower():
@@ -1876,36 +1874,65 @@ async def resolve_host_direct_url(target_url: str, headers: dict, cookies: dict)
                     
     if resolve_url:
         log.info(f"Resolving Playmogo host page: {resolve_url}")
-        try:
-            async with aiohttp.ClientSession() as session:
-                req_headers = dict(headers) if headers else {}
-                if "User-Agent" not in req_headers:
-                    req_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                
-                async with session.get(resolve_url, headers=req_headers, cookies=cookies, timeout=20) as response:
-                    if response.status == 200:
-                        html_text = await response.text()
-                        
-                        # Look for cloudatacdn.com links or general direct video links
-                        cdn_match = re.search(r'https?://[a-zA-Z0-9.-]+\.cloudatacdn\.com/[^\s"\'>]+', html_text)
-                        if cdn_match:
-                            resolved_url = cdn_match.group(0).replace('&amp;', '&').strip()
-                            log.info(f"Successfully resolved Playmogo direct CDN link: {resolved_url[:100]}...")
-                            return resolved_url
-                        
-                        # Fallback direct video search
-                        video_links = re.findall(r'https?://[^\s"\'>]+\.(?:mp4|mkv|zip|rar|7z)(?:\?[^\s"\'>]*)?', html_text, re.IGNORECASE)
-                        if video_links:
-                            resolved_url = video_links[0].replace('&amp;', '&').strip()
-                            log.info(f"Resolved Playmogo fallback direct link: {resolved_url[:100]}...")
-                            return resolved_url
-                        
-                        log.warning("No direct download links found in Playmogo page HTML.")
-                    else:
-                        log.error(f"Failed to fetch Playmogo page: HTTP {response.status}")
-        except Exception as e:
-            log.error(f"Error resolving Playmogo page: {e}", exc_info=True)
+        
+        req_headers = dict(headers) if headers else {}
+        if "User-Agent" not in req_headers:
+            req_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             
+        html_text = None
+        
+        # Try using curl_cffi for Cloudflare bypass if available (default on Colab)
+        try:
+            from curl_cffi.requests import AsyncSession
+            log.info("Using curl_cffi AsyncSession for Playmogo fetch (impersonating Chrome)...")
+            async with AsyncSession() as session:
+                response = await session.get(
+                    resolve_url, 
+                    headers=req_headers, 
+                    cookies=cookies, 
+                    impersonate="chrome110",
+                    timeout=20
+                )
+                if response.status_code == 200:
+                    html_text = response.text
+                else:
+                    log.error(f"Failed to fetch Playmogo page via curl_cffi: HTTP {response.status_code}")
+        except Exception as curl_err:
+            log.warning(f"curl_cffi fetch not available or failed: {curl_err}. Falling back to aiohttp.")
+            
+        # Fallback to standard aiohttp
+        if not html_text:
+            try:
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(resolve_url, headers=req_headers, cookies=cookies, timeout=20) as response:
+                        if response.status == 200:
+                            html_text = await response.text()
+                        else:
+                            log.error(f"Failed to fetch Playmogo page via aiohttp: HTTP {response.status}")
+            except Exception as aio_err:
+                log.error(f"aiohttp fallback failed: {aio_err}")
+                
+        if html_text:
+            try:
+                # Look for cloudatacdn.com links or general direct video links
+                cdn_match = re.search(r'https?://[a-zA-Z0-9.-]+\.cloudatacdn\.com/[^\s"\'>]+', html_text)
+                if cdn_match:
+                    resolved_url = cdn_match.group(0).replace('&amp;', '&').strip()
+                    log.info(f"Successfully resolved Playmogo direct CDN link: {resolved_url[:100]}...")
+                    return resolved_url
+                
+                # Fallback direct video search
+                video_links = re.findall(r'https?://[^\s"\'>]+\.(?:mp4|mkv|zip|rar|7z)(?:\?[^\s"\'>]*)?', html_text, re.IGNORECASE)
+                if video_links:
+                    resolved_url = video_links[0].replace('&amp;', '&').strip()
+                    log.info(f"Resolved Playmogo fallback direct link: {resolved_url[:100]}...")
+                    return resolved_url
+                
+                log.warning("No direct download links found in Playmogo page HTML.")
+            except Exception as parse_err:
+                log.error(f"Error parsing page content: {parse_err}")
+                
     return target_url
 
 

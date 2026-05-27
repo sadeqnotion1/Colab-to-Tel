@@ -146,4 +146,6 @@ archive/
 *.log
 .antigravitycli/
 .claude/
+aria2c.exe
+test_session_capture/
 
