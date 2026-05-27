@@ -12,12 +12,7 @@ from .keyboard_layouts import ProgressKeyboards
 
 
 class StatusDisplay:
-    """Enhanced status message builder"""
-
-    def __init__(self, title: str, task_id: str = None):
-        self.title = title
-        self.task_id = task_id
-        self.start_time = datetime.now()
+    """Enhanced stateless status message builder"""
 
     # ------------------------------------------------------------------
     # Helpers
@@ -38,7 +33,10 @@ class StatusDisplay:
 
     @staticmethod
     def smart_eta(seconds: float, downloaded: int = 0) -> str:
-        """Format ETA with a warm-up phase for very early estimates."""
+        """Format ETA with a warm-up phase for very early estimates.
+        
+        This treats the 512KB warm-up logic strictly as a visual mapping.
+        """
         if downloaded < 1024 * 512:          # < 512 KB transferred
             return "\u23f3 Warming up..."
         if seconds is None or seconds < 0 or seconds > 86400 * 7:
@@ -49,13 +47,16 @@ class StatusDisplay:
     # Public API
     # ------------------------------------------------------------------
 
+    @classmethod
     def download_status(
-        self,
+        cls,
         filename: str,
         progress: float,
         speed: float,
         downloaded: int,
         total_size: int,
+        elapsed_time: float,
+        task_id: str = None,
         eta: float = None,
         engine: str = None,
         style: str = "sleek"
@@ -67,32 +68,68 @@ class StatusDisplay:
         Returns: (message_text, keyboard)
         """
         if style == "sleek":
-            return self._sleek_status(
-                "DOWNLOADING", Emoji.DOWNLOAD,
-                filename, progress, speed, downloaded, total_size, eta, engine
+            return cls._sleek_status(
+                operation="DOWNLOADING",
+                op_emoji=Emoji.DOWNLOAD,
+                filename=filename,
+                progress=progress,
+                speed=speed,
+                done=downloaded,
+                total=total_size,
+                eta=eta,
+                elapsed_time=elapsed_time,
+                task_id=task_id,
+                engine=engine
             )
         elif style == "modern":
-            return self._modern_download_status(
-                filename, progress, speed, downloaded, total_size, eta, engine
+            return cls._modern_download_status(
+                filename=filename,
+                progress=progress,
+                speed=speed,
+                downloaded=downloaded,
+                total_size=total_size,
+                eta=eta,
+                elapsed_time=elapsed_time,
+                task_id=task_id,
+                engine=engine
             )
         elif style == "compact":
-            return self._compact_status(
-                "DOWNLOADING",
-                filename, progress, speed, downloaded, total_size, eta, engine
+            return cls._compact_status(
+                operation="DOWNLOADING",
+                filename=filename,
+                progress=progress,
+                speed=speed,
+                done=downloaded,
+                total=total_size,
+                eta=eta,
+                elapsed_time=elapsed_time,
+                task_id=task_id,
+                engine=engine
             )
         else:
-            return self._classic_status(
-                "\U0001f4e5 DOWNLOADING",
-                filename, progress, speed, downloaded, total_size, eta, engine
+            return cls._classic_status(
+                header=f"{Emoji.DOWNLOAD} DOWNLOADING",
+                filename=filename,
+                progress=progress,
+                speed=speed,
+                done=downloaded,
+                total=total_size,
+                eta=eta,
+                elapsed_time=elapsed_time,
+                task_id=task_id,
+                engine=engine
             )
 
+    @classmethod
     def upload_status(
-        self,
+        cls,
         filename: str,
         progress: float,
         speed: float,
         uploaded: int,
         total_size: int,
+        elapsed_time: float,
+        task_id: str = None,
         eta: float = None,
         destination: str = "Telegram",
         style: str = "sleek"
@@ -104,26 +141,44 @@ class StatusDisplay:
         Returns: (message_text, keyboard)
         """
         if style == "sleek":
-            return self._sleek_status(
-                f"UPLOADING -> {destination.upper()}", Emoji.UPLOAD,
-                filename, progress, speed, uploaded, total_size, eta, None
+            return cls._sleek_status(
+                operation=f"UPLOADING -> {destination.upper()}",
+                op_emoji=Emoji.UPLOAD,
+                filename=filename,
+                progress=progress,
+                speed=speed,
+                done=uploaded,
+                total=total_size,
+                eta=eta,
+                elapsed_time=elapsed_time,
+                task_id=task_id,
+                engine=None
             )
-        return self._modern_upload_status(
-            filename, progress, speed, uploaded, total_size, eta, destination
+        return cls._modern_upload_status(
+            filename=filename,
+            progress=progress,
+            speed=speed,
+            uploaded=uploaded,
+            total_size=total_size,
+            eta=eta,
+            elapsed_time=elapsed_time,
+            task_id=task_id,
+            destination=destination
         )
 
+    @classmethod
     def processing_status(
-        self,
+        cls,
         filename: str,
         operation: str,
+        elapsed_time: float,
+        task_id: str = None,
         progress: float = None,
         current_file: str = None,
         files_done: int = None,
         total_files: int = None
     ) -> "tuple[str, Any]":
         """Create processing/extracting status"""
-        elapsed = (datetime.now() - self.start_time).total_seconds()
-
         lines = [f"<b>{Emoji.PROCESS} {operation.upper()}</b>\n"]
         lines.append(
             f"{Box.TOP_LEFT}{Emoji.TAG} <b>Name:</b> <code>{filename}</code>")
@@ -140,20 +195,21 @@ class StatusDisplay:
             lines.append(
                 f"{Box.MIDDLE_LEFT}{Emoji.ARCHIVE} <b>Files:</b> {files_done}/{total_files}")
 
-        elapsed_str = TimeFormatter.format_seconds(elapsed)
+        elapsed_str = TimeFormatter.format_seconds(elapsed_time)
         lines.append(
             f"{Box.BOTTOM_LEFT}{Emoji.TIME} <b>Elapsed:</b> {elapsed_str}")
 
         message = "\n".join(lines)
-        keyboard = ProgressKeyboards.processing(self.task_id, operation)
+        keyboard = ProgressKeyboards.processing(task_id, operation)
         return message, keyboard
 
     # ------------------------------------------------------------------
     # Sleek style  <- NEW default
     # ------------------------------------------------------------------
 
+    @classmethod
     def _sleek_status(
-        self,
+        cls,
         operation: str,
         op_emoji: str,
         filename: str,
@@ -162,7 +218,9 @@ class StatusDisplay:
         done: int,
         total: int,
         eta: float,
-        engine: str
+        elapsed_time: float,
+        task_id: str = None,
+        engine: str = None
     ) -> "tuple[str, Any]":
         """
         Clean, scan-friendly layout. One dense block - no box-drawing noise.
@@ -176,13 +234,11 @@ class StatusDisplay:
         🟢 45.2 MB/s   ⏳ 12s   ⏱ 1m 4s
         💾 3.20 GB / 4.37 GB
         """
-        elapsed = (datetime.now() - self.start_time).total_seconds()
-
         bar = ProgressBar.generate(progress, 15, "gradient")
-        speed_dot = self.speed_emoji(speed)
+        speed_dot = cls.speed_emoji(speed)
         speed_str = SizeFormatter.format_speed(speed) if speed > 0 else "--"
-        eta_str = self.smart_eta(eta, done)
-        elapsed_str = TimeFormatter.format_seconds(elapsed)
+        eta_str = cls.smart_eta(eta, done)
+        elapsed_str = TimeFormatter.format_seconds(elapsed_time)
         done_str = SizeFormatter.format_bytes(done)
         total_str = SizeFormatter.format_bytes(total)
 
@@ -198,26 +254,27 @@ class StatusDisplay:
         if engine:
             msg += f"\n\u2699\ufe0f <i>{engine}</i>"
 
-        keyboard = ProgressKeyboards.downloading(self.task_id)
+        keyboard = ProgressKeyboards.downloading(task_id)
         return msg, keyboard
 
     # ------------------------------------------------------------------
     # Modern style
     # ------------------------------------------------------------------
 
+    @classmethod
     def _modern_download_status(
-        self,
+        cls,
         filename: str,
         progress: float,
         speed: float,
         downloaded: int,
         total_size: int,
         eta: float,
-        engine: str
+        elapsed_time: float,
+        task_id: str = None,
+        engine: str = None
     ) -> "tuple[str, Any]":
         """Modern box-drawing download status (gradient bar)."""
-        elapsed = (datetime.now() - self.start_time).total_seconds()
-
         lines = [
             f"<b>{Emoji.DOWNLOAD} DOWNLOADING</b>\n",
             f"{Box.TOP_LEFT}{Emoji.TAG} <b>Name:</b> <code>{filename}</code>",
@@ -227,7 +284,7 @@ class StatusDisplay:
         lines.append(f"{Box.MIDDLE_LEFT}[{bar}] <b>{progress:.1f}%</b>")
 
         if speed > 0:
-            speed_dot = self.speed_emoji(speed)
+            speed_dot = cls.speed_emoji(speed)
             speed_str = SizeFormatter.format_speed(speed)
             lines.append(
                 f"{Box.MIDDLE_LEFT}{speed_dot} <b>Speed:</b> {speed_str}")
@@ -238,10 +295,10 @@ class StatusDisplay:
             f"{Box.MIDDLE_LEFT}{Emoji.SIZE} <b>Progress:</b> {downloaded_str} / {total_str}")
 
         if eta is not None and eta > 0:
-            eta_str = self.smart_eta(eta, downloaded)
+            eta_str = cls.smart_eta(eta, downloaded)
             lines.append(f"{Box.MIDDLE_LEFT}{Emoji.ETA} <b>ETA:</b> {eta_str}")
 
-        elapsed_str = TimeFormatter.format_seconds(elapsed)
+        elapsed_str = TimeFormatter.format_seconds(elapsed_time)
         lines.append(
             f"{Box.MIDDLE_LEFT}{Emoji.TIME} <b>Elapsed:</b> {elapsed_str}")
 
@@ -252,22 +309,23 @@ class StatusDisplay:
             lines[-1] = lines[-1].replace(Box.MIDDLE_LEFT, Box.BOTTOM_LEFT, 1)
 
         message = "\n".join(lines)
-        keyboard = ProgressKeyboards.downloading(self.task_id)
+        keyboard = ProgressKeyboards.downloading(task_id)
         return message, keyboard
 
+    @classmethod
     def _modern_upload_status(
-        self,
+        cls,
         filename: str,
         progress: float,
         speed: float,
         uploaded: int,
         total_size: int,
         eta: float,
-        destination: str
+        elapsed_time: float,
+        task_id: str = None,
+        destination: str = "Telegram"
     ) -> "tuple[str, Any]":
         """Modern box-drawing upload status (gradient bar)."""
-        elapsed = (datetime.now() - self.start_time).total_seconds()
-
         lines = [
             f"<b>{Emoji.UPLOAD} UPLOADING TO {destination.upper()}</b>\n",
             f"{Box.TOP_LEFT}{Emoji.TAG} <b>Name:</b> <code>{filename}</code>",
@@ -277,7 +335,7 @@ class StatusDisplay:
         lines.append(f"{Box.MIDDLE_LEFT}[{bar}] <b>{progress:.1f}%</b>")
 
         if speed > 0:
-            speed_dot = self.speed_emoji(speed)
+            speed_dot = cls.speed_emoji(speed)
             speed_str = SizeFormatter.format_speed(speed)
             lines.append(
                 f"{Box.MIDDLE_LEFT}{speed_dot} <b>Speed:</b> {speed_str}")
@@ -288,23 +346,24 @@ class StatusDisplay:
             f"{Box.MIDDLE_LEFT}{Emoji.SIZE} <b>Progress:</b> {uploaded_str} / {total_str}")
 
         if eta is not None and eta > 0:
-            eta_str = self.smart_eta(eta, uploaded)
+            eta_str = cls.smart_eta(eta, uploaded)
             lines.append(f"{Box.MIDDLE_LEFT}{Emoji.ETA} <b>ETA:</b> {eta_str}")
 
-        elapsed_str = TimeFormatter.format_seconds(elapsed)
+        elapsed_str = TimeFormatter.format_seconds(elapsed_time)
         lines.append(
             f"{Box.BOTTOM_LEFT}{Emoji.TIME} <b>Elapsed:</b> {elapsed_str}")
 
         message = "\n".join(lines)
-        keyboard = ProgressKeyboards.uploading(self.task_id)
+        keyboard = ProgressKeyboards.uploading(task_id)
         return message, keyboard
 
     # ------------------------------------------------------------------
     # Compact style
     # ------------------------------------------------------------------
 
+    @classmethod
     def _compact_status(
-        self,
+        cls,
         operation: str,
         filename: str,
         progress: float,
@@ -312,16 +371,16 @@ class StatusDisplay:
         done: int,
         total: int,
         eta: float,
-        engine: str
+        elapsed_time: float,
+        task_id: str = None,
+        engine: str = None
     ) -> "tuple[str, Any]":
         """Compact style - saves vertical space."""
-        elapsed = (datetime.now() - self.start_time).total_seconds()
-
         bar = ProgressBar.generate(progress, 12, "gradient")
-        speed_dot = self.speed_emoji(speed)
+        speed_dot = cls.speed_emoji(speed)
         speed_str = SizeFormatter.format_speed(speed) if speed > 0 else "--"
-        eta_str = self.smart_eta(eta, done)
-        elapsed_str = TimeFormatter.format_seconds(elapsed)
+        eta_str = cls.smart_eta(eta, done)
+        elapsed_str = TimeFormatter.format_seconds(elapsed_time)
         done_str = SizeFormatter.format_bytes(done)
         total_str = SizeFormatter.format_bytes(total)
 
@@ -336,15 +395,16 @@ class StatusDisplay:
         if engine:
             message += f"  {Emoji.PROCESS} {engine}"
 
-        keyboard = ProgressKeyboards.downloading(self.task_id)
+        keyboard = ProgressKeyboards.downloading(task_id)
         return message, keyboard
 
     # ------------------------------------------------------------------
     # Classic style  (HTML/Markdown mix FIXED)
     # ------------------------------------------------------------------
 
+    @classmethod
     def _classic_status(
-        self,
+        cls,
         header: str,
         filename: str,
         progress: float,
@@ -352,19 +412,18 @@ class StatusDisplay:
         done: int,
         total: int,
         eta: float,
-        engine: str
+        elapsed_time: float,
+        task_id: str = None,
+        engine: str = None
     ) -> "tuple[str, Any]":
         """Classic style - all formatting in HTML (no broken __markdown__ mix)."""
-        elapsed = (datetime.now() - self.start_time).total_seconds()
-
         bar = ProgressBar.generate(progress, 12, "gradient")
         message = f"<b>{header}</b>\n\n"
         message += f"<b>\U0001f3f7\ufe0f Name >> </b><code>{filename}</code>\n\n"
-        # FIX: was  __{progress:.1f}%__  (Markdown in HTML mode) - now proper <i> tag
         message += f"\u256d[{bar}] <b>>></b> <i>{progress:.1f}%</i>\n"
 
         if speed > 0:
-            speed_dot = self.speed_emoji(speed)
+            speed_dot = cls.speed_emoji(speed)
             message += (
                 f"\u251c{speed_dot} <b>Speed >></b> "
                 f"<b>{SizeFormatter.format_speed(speed)}</b>\n"
@@ -376,17 +435,18 @@ class StatusDisplay:
         if eta:
             message += (
                 f"\u251c{Emoji.ETA} <b>ETA >></b> "
-                f"<i>{self.smart_eta(eta, done)}</i>\n"
+                f"<i>{cls.smart_eta(eta, done)}</i>\n"
             )
 
+        elapsed_str = TimeFormatter.format_seconds(elapsed_time)
         message += (
             f"\u251c{Emoji.TIME} <b>Elapsed >></b> "
-            f"<i>{TimeFormatter.format_seconds(elapsed)}</i>\n"
+            f"<i>{elapsed_str}</i>\n"
         )
         message += f"\u251c\u2705 <b>Done >></b> <b>{SizeFormatter.format_bytes(done)}</b>\n"
         message += f"\u2570{Emoji.ARCHIVE} <b>Total >></b> <b>{SizeFormatter.format_bytes(total)}</b>"
 
-        keyboard = ProgressKeyboards.downloading(self.task_id)
+        keyboard = ProgressKeyboards.downloading(task_id)
         return message, keyboard
 
 
@@ -593,15 +653,24 @@ def create_download_status(
     speed: float,
     downloaded: int,
     total_size: int,
+    elapsed_time: float = 0.0,
     eta: float = None,
     engine: str = None,
     task_id: str = None,
     style: str = "sleek"
 ) -> "tuple[str, Any]":
     """Quick download status creation"""
-    status = StatusDisplay("Download", task_id)
-    return status.download_status(
-        filename, progress, speed, downloaded, total_size, eta, engine, style
+    return StatusDisplay.download_status(
+        filename=filename,
+        progress=progress,
+        speed=speed,
+        downloaded=downloaded,
+        total_size=total_size,
+        elapsed_time=elapsed_time,
+        task_id=task_id,
+        eta=eta,
+        engine=engine,
+        style=style
     )
 
 
@@ -611,13 +680,22 @@ def create_upload_status(
     speed: float,
     uploaded: int,
     total_size: int,
+    elapsed_time: float = 0.0,
     eta: float = None,
     destination: str = "Telegram",
     task_id: str = None,
     style: str = "sleek"
 ) -> "tuple[str, Any]":
     """Quick upload status creation"""
-    status = StatusDisplay("Upload", task_id)
-    return status.upload_status(
-        filename, progress, speed, uploaded, total_size, eta, destination, style
+    return StatusDisplay.upload_status(
+        filename=filename,
+        progress=progress,
+        speed=speed,
+        uploaded=uploaded,
+        total_size=total_size,
+        elapsed_time=elapsed_time,
+        task_id=task_id,
+        eta=eta,
+        destination=destination,
+        style=style
     )
