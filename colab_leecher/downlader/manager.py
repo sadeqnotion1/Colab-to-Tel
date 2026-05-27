@@ -111,10 +111,51 @@ async def http_download_logic(url: str, file_path: str, display_name: str, heade
                                         speed = downloaded_size / (now - download_start_time) if (now - download_start_time) > 0 else 0
                                         await status_bar(_messages.status_head, f"{sizeUnit(speed)}/s", 0, "N/A", sizeUnit(current_total_downloaded), "Unknown", engine="aiohttp 🌐", task_ctx=task_ctx)
 
+            # --- Content-sniff: detect stub/error-page responses ---
+            # Some servers return HTTP 200 with a tiny HTML body (auth wall, CDN
+            # token expiry, hotlink protection) instead of the real file.
+            # aiohttp treats that as a successful download; we must catch it.
+            _STUB_THRESHOLD = 10 * 1024  # 10 KB
+            if downloaded_size < _STUB_THRESHOLD and downloaded_size > 0:
+                try:
+                    with open(file_path, 'rb') as _sf:
+                        _head = _sf.read(512)
+                    _ht = _head.decode('utf-8', errors='replace').strip().lower()
+                    _is_html = (
+                        _ht.startswith('<!doctype') or _ht.startswith('<html') or
+                        '<html' in _ht[:200] or '<head' in _ht[:200] or
+                        _ht.startswith('<?xml')
+                    )
+                    if _is_html:
+                        log.error(
+                            f"Server returned a stub/error page ({downloaded_size} B) instead of "
+                            f"'{display_name}' (Link {link_num}). "
+                            f"Preview: {_head.decode('utf-8', errors='replace')[:300]!r}"
+                        )
+                        try: os.remove(file_path)
+                        except OSError: pass
+                        error_reason = (
+                            f"Server returned an error/auth page ({downloaded_size} B) instead of the real "
+                            f"file. The URL requires browser cookies or a session token. "
+                            f"Try Debrid or Bitso if you have credentials for this host."
+                        )
+                        failed_info = {"link": url, "filename": display_name, "index": link_num, "reason": error_reason}
+                        if _task_error: _task_error.failed_links.append(failed_info)
+                        return False
+                    else:
+                        log.warning(
+                            f"Downloaded file is very small ({downloaded_size} B) but not HTML. "
+                            f"Preview: {_head.decode('utf-8', errors='replace')[:100]!r}"
+                        )
+                except Exception as sniff_err:
+                    log.warning(f"Could not sniff downloaded content for stub detection: {sniff_err}")
+            # --- End content-sniff ---
+
             log.info(f"Download complete: {display_name}")
             _transfer.down_bytes.append(downloaded_size)
             _transfer.successful_downloads.append({'url': url, 'filename': display_name})
             return True
+
 
         except _TRANSIENT as transient_err:
             error_reason = f"{type(transient_err).__name__}: {str(transient_err)[:80]}"

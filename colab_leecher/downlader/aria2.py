@@ -389,8 +389,54 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
 
             if exit_code == 0:
                 if file_exists and file_size > 0:
-                     log.info(f"Aria2c download complete. Found expected file: {final_filepath_on_disk} (Size: {file_size})")
-                     success = True
+                     # --- Content-sniff: detect stub/error-page responses ---
+                     # Servers sometimes return HTTP 200 with a tiny HTML error body
+                     # instead of the real file (auth wall, CDN token expiry, etc.).
+                     # aria2c considers that a success; we must catch it here.
+                     _STUB_THRESHOLD = 10 * 1024  # 10 KB
+                     if file_size < _STUB_THRESHOLD:
+                         try:
+                             with open(final_filepath_on_disk, 'rb') as _f:
+                                 _head = _f.read(512)
+                             _head_text = _head.decode('utf-8', errors='replace').strip().lower()
+                             _is_html = (
+                                 _head_text.startswith('<!doctype') or
+                                 _head_text.startswith('<html') or
+                                 '<html' in _head_text[:200] or
+                                 '<head' in _head_text[:200] or
+                                 _head_text.startswith('<?xml')
+                             )
+                             if _is_html:
+                                 log.error(
+                                     f"Aria2c downloaded a stub/error page ({file_size} bytes) "
+                                     f"instead of the real file for link {num}. "
+                                     f"Server response preview: {_head.decode('utf-8', errors='replace')[:300]!r}"
+                                 )
+                                 try: os.remove(final_filepath_on_disk)
+                                 except OSError: pass
+                                 error_reason = (
+                                     f"Server returned an error/auth page ({file_size} B) instead of "
+                                     f"the real file. The URL likely requires browser cookies or a session token. "
+                                     f"Try the Debrid or Bitso service if you have credentials for this host."
+                                 )
+                                 success = False
+                             else:
+                                 log.warning(
+                                     f"Aria2c download looks very small ({file_size} B) for link {num} "
+                                     f"but content does not appear to be HTML. Treating as success. "
+                                     f"Preview: {_head.decode('utf-8', errors='replace')[:100]!r}"
+                                 )
+                                 log.info(f"Aria2c download complete. Found expected file: {final_filepath_on_disk} (Size: {file_size})")
+                                 success = True
+                         except Exception as sniff_err:
+                             log.warning(f"Could not sniff downloaded file content: {sniff_err}. Treating as success.")
+                             log.info(f"Aria2c download complete. Found expected file: {final_filepath_on_disk} (Size: {file_size})")
+                             success = True
+                     else:
+                         log.info(f"Aria2c download complete. Found expected file: {final_filepath_on_disk} (Size: {file_size})")
+                         success = True
+                     # --- End content-sniff ---
+
                 else:
                      log.error(f"Aria2 success code 0 but check failed for: {final_filepath_on_disk}")
                      log.warning(f"Details: File Exists? {file_exists}, File Size: {file_size}")
