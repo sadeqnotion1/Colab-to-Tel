@@ -395,6 +395,17 @@
       </div>
     </header>
 
+    <div class="capture-banner" id="capture-banner" style="display: none; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 16px; padding: 10px 12px; background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 12px; font-size: 12px; position: relative; z-index: 1;">
+      <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;">
+        <span style="font-size: 16px;">🎯</span>
+        <div style="min-width: 0; flex: 1;">
+          <div style="font-weight: 600; color: #a78bfa;">Direct Download Intercepted!</div>
+          <div style="font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" id="capture-banner-title">file.mp4</div>
+        </div>
+      </div>
+      <button id="btn-use-captured" style="background: var(--primary-glow); border: none; border-radius: 8px; padding: 6px 12px; color: #fff; font-size: 10px; font-weight: 600; cursor: pointer; white-space: nowrap;">Use This</button>
+    </div>
+
     <div class="form-group">
       <label for="download-url">Direct Download URL</label>
       <div class="input-wrapper">

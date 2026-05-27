@@ -3,6 +3,7 @@
 let currentTab = null;
 let capturedCookies = {};
 let hasToken = false;
+let activeCapturedSession = null;
 
 // 1. Initialize Extension Popup on Load
 document.addEventListener('DOMContentLoaded', async () => {
@@ -33,6 +34,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Check Gist Token status
   await checkTokenStatus();
+
+  // Check for intercepted direct downloads
+  await checkCapturedSession();
 
   // Attach event listeners
   document.getElementById('btn-capture').addEventListener('click', captureAndCreateGist);
@@ -157,7 +161,9 @@ async function captureAndCreateGist() {
     // Format filename / Title
     let title = 'Session_Capture';
     try {
-      if (currentTab && currentTab.title) {
+      if (activeCapturedSession && activeCapturedSession.title) {
+        title = activeCapturedSession.title;
+      } else if (currentTab && currentTab.title) {
         title = currentTab.title.replace(/[^a-zA-Z0-9]/g, '_');
       } else {
         const parsed = new URL(downloadUrl);
@@ -228,6 +234,14 @@ async function captureAndCreateGist() {
     // Copy to clipboard using modern Navigator API
     await navigator.clipboard.writeText(rawUrl);
 
+    // Clear stored captured session on success
+    try {
+      await chrome.storage.local.remove('capturedSession');
+      activeCapturedSession = null;
+    } catch (err) {
+      console.warn('Failed to clear captured session:', err);
+    }
+
     // Show success panel
     document.getElementById('gist-url-display').value = rawUrl;
     resultPanel.style.display = 'block';
@@ -262,5 +276,50 @@ async function copyGistUrl() {
     console.error('Copy clicked error:', error);
     input.select();
     document.execCommand('copy');
+  }
+}
+
+// 6. Check for recently intercepted downloads from storage
+async function checkCapturedSession() {
+  try {
+    const result = await chrome.storage.local.get('capturedSession');
+    const session = result.capturedSession;
+
+    // Check if session exists and is fresh (within last 1 hour)
+    if (session && session.url && Date.now() - session.timestamp < 3600000) {
+      activeCapturedSession = session;
+      const banner = document.getElementById('capture-banner');
+      const bannerTitle = document.getElementById('capture-banner-title');
+
+      bannerTitle.textContent = session.title || 'Direct Video Link';
+      banner.style.display = 'flex';
+
+      document.getElementById('btn-use-captured').addEventListener('click', () => {
+        // Populate inputs with captured session details
+        document.getElementById('download-url').value = session.url;
+        document.getElementById('referer-url').value = session.referer;
+
+        // Load cookies
+        capturedCookies = {};
+        const cookieLines = [];
+        if (session.cookies) {
+          session.cookies.split(';').forEach(item => {
+            if (item.includes('=')) {
+              const [k, v] = item.split('=', 2);
+              capturedCookies[k.trim()] = v.trim();
+              cookieLines.push(`${k.trim()}=${v.trim()}`);
+            }
+          });
+          document.getElementById('cookies-preview').textContent = cookieLines.join(';\n');
+        } else {
+          document.getElementById('cookies-preview').textContent = 'No cookies were captured for this download.';
+        }
+
+        // Hide banner
+        banner.style.display = 'none';
+      });
+    }
+  } catch (error) {
+    console.error('Error loading captured session:', error);
   }
 }

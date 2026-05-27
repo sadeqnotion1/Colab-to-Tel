@@ -43,3 +43,55 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep message channel open for async response
   }
 });
+
+// --- NEW: Intercept direct downloads (like IDM) ---
+chrome.downloads.onCreated.addListener(async (downloadItem) => {
+  console.log('📥 Download intercepted:', downloadItem);
+
+  const downloadUrl = downloadItem.url;
+  const refererUrl = downloadItem.referrer || '';
+  const filename = downloadItem.filename || '';
+
+  // Skip temporary or non-http downloads
+  if (!downloadUrl || !downloadUrl.toLowerCase().startsWith('http')) {
+    return;
+  }
+
+  // Derive simple file title
+  let title = 'Session_Capture';
+  if (filename) {
+    title = filename.split(/[/\\]/).pop().split('?')[0];
+  } else {
+    try {
+      const parsed = new URL(downloadUrl);
+      title = parsed.pathname.split('/').pop().split('?')[0] || 'file';
+    } catch (e) {}
+  }
+  
+  // Clean up title
+  title = title.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  // Fetch cookies for the target download domain URL
+  let cookieStr = '';
+  try {
+    const cookies = await chrome.cookies.getAll({ url: downloadUrl });
+    if (cookies && cookies.length > 0) {
+      cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+    }
+  } catch (error) {
+    console.error('Failed to get cookies for download URL:', error);
+  }
+
+  // Create captured session object
+  const capturedSession = {
+    url: downloadUrl,
+    referer: refererUrl,
+    cookies: cookieStr,
+    title: title,
+    timestamp: Date.now()
+  };
+
+  // Store in extension local storage
+  await chrome.storage.local.set({ capturedSession: capturedSession });
+  console.log('✅ Captured session stored successfully:', capturedSession);
+});
