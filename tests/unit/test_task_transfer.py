@@ -8,12 +8,14 @@ def test_task_transfer_initialization():
     assert transfer.last_speed == 0.0
     assert isinstance(transfer.last_speed_bytes, float)
     assert transfer.last_speed_bytes == 0.0
+    assert transfer.total_down_size == 0
 
 def test_task_transfer_reset():
     transfer = TaskTransfer(
         down_bytes=1000,
         up_bytes=500,
         total_size=10000,
+        total_down_size=8000,
         last_speed=15.5,
         last_speed_bytes=15.5
     )
@@ -21,6 +23,7 @@ def test_task_transfer_reset():
     assert transfer.down_bytes == 0
     assert transfer.up_bytes == 0
     assert transfer.total_size == 0
+    assert transfer.total_down_size == 0
     assert transfer.last_speed == 0.0
 
 def test_task_transfer_percentage():

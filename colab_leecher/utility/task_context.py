@@ -68,6 +68,7 @@ class TaskTransfer:
     down_bytes: Any = field(default_factory=lambda: SmartBytes(0))
     up_bytes: Any = field(default_factory=lambda: SmartBytes(0))
     total_size: int = 0
+    total_down_size: int = 0
     sent_file: List = field(default_factory=list)
     sent_file_names: List[str] = field(default_factory=list)
     successful_downloads: List[dict] = field(default_factory=list)
@@ -79,6 +80,7 @@ class TaskTransfer:
         self.down_bytes = SmartBytes(0)
         self.up_bytes = SmartBytes(0)
         self.total_size = 0
+        self.total_down_size = 0
         self.sent_file = []
         self.sent_file_names = []
         self.successful_downloads = []
