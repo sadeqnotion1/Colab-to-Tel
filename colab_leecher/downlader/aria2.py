@@ -312,235 +312,263 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
     # Add the link as the final argument
     command.append(link)
     # --- End Command ---
+    # Exit codes that are safe to retry (transient network/connection failures).
+    # Permanent codes (3=404, 9=disk full, 24=auth, etc.) are not retried.
+    _RETRYABLE_CODES = {1, 29}
+    _MAX_RETRIES = 3
+
     proc = None
 
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        # Mask URL in logs for security
-        log_command = command.copy()
-        if len(log_command) > 0:
-            log_command[-1] = "REDACTED_URL"
-        log.debug(f"Aria2c process started (PID: {proc.pid}) with command: {' '.join(log_command)}")
-
-        # --- Async stream reader ---
-        async def log_stream(stream, stream_name):
-             while True:
-                 line_bytes = await stream.readline()
-                 if not line_bytes: break
-                 line = line_bytes.decode('utf-8', errors='ignore').strip()
-                 if line:
-                     log.debug(f"Aria2c {stream_name}: {line}")
-                     if stream_name == 'stdout':
-                          await on_output(line, display_name_for_status, task_ctx)
-                 await asyncio.sleep(0.05)
-
-        stdout_task = asyncio.create_task(log_stream(proc.stdout, 'stdout'))
-        stderr_task = asyncio.create_task(log_stream(proc.stderr, 'stderr'))
-
-        exit_code = await proc.wait()
-        await asyncio.gather(stdout_task, stderr_task)
-        log.debug(f"Aria2c process finished with exit code: {exit_code}")
-
-        # --- Success Check (with Added Diagnostics) ---
-        await asyncio.sleep(0.2) # Small delay
-
-        final_filepath_on_disk = os.path.join(_paths.down_path, expected_filename)
-        file_exists = os.path.exists(final_filepath_on_disk)
-        file_size = 0
-        if file_exists:
-             try: file_size = os.path.getsize(final_filepath_on_disk)
-             except OSError as size_err: log.error(f"Could not get size for existing file {final_filepath_on_disk}: {size_err}")
-
-        if exit_code == 0:
-            if file_exists and file_size > 0:
-                 log.info(f"Aria2c download complete. Found expected file: {final_filepath_on_disk} (Size: {file_size})")
-                 success = True
-            else:
-                 log.error(f"Aria2 success code 0 but check failed for: {final_filepath_on_disk}")
-                 log.warning(f"Details: File Exists? {file_exists}, File Size: {file_size}")
-                 if file_exists and file_size == 0:
-                      log.warning(f"Removing empty file: {final_filepath_on_disk}")
-                      try: os.remove(final_filepath_on_disk)
-                      except OSError as cl_err: log.warning(f"Failed cleanup empty aria2 file: {cl_err}")
-
-                 try:
-                      dir_contents = [name for name in os.listdir(_paths.down_path) if not name.endswith(".aria2")]
-                      log.warning(f"Contents of download directory ({_paths.down_path}): {dir_contents}") # DIAGNOSTIC LOG
-                 except Exception as list_err:
-                      log.warning(f"Could not list download directory contents: {list_err}")
-                      dir_contents = []
-
-                 if dir_contents:
-                      if len(dir_contents) == 1:
-                           resolved_name = dir_contents[0]
-                           resolved_path = os.path.join(_paths.down_path, resolved_name)
-                      else:
-                           resolved_name = expected_filename
-                           resolved_path = _paths.down_path
-
-                      resolved_size = getSize(resolved_path)
-                      if resolved_size > 0:
-                           log.warning(f"Expected file missing; using actual output '{resolved_name}' for link {num}.")
-                           expected_filename = resolved_name
-                           final_filepath_on_disk = resolved_path
-                           file_size = resolved_size
-                           success = True
-                      else:
-                           error_reason = f"Aria2 success code 0 but output invalid/empty: {expected_filename}"
-                           success = False
-                 else:
-                      error_reason = f"Aria2 success code 0 but expected output file invalid/missing/empty: {expected_filename}"
-                      success = False
-        else:
-            # Handle failure codes
-            if exit_code == 3: error_reason = "Aria2 Error: Resource Not Found (404?)"
-            elif exit_code == 9: error_reason = "Aria2 Error: Not enough disk space"
-            elif exit_code == 24: error_reason = "Aria2 Error: HTTP authorization failed (401/403?)"
-            elif exit_code == 29: error_reason = "Aria2 Error: Network/Connection Issue (Code 29)"
-            else: error_reason = f"Aria2 failed code {exit_code}"
-            log.error(f"Aria2c download failed for link index {num}. Reason: {error_reason}")
-            success = False
-            # Cleanup
-            if os.path.exists(final_filepath_on_disk):
-                 try: os.remove(final_filepath_on_disk)
-                 except OSError as cl_err: log.warning(f"Failed cleanup aria2 file: {cl_err}")
-
-    except asyncio.CancelledError:
-        log.warning(f"Aria2 download cancelled for link index {num}. Terminating subprocess...")
-        if proc and proc.returncode is None:
-            try:
-                proc.terminate() # Try terminate first
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=5.0)
-                except asyncio.TimeoutError:
-                    log.warning("Aria2 process ignored terminate, killing...")
-                    proc.kill()
-                    await proc.wait()
-            except Exception as kill_err:
-                 log.warning(f"Error terminating aria2c process: {kill_err}")
-        
-        # Cleanup partial file
-        if expected_filename:
-             cleanup_path = os.path.join(_paths.down_path, expected_filename)
-             if os.path.exists(cleanup_path):
-                 try: os.remove(cleanup_path)
-                 except OSError as cl_err: log.warning(f"Failed cleanup aria2 file after cancellation: {cl_err}")
-        
-        # Re-raise to ensure cancellation propagates
-        raise
-
-    except FileNotFoundError as fnf:
-        # aria2c executable not found - fall back to aiohttp
-        log.warning(f"aria2c executable not found. Falling back to aiohttp for link index {num}")
-        log.info(f"Installing aria2 is recommended for better download performance. Continuing with aiohttp...")
-
-        # Fall back to aiohttp download
-        import aiohttp
-        import time
-        from ..utility.helper import speedETA, sizeUnit, getTime, status_bar
+    for _attempt in range(1, _MAX_RETRIES + 1):
+        success = False
+        exit_code = -1
+        proc = None
 
         try:
-            file_path = os.path.join(_paths.down_path, expected_filename)
-            download_start_time = time.time()
-            _messages.status_head = f"<b>Downloading</b> <i>Link {str(num).zfill(2)}</i>\n\n<b>Name:</b> <code>{escape_html(display_name_for_status)}</code>\n"
+            proc = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            # Mask URL in logs for security
+            log_command = command.copy()
+            if len(log_command) > 0:
+                log_command[-1] = "REDACTED_URL"
+            log.debug(f"Aria2c process started (PID: {proc.pid}) with command: {' '.join(log_command)}")
 
-            timeout = aiohttp.ClientTimeout(total=None, connect=180, sock_read=600)
-            connector = aiohttp.TCPConnector(limit=10, limit_per_host=5, ttl_dns_cache=300)
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                "Accept": "*/*",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Connection": "keep-alive",
-                "Referer": link.split('?')[0] if '?' in link else link
-            }
+            # --- Async stream reader ---
+            async def log_stream(stream, stream_name):
+                 while True:
+                     line_bytes = await stream.readline()
+                     if not line_bytes: break
+                     line = line_bytes.decode('utf-8', errors='ignore').strip()
+                     if line:
+                         log.debug(f"Aria2c {stream_name}: {line}")
+                         if stream_name == 'stdout':
+                              await on_output(line, display_name_for_status, task_ctx)
+                     await asyncio.sleep(0.05)
 
-            # Add Cloudflare cookie and headers for NZBCloud downloads
-            if 'nzbcloud.com' in link.lower():
-                from .. import BOT
-                cf_clearance = BOT.Setting.nzb_cf_clearance
-                if cf_clearance:
-                    # Add cookie directly to request headers (most reliable method)
-                    headers['Cookie'] = f'cf_clearance={cf_clearance}'
-                    # Match browser headers exactly for Cloudflare
-                    headers['Referer'] = 'https://app.nzbcloud.com/'
-                    headers['Sec-Fetch-Dest'] = 'video'
-                    headers['Sec-Fetch-Mode'] = 'no-cors'
-                    headers['Sec-Fetch-Site'] = 'same-site'
-                    headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
-                    log.info(f"🍪 Using Cloudflare cookie for NZBCloud download")
+            stdout_task = asyncio.create_task(log_stream(proc.stdout, 'stdout'))
+            stderr_task = asyncio.create_task(log_stream(proc.stderr, 'stderr'))
 
-            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-                async with session.get(link, headers=headers, allow_redirects=True) as response:
-                    response.raise_for_status()
-                    total_size = int(response.headers.get('content-length', 0))
-                    log.info(f"🚀 aiohttp download started: {expected_filename} | Total size: {sizeUnit(total_size)}")
+            exit_code = await proc.wait()
+            await asyncio.gather(stdout_task, stderr_task)
+            log.debug(f"Aria2c process finished with exit code: {exit_code} (attempt {_attempt}/{_MAX_RETRIES})")
 
-                    downloaded_size = 0
-                    block_size = 1024 * 1024  # 1MB chunks
-                    last_update_call = 0
+            # --- Success Check (with Added Diagnostics) ---
+            await asyncio.sleep(0.2) # Small delay
 
-                    with open(file_path, "wb") as file:
-                        async for chunk in response.content.iter_chunked(block_size):
-                            if _task_error and _task_error.state:
-                                log.warning(f"Download cancelled for {expected_filename}")
-                                file.close()
-                                if os.path.exists(file_path): os.remove(file_path)
-                                error_reason = "Cancelled by User/Error"
-                                success = False
-                                break
+            final_filepath_on_disk = os.path.join(_paths.down_path, expected_filename)
+            file_exists = os.path.exists(final_filepath_on_disk)
+            file_size = 0
+            if file_exists:
+                 try: file_size = os.path.getsize(final_filepath_on_disk)
+                 except OSError as size_err: log.error(f"Could not get size for existing file {final_filepath_on_disk}: {size_err}")
 
-                            if chunk:
-                                file.write(chunk)
-                                downloaded_size += len(chunk)
-                                now = time.time()
+            if exit_code == 0:
+                if file_exists and file_size > 0:
+                     log.info(f"Aria2c download complete. Found expected file: {final_filepath_on_disk} (Size: {file_size})")
+                     success = True
+                else:
+                     log.error(f"Aria2 success code 0 but check failed for: {final_filepath_on_disk}")
+                     log.warning(f"Details: File Exists? {file_exists}, File Size: {file_size}")
+                     if file_exists and file_size == 0:
+                          log.warning(f"Removing empty file: {final_filepath_on_disk}")
+                          try: os.remove(final_filepath_on_disk)
+                          except OSError as cl_err: log.warning(f"Failed cleanup empty aria2 file: {cl_err}")
 
-                                # Update status periodically
-                                if now - last_update_call > 2:
-                                    last_update_call = now
-                                    if total_size > 0:
-                                        speed_string, eta, percentage = speedETA(download_start_time, downloaded_size, total_size)
-                                        log.info(f"📥 aiohttp progress: {sizeUnit(downloaded_size)}/{sizeUnit(total_size)} ({percentage:.1f}%) | {speed_string} | ETA: {getTime(eta)}")
-                                        await status_bar(_messages.status_head, speed_string, percentage, getTime(eta),
-                                                       sizeUnit(downloaded_size), sizeUnit(total_size), "aiohttp 🌐", task_ctx=task_ctx)
-                                        # Update parallel dashboard if task is in queue
-                                        if task_ctx:
-                                            from ..utility.task_dashboard import try_update_summary
-                                            await try_update_summary()
-                        else:
-                            # Download completed successfully
-                            log.info(f"aiohttp download complete: {expected_filename} ({sizeUnit(downloaded_size)})")
-                            success = True
-                            file_size = downloaded_size
+                     try:
+                          dir_contents = [name for name in os.listdir(_paths.down_path) if not name.endswith(".aria2")]
+                          log.warning(f"Contents of download directory ({_paths.down_path}): {dir_contents}") # DIAGNOSTIC LOG
+                     except Exception as list_err:
+                          log.warning(f"Could not list download directory contents: {list_err}")
+                          dir_contents = []
 
-        except Exception as aiohttp_err:
-            error_reason = f"aiohttp fallback error: {str(aiohttp_err)[:100]}"
-            log.error(f"aiohttp fallback failed for link index {num}: {aiohttp_err}")
-            success = False
-            if os.path.exists(file_path):
+                     if dir_contents:
+                          if len(dir_contents) == 1:
+                               resolved_name = dir_contents[0]
+                               resolved_path = os.path.join(_paths.down_path, resolved_name)
+                          else:
+                               resolved_name = expected_filename
+                               resolved_path = _paths.down_path
+
+                          resolved_size = getSize(resolved_path)
+                          if resolved_size > 0:
+                               log.warning(f"Expected file missing; using actual output '{resolved_name}' for link {num}.")
+                               expected_filename = resolved_name
+                               final_filepath_on_disk = resolved_path
+                               file_size = resolved_size
+                               success = True
+                          else:
+                               error_reason = f"Aria2 success code 0 but output invalid/empty: {expected_filename}"
+                               success = False
+                     else:
+                          error_reason = f"Aria2 success code 0 but expected output file invalid/missing/empty: {expected_filename}"
+                          success = False
+            else:
+                # Determine error reason for this exit code
+                if exit_code == 3:   error_reason = "Aria2 Error: Resource Not Found (404?)"
+                elif exit_code == 9: error_reason = "Aria2 Error: Not enough disk space"
+                elif exit_code == 24: error_reason = "Aria2 Error: HTTP authorization failed (401/403?)"
+                elif exit_code == 29: error_reason = "Aria2 Error: Network/Connection Issue (Code 29)"
+                else:                error_reason = f"Aria2 failed code {exit_code}"
+
+                # Retry transient codes if attempts remain
+                if exit_code in _RETRYABLE_CODES and _attempt < _MAX_RETRIES:
+                    _wait = 3 ** _attempt  # 3 s, 9 s
+                    log.warning(
+                        f"Aria2c transient failure (code {exit_code}) on attempt {_attempt}/{_MAX_RETRIES} "
+                        f"for link index {num}. Retrying in {_wait}s…"
+                    )
+                    # Cleanup any partial output before retry
+                    if os.path.exists(final_filepath_on_disk):
+                        try: os.remove(final_filepath_on_disk)
+                        except OSError as cl_err: log.warning(f"Failed cleanup aria2 file before retry: {cl_err}")
+                    await asyncio.sleep(_wait)
+                    continue  # next attempt
+                else:
+                    log.error(f"Aria2c download failed for link index {num}. Reason: {error_reason}")
+                    success = False
+                    # Cleanup
+                    if os.path.exists(final_filepath_on_disk):
+                         try: os.remove(final_filepath_on_disk)
+                         except OSError as cl_err: log.warning(f"Failed cleanup aria2 file: {cl_err}")
+
+        except asyncio.CancelledError:
+            log.warning(f"Aria2 download cancelled for link index {num}. Terminating subprocess...")
+            if proc and proc.returncode is None:
                 try:
-                    os.remove(file_path)
-                except OSError as remove_err:
-                    log.warning(f"Failed to remove fallback file {file_path}: {remove_err}")
+                    proc.terminate() # Try terminate first
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        log.warning("Aria2 process ignored terminate, killing...")
+                        proc.kill()
+                        await proc.wait()
+                except Exception as kill_err:
+                     log.warning(f"Error terminating aria2c process: {kill_err}")
 
-    except Exception as e:
-        # Handle other general exceptions
-        error_reason = f"Aria2 Process Error: {str(e)[:100]}"
-        log.error(f"Error running Aria2c process for link index {num}: {e}", exc_info=True)
-        if proc and proc.returncode is None:
-            try: proc.kill(); await proc.wait()
-            except Exception as kill_err: log.warning(f"Error killing aria2c process: {kill_err}")
-        success = False
-        # Cleanup
-        if expected_filename:
-             cleanup_path = os.path.join(_paths.down_path, expected_filename)
-             if os.path.exists(cleanup_path):
-                 try: os.remove(cleanup_path)
-                 except OSError as cl_err: log.warning(f"Failed cleanup aria2 file after exception: {cl_err}")
+            # Cleanup partial file
+            if expected_filename:
+                 cleanup_path = os.path.join(_paths.down_path, expected_filename)
+                 if os.path.exists(cleanup_path):
+                     try: os.remove(cleanup_path)
+                     except OSError as cl_err: log.warning(f"Failed cleanup aria2 file after cancellation: {cl_err}")
+
+            # Re-raise to ensure cancellation propagates
+            raise
+
+        except FileNotFoundError as fnf:
+            # aria2c executable not found - fall back to aiohttp
+            log.warning(f"aria2c executable not found. Falling back to aiohttp for link index {num}")
+            log.info(f"Installing aria2 is recommended for better download performance. Continuing with aiohttp...")
+
+            # Fall back to aiohttp download
+            import aiohttp
+            import time
+            from ..utility.helper import speedETA, sizeUnit, getTime, status_bar
+
+            try:
+                file_path = os.path.join(_paths.down_path, expected_filename)
+                download_start_time = time.time()
+                _messages.status_head = f"<b>Downloading</b> <i>Link {str(num).zfill(2)}</i>\n\n<b>Name:</b> <code>{escape_html(display_name_for_status)}</code>\n"
+
+                timeout = aiohttp.ClientTimeout(total=None, connect=180, sock_read=600)
+                connector = aiohttp.TCPConnector(limit=10, limit_per_host=5, ttl_dns_cache=300)
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    "Accept": "*/*",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Connection": "keep-alive",
+                    "Referer": link.split('?')[0] if '?' in link else link
+                }
+
+                # Add Cloudflare cookie and headers for NZBCloud downloads
+                if 'nzbcloud.com' in link.lower():
+                    from .. import BOT
+                    cf_clearance = BOT.Setting.nzb_cf_clearance
+                    if cf_clearance:
+                        # Add cookie directly to request headers (most reliable method)
+                        headers['Cookie'] = f'cf_clearance={cf_clearance}'
+                        # Match browser headers exactly for Cloudflare
+                        headers['Referer'] = 'https://app.nzbcloud.com/'
+                        headers['Sec-Fetch-Dest'] = 'video'
+                        headers['Sec-Fetch-Mode'] = 'no-cors'
+                        headers['Sec-Fetch-Site'] = 'same-site'
+                        headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+                        log.info(f"🍪 Using Cloudflare cookie for NZBCloud download")
+
+                async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                    async with session.get(link, headers=headers, allow_redirects=True) as response:
+                        response.raise_for_status()
+                        total_size = int(response.headers.get('content-length', 0))
+                        log.info(f"🚀 aiohttp download started: {expected_filename} | Total size: {sizeUnit(total_size)}")
+
+                        downloaded_size = 0
+                        block_size = 1024 * 1024  # 1MB chunks
+                        last_update_call = 0
+
+                        with open(file_path, "wb") as file:
+                            async for chunk in response.content.iter_chunked(block_size):
+                                if _task_error and _task_error.state:
+                                    log.warning(f"Download cancelled for {expected_filename}")
+                                    file.close()
+                                    if os.path.exists(file_path): os.remove(file_path)
+                                    error_reason = "Cancelled by User/Error"
+                                    success = False
+                                    break
+
+                                if chunk:
+                                    file.write(chunk)
+                                    downloaded_size += len(chunk)
+                                    now = time.time()
+
+                                    # Update status periodically
+                                    if now - last_update_call > 2:
+                                        last_update_call = now
+                                        if total_size > 0:
+                                            speed_string, eta, percentage = speedETA(download_start_time, downloaded_size, total_size)
+                                            log.info(f"📥 aiohttp progress: {sizeUnit(downloaded_size)}/{sizeUnit(total_size)} ({percentage:.1f}%) | {speed_string} | ETA: {getTime(eta)}")
+                                            await status_bar(_messages.status_head, speed_string, percentage, getTime(eta),
+                                                           sizeUnit(downloaded_size), sizeUnit(total_size), "aiohttp 🌐", task_ctx=task_ctx)
+                                            # Update parallel dashboard if task is in queue
+                                            if task_ctx:
+                                                from ..utility.task_dashboard import try_update_summary
+                                                await try_update_summary()
+                            else:
+                                # Download completed successfully
+                                log.info(f"aiohttp download complete: {expected_filename} ({sizeUnit(downloaded_size)})")
+                                success = True
+                                file_size = downloaded_size
+
+            except Exception as aiohttp_err:
+                error_reason = f"aiohttp fallback error: {str(aiohttp_err)[:100]}"
+                log.error(f"aiohttp fallback failed for link index {num}: {aiohttp_err}")
+                success = False
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except OSError as remove_err:
+                        log.warning(f"Failed to remove fallback file {file_path}: {remove_err}")
+
+        except Exception as e:
+            # Handle other general exceptions
+            error_reason = f"Aria2 Process Error: {str(e)[:100]}"
+            log.error(f"Error running Aria2c process for link index {num}: {e}", exc_info=True)
+            if proc and proc.returncode is None:
+                try: proc.kill(); await proc.wait()
+                except Exception as kill_err: log.warning(f"Error killing aria2c process: {kill_err}")
+            success = False
+            # Cleanup
+            if expected_filename:
+                 cleanup_path = os.path.join(_paths.down_path, expected_filename)
+                 if os.path.exists(cleanup_path):
+                     try: os.remove(cleanup_path)
+                     except OSError as cl_err: log.warning(f"Failed cleanup aria2 file after exception: {cl_err}")
+
+        # Reached here: either success or permanent failure — exit retry loop
+        break
 
     # Report status using the filename derived from URL
     if success and expected_filename:
@@ -556,3 +584,4 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
 
     return success
 # ----- END OF FINAL FINAL REVISED FUNCTION -----
+

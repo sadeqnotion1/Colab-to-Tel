@@ -33,8 +33,8 @@ from .gdrive import (
 log = logging.getLogger(__name__)
 
 async def http_download_logic(url: str, file_path: str, display_name: str, headers: dict, cookies: dict, link_num: int, total_links: int, task_ctx: TaskContext = None) -> bool:
-    """Downloads a file via HTTP/S, tracks success/failure, and updates status."""
-    global BotTimes, Messages, MSG, TRANSFER, TaskError, Paths, log 
+    """Downloads a file via HTTP/S with exponential-backoff retry on transient network errors."""
+    global BotTimes, Messages, MSG, TRANSFER, TaskError, Paths, log
 
     if task_ctx:
         _bot_times = task_ctx.bot_times
@@ -49,73 +49,111 @@ async def http_download_logic(url: str, file_path: str, display_name: str, heade
         _task_error = TaskError
         _paths = Paths
 
+    # Transient errors that are safe to retry; permanent errors fail immediately.
+    _TRANSIENT = (aiohttp.ClientConnectionError, asyncio.TimeoutError, aiohttp.ServerDisconnectedError)
+    _MAX_RETRIES = 3
+
     download_start_time = time.time()
     padding = len(str(total_links))
     status_header = f"<b>Downloading</b> <i>Link {str(link_num).zfill(padding)}/{str(total_links).zfill(padding)}</i>\n\n<b>Name:</b> <code>{display_name}</code>\n"
-    _messages.status_head = status_header 
+    _messages.status_head = status_header
 
-    try:
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    error_reason = "Unknown Error"
 
-        # Use aiohttp for non-blocking async HTTP requests
-        timeout = aiohttp.ClientTimeout(total=None, connect=180, sock_read=600)
-        connector = aiohttp.TCPConnector(limit=10, limit_per_host=5, ttl_dns_cache=300)
-        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-            async with session.get(url, headers=headers, cookies=cookies, allow_redirects=True) as response:
-                response.raise_for_status() 
-                total_size = int(response.headers.get('content-length', 0))
+    for attempt in range(1, _MAX_RETRIES + 1):
+        # Respect cancellation before each attempt.
+        if (_task_error and _task_error.state) or (task_ctx and task_ctx.cancel_event.is_set()):
+            log.warning(f"Download cancelled before attempt {attempt} for {display_name}")
+            failed_info = {"link": url, "index": link_num, "reason": "Cancelled by User/Error"}
+            if _task_error: _task_error.failed_links.append(failed_info)
+            return False
 
-                downloaded_size = 0
-                block_size = 1024 * 1024 
-                last_update_call = 0
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
-                with open(file_path, "wb") as file:
-                    async for chunk in response.content.iter_chunked(block_size):
-                        if (_task_error and _task_error.state) or (task_ctx and task_ctx.cancel_event.is_set()):
-                            log.warning(f"Download cancelled externally/actively for {display_name}")
-                            try:
-                               file.close()
-                               if os.path.exists(file_path): os.remove(file_path)
-                            except Exception as cleanup_err: log.warning(f"Could not cleanup incomplete file {file_path} on cancel: {cleanup_err}")
-                            failed_info = {"link": url, "index": link_num, "reason": "Cancelled by User/Error"}
-                            _task_error.failed_links.append(failed_info)
-                            return False 
+            timeout = aiohttp.ClientTimeout(total=None, connect=180, sock_read=600)
+            connector = aiohttp.TCPConnector(limit=10, limit_per_host=5, ttl_dns_cache=300)
+            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                async with session.get(url, headers=headers, cookies=cookies, allow_redirects=True) as response:
+                    response.raise_for_status()
+                    total_size = int(response.headers.get('content-length', 0))
 
-                        if chunk:
-                            file.write(chunk)
-                            downloaded_size += len(chunk)
-                            now = time.time()
-                            if now - last_update_call > 2:
-                                last_update_call = now
-                                current_total_downloaded = sum(_transfer.down_bytes) + downloaded_size
-                                approx_total_project_size = _transfer.total_down_size if _transfer.total_down_size > 0 else sum(_transfer.down_bytes) + total_size if total_size > 0 else sum(_transfer.down_bytes)
+                    downloaded_size = 0
+                    block_size = 1024 * 1024
+                    last_update_call = 0
 
-                                if total_size > 0 :
-                                    speed_string, eta, percentage = speedETA(download_start_time, downloaded_size, total_size)
-                                    await status_bar(_messages.status_head, speed_string, percentage, getTime(eta), sizeUnit(current_total_downloaded), sizeUnit(approx_total_project_size), engine="aiohttp 🌐", task_ctx=task_ctx)
-                                else: 
-                                    speed = downloaded_size / (now - download_start_time) if (now - download_start_time) > 0 else 0
-                                    await status_bar(_messages.status_head, f"{sizeUnit(speed)}/s", 0, "N/A", sizeUnit(current_total_downloaded), "Unknown", engine="aiohttp 🌐", task_ctx=task_ctx)
+                    with open(file_path, "wb") as file:
+                        async for chunk in response.content.iter_chunked(block_size):
+                            if (_task_error and _task_error.state) or (task_ctx and task_ctx.cancel_event.is_set()):
+                                log.warning(f"Download cancelled mid-stream for {display_name}")
+                                try:
+                                    file.close()
+                                    if os.path.exists(file_path): os.remove(file_path)
+                                except Exception as cleanup_err:
+                                    log.warning(f"Could not cleanup incomplete file {file_path} on cancel: {cleanup_err}")
+                                failed_info = {"link": url, "index": link_num, "reason": "Cancelled by User/Error"}
+                                _task_error.failed_links.append(failed_info)
+                                return False
 
-                log.info(f"Download complete: {display_name}")
-                _transfer.down_bytes.append(downloaded_size)
-                _transfer.successful_downloads.append({'url': url, 'filename': display_name})
-                return True 
+                            if chunk:
+                                file.write(chunk)
+                                downloaded_size += len(chunk)
+                                now = time.time()
+                                if now - last_update_call > 2:
+                                    last_update_call = now
+                                    current_total_downloaded = sum(_transfer.down_bytes) + downloaded_size
+                                    approx_total_project_size = _transfer.total_down_size if _transfer.total_down_size > 0 else sum(_transfer.down_bytes) + total_size if total_size > 0 else sum(_transfer.down_bytes)
 
-    except asyncio.TimeoutError: error_reason = "Timeout"
-    except aiohttp.ClientConnectionError: error_reason = "Connection Error"
-    except aiohttp.ClientResponseError as http_err: error_reason = f"HTTP Error: {http_err.status} {http_err.message}"
-    except aiohttp.ClientError as client_err: error_reason = f"Client Error: {str(client_err)[:100]}"
-    except Exception as e: error_reason = f"Unexpected Error: {str(e)[:100]}"; log.error(f"Unexpected error downloading {display_name} (Link {link_num}): {e}", exc_info=True)
+                                    if total_size > 0:
+                                        speed_string, eta, percentage = speedETA(download_start_time, downloaded_size, total_size)
+                                        await status_bar(_messages.status_head, speed_string, percentage, getTime(eta), sizeUnit(current_total_downloaded), sizeUnit(approx_total_project_size), engine="aiohttp 🌐", task_ctx=task_ctx)
+                                    else:
+                                        speed = downloaded_size / (now - download_start_time) if (now - download_start_time) > 0 else 0
+                                        await status_bar(_messages.status_head, f"{sizeUnit(speed)}/s", 0, "N/A", sizeUnit(current_total_downloaded), "Unknown", engine="aiohttp 🌐", task_ctx=task_ctx)
 
-    log.error(f"Download failed for {display_name} (Link {link_num}): {error_reason}")
+            log.info(f"Download complete: {display_name}")
+            _transfer.down_bytes.append(downloaded_size)
+            _transfer.successful_downloads.append({'url': url, 'filename': display_name})
+            return True
+
+        except _TRANSIENT as transient_err:
+            error_reason = f"{type(transient_err).__name__}: {str(transient_err)[:80]}"
+            if attempt < _MAX_RETRIES:
+                wait = 2 ** attempt  # 2 s, 4 s
+                log.warning(
+                    f"Transient network error on attempt {attempt}/{_MAX_RETRIES} for {display_name}: "
+                    f"{error_reason}. Retrying in {wait}s…"
+                )
+                # Remove partial file before retry
+                try:
+                    if os.path.exists(file_path): os.remove(file_path)
+                except OSError: pass
+                await asyncio.sleep(wait)
+                continue  # next attempt
+            else:
+                error_reason = f"{type(transient_err).__name__} after {_MAX_RETRIES} attempts"
+                log.error(f"Download permanently failed for {display_name} (Link {link_num}): {error_reason}")
+
+        except aiohttp.ClientResponseError as http_err:
+            error_reason = f"HTTP Error: {http_err.status} {http_err.message}"
+            log.error(f"Download failed for {display_name} (Link {link_num}): {error_reason}")
+        except aiohttp.ClientError as client_err:
+            error_reason = f"Client Error: {str(client_err)[:100]}"
+            log.error(f"Download failed for {display_name} (Link {link_num}): {error_reason}")
+        except Exception as e:
+            error_reason = f"Unexpected Error: {str(e)[:100]}"
+            log.error(f"Unexpected error downloading {display_name} (Link {link_num}): {e}", exc_info=True)
+
+        # Permanent failure — exit retry loop
+        break
+
     failed_info = {"link": url, "filename": display_name, "index": link_num, "reason": error_reason}
     if _task_error: _task_error.failed_links.append(failed_info)
     try:
-        if 'file' in locals() and not file.closed: file.close()
         if os.path.exists(file_path): os.remove(file_path)
-    except Exception as cleanup_err: log.warning(f"Could not cleanup failed download file {file_path}: {cleanup_err}")
-    return False 
+    except Exception as cleanup_err:
+        log.warning(f"Could not cleanup failed download file {file_path}: {cleanup_err}")
+    return False
 
 
 def is_downloadly(url: str) -> bool:
