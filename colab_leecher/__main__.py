@@ -2209,25 +2209,7 @@ async def handle_url(client: Client, message: Message):
                 if gist_lines:
                     first_line = gist_lines[0].strip().upper()
                     
-                    # Detection 1: Mindvalley (TITLE=)
-                    if first_line.startswith("TITLE="):
-                        log.info(f"Auto-detected Mindvalley mode for gist: {input_text}")
-                        await _update_setup_session(user_id, mode="leech", service_type="mindvalley")
-                        await _set_mindvalley_waiting(user_id, True)
-                        raise ContinuePropagation
-                    
-                    # Detection 2: TikTok Bulk (tiktok.com)
-                    if "TIKTOK.COM" in first_line:
-                        log.info(f"Auto-detected TikTokBulk mode for gist: {input_text}")
-                        # Setup TikTok task context as if /tiktokbulk was run
-                        task_ctx = create_task_context(user_id, message.chat.id, mode="leech")
-                        task_ctx.service_type = "tiktokbulk"
-                        async with user_tasks_lock:
-                            user_tasks[user_id] = task_ctx
-                        # Re-call handle_url which will now catch the task_ctx at the top
-                        return await handle_url(client, message)
-
-                    # Detection 3: Session Capture (DOWNLOAD_TYPE=SESSION-CAPTURE)
+                    # Detection 1: Session Capture (DOWNLOAD_TYPE=SESSION-CAPTURE)
                     is_session_capture = False
                     for line in gist_lines[:5]:
                         line_upper = line.strip().upper()
@@ -2296,6 +2278,24 @@ async def handle_url(client: Client, message: Message):
                         _attach_task_exception_handler(async_task, task_ctx)
                         
                         raise ContinuePropagation
+
+                    # Detection 2: Mindvalley (TITLE=)
+                    elif first_line.startswith("TITLE="):
+                        log.info(f"Auto-detected Mindvalley mode for gist: {input_text}")
+                        await _update_setup_session(user_id, mode="leech", service_type="mindvalley")
+                        await _set_mindvalley_waiting(user_id, True)
+                        raise ContinuePropagation
+                    
+                    # Detection 3: TikTok Bulk (tiktok.com)
+                    elif "TIKTOK.COM" in first_line:
+                        log.info(f"Auto-detected TikTokBulk mode for gist: {input_text}")
+                        # Setup TikTok task context as if /tiktokbulk was run
+                        task_ctx = create_task_context(user_id, message.chat.id, mode="leech")
+                        task_ctx.service_type = "tiktokbulk"
+                        async with user_tasks_lock:
+                            user_tasks[user_id] = task_ctx
+                        # Re-call handle_url which will now catch the task_ctx at the top
+                        return await handle_url(client, message)
             except ContinuePropagation:
                 raise
             except Exception as e:
