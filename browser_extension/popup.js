@@ -294,7 +294,7 @@ async function checkCapturedSession() {
       bannerTitle.textContent = session.title || 'Direct Video Link';
       banner.style.display = 'flex';
 
-      document.getElementById('btn-use-captured').addEventListener('click', () => {
+      document.getElementById('btn-use-captured').addEventListener('click', async () => {
         // Populate inputs with captured session details
         document.getElementById('download-url').value = session.url;
         document.getElementById('referer-url').value = session.referer;
@@ -312,7 +312,13 @@ async function checkCapturedSession() {
           });
           document.getElementById('cookies-preview').textContent = cookieLines.join(';\n');
         } else {
-          document.getElementById('cookies-preview').textContent = 'No cookies were captured for this download.';
+          // If no session cookies were captured, query active cookies for referer domain
+          if (session.referer && session.referer.toLowerCase().startsWith('http')) {
+            document.getElementById('cookies-preview').textContent = '🔄 Fetching premium cookies from Referer domain...';
+            await fetchCookiesForUrl(session.referer);
+          } else {
+            document.getElementById('cookies-preview').textContent = 'No cookies were captured for this download.';
+          }
         }
 
         // Hide banner

@@ -71,15 +71,24 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   // Clean up title
   title = title.replace(/[^a-zA-Z0-9._-]/g, '_');
 
-  // Fetch cookies for the target download domain URL
+  // Fetch cookies for the target download domain and the referer domain (where premium session is logged in)
   let cookieStr = '';
   try {
-    const cookies = await chrome.cookies.getAll({ url: downloadUrl });
+    let cookies = await chrome.cookies.getAll({ url: downloadUrl });
+    if (refererUrl && refererUrl.toLowerCase().startsWith('http')) {
+      const refCookies = await chrome.cookies.getAll({ url: refererUrl });
+      if (refCookies && refCookies.length > 0) {
+        const cookieMap = new Map();
+        cookies.forEach(c => cookieMap.set(c.name, c.value));
+        refCookies.forEach(c => cookieMap.set(c.name, c.value));
+        cookies = Array.from(cookieMap.entries()).map(([name, value]) => ({ name, value }));
+      }
+    }
     if (cookies && cookies.length > 0) {
       cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
     }
   } catch (error) {
-    console.error('Failed to get cookies for download URL:', error);
+    console.error('Failed to get cookies for download session:', error);
   }
 
   // Create captured session object
