@@ -1,295 +1,53 @@
-Based on the error logs you provided, there are three distinct issues occurring in the bot:
+To answer your question directly: **No, it is not better to use the temporary zip file's size compared to the original file size for the progress percentage.** Here is why reading the `7z` output directly is much better:
 
-1. **`TypeError: unsupported operand type(s) for +=: 'int' and 'list'`:**
-The TikTok bulk downloader assigns a `list` to `task_ctx.transfer.down_bytes` (and `up_bytes`), but the cleanup function inside `TaskQueue.remove_task()` expects it to be an `int`, causing the bot to crash during task cancellation.
-2. **"Session stopped" when changing dashboard pages:**
-Pyrogram isn't actually crashing. When `move_to_bottom=True` is triggered, the bot deletes the dashboard and sends a brand-new photo. Pyrogram opens a separate temporary connection to upload media (DC4 media IPv4) and immediately disconnects it when done. However, because it's re-uploading the photo on every single page turn, it makes the dashboard extremely slow to react and spams your logs. We can fix this by setting `move_to_bottom=False` when paging.
-3. **7z stuck at 0% (Throttling bug):**
-The 7z archiver's percentage progresses very rapidly (`1%`, `2%`, etc.), which means the `percentage > last_reported_pct` condition fires constantly. It sends dozens of updates per second to `status_bar`, causing `status_bar` to aggressively throttle them all (except the 0% one) because `force_update=False`. We need to use a strict time-based throttle inside the 7z loop and enforce the update.
+1. **Unpredictable Compression Ratios:** Archiving usually compresses files. If you are compressing a 10 GB file and it compresses down to 4 GB, comparing the output size to the input size means your progress bar would slowly tick up to `40%` and then suddenly jump to `100%` when the task finishes. It would never reflect the actual progress accurately.
+2. **Accurate Input Processing:** The percentage that `7z` natively reports (via the `-bsp1` flag) is based on **how many bytes of the input file it has processed**. This gives you a smooth, linear, and mathematically accurate progress bar, regardless of how much the data is being compressed.
 
-Here are the fixes for these files:
+---
 
-### 1. Fix the TaskContext crash
+### ⚠️ I found the exact reason your upload failed in the logs
 
-`colab_leecher/utility/task_context.py`
+While reviewing your logs, I noticed exactly why the `UEL...` file failed to upload, and it's actually due to a bug in your code, not a Telegram API issue.
+
+Look at this part of your error log:
 
 ```python
-<<<<
-                # Track data volume strictly as integers (no lists or isinstance checks)
-                self.metrics.total_bytes_downloaded += task_ctx.transfer.down_bytes
-                self.metrics.total_bytes_uploaded += task_ctx.transfer.up_bytes
-====
-                # Track data volume (safely handle lists if TikTok bulk downloader set them)
-                down_b = sum(task_ctx.transfer.down_bytes) if isinstance(task_ctx.transfer.down_bytes, list) else task_ctx.transfer.down_bytes
-                up_b = sum(task_ctx.transfer.up_bytes) if isinstance(task_ctx.transfer.up_bytes, list) else task_ctx.transfer.up_bytes
-                self.metrics.total_bytes_downloaded += down_b
-                self.metrics.total_bytes_uploaded += up_b
->>>>
+2026-05-24 07:01:19,967 - pyrogram.methods.advanced.save_file - ERROR - 'int' object is not iterable
+Traceback (most recent call last):
+  ...
+  File "/content/Colab-to-Tel/colab_leecher/uploader/telegram.py", line 219, in up_progress
+    transfer_obj.up_bytes += delta
+TypeError: 'int' object is not iterable
 
 ```
 
-### 2. Fix the Dashboard pagination delay/re-upload
+This error happens in your progress callback. When the progress callback crashes, Pyrogram's file-uploading chunk process (`save_file`) abruptly halts. It then passes an empty file object down the line, which results in the final crash you see: `AttributeError: 'NoneType' object has no attribute 'write'`.
 
-`colab_leecher/utility/task_dashboard.py`
+**Why did `transfer_obj.up_bytes += delta` throw that error?**
+If the `Transfer` class fails to import, your code falls back to a dummy class in `variables.py`. Look at lines 152-154 in `variables.py`:
 
 ```python
-<<<<
-async def force_update_summary(client=None, page: Optional[int] = None):
-    """
-    Force update summary dashboard with tracked debounce logic.
-    Ensures bursts of task updates (e.g., bulk cancellations or fast downloads)
-    don't slam the Telegram API with redundant move_to_bottom API calls.
-    """
-    global _scheduled_update_task, _last_force_time
-
-    now = time.time()
-    time_since_last = now - _last_force_time
-
-    # If it's been more than 2 seconds since the last forced update, push immediately
-    if time_since_last >= 2.0:
-        _last_force_time = now
-        
-        # If there happens to be a pending delayed update, safely cancel it
-        if _scheduled_update_task and not _scheduled_update_task.done():
-            _scheduled_update_task.cancel()
-            
-        await update_summary_dashboard(client, force=True, move_to_bottom=True, page=page)
-        
-    else:
-        # Debouncing: If we are already waiting to push a delayed update, don't queue another
-        if _scheduled_update_task and not _scheduled_update_task.done():
-            return
-            
-        async def delayed_update():
-            try:
-                # Wait for the remainder of the throttle window to allow the burst to settle
-                await asyncio.sleep(2.0 - time_since_last)
-                global _last_force_time
-                _last_force_time = time.time()
-                
-                await update_summary_dashboard(client, force=True, move_to_bottom=True, page=page)
-            except asyncio.CancelledError:
-                pass  # Task was interrupted by a new immediate update, safely exit
-            except Exception as e:
-                log.error(f"Debounced background update failed: {e}")
-
-        # Track the delayed task in the master system to prevent orphaned memory leaks
-        _scheduled_update_task = TASK_QUEUE.create_background_task(
-            delayed_update(), 
-            "debounced_dashboard_update"
-        )
-====
-async def force_update_summary(client=None, page: Optional[int] = None, move_to_bottom: bool = True):
-    """
-    Force update summary dashboard with tracked debounce logic.
-    Ensures bursts of task updates (e.g., bulk cancellations or fast downloads)
-    don't slam the Telegram API with redundant move_to_bottom API calls.
-    """
-    global _scheduled_update_task, _last_force_time
-
-    now = time.time()
-    time_since_last = now - _last_force_time
-
-    # If it's been more than 2 seconds since the last forced update, push immediately
-    if time_since_last >= 2.0:
-        _last_force_time = now
-        
-        # If there happens to be a pending delayed update, safely cancel it
-        if _scheduled_update_task and not _scheduled_update_task.done():
-            _scheduled_update_task.cancel()
-            
-        await update_summary_dashboard(client, force=True, move_to_bottom=move_to_bottom, page=page)
-        
-    else:
-        # Debouncing: If we are already waiting to push a delayed update, don't queue another
-        if _scheduled_update_task and not _scheduled_update_task.done():
-            return
-            
-        async def delayed_update():
-            try:
-                # Wait for the remainder of the throttle window to allow the burst to settle
-                await asyncio.sleep(2.0 - time_since_last)
-                global _last_force_time
-                _last_force_time = time.time()
-                
-                await update_summary_dashboard(client, force=True, move_to_bottom=move_to_bottom, page=page)
-            except asyncio.CancelledError:
-                pass  # Task was interrupted by a new immediate update, safely exit
-            except Exception as e:
-                log.error(f"Debounced background update failed: {e}")
-
-        # Track the delayed task in the master system to prevent orphaned memory leaks
-        _scheduled_update_task = TASK_QUEUE.create_background_task(
-            delayed_update(), 
-            "debounced_dashboard_update"
-        )
->>>>
+    class _DummyTransfer:
+        down_bytes = [0]
+        up_bytes = [0]  # <--- HERE IS THE BUG
 
 ```
 
-### 3. Update the button handler to use the new dashboard parameter
+Because `up_bytes` is defined as a **list** (`[0]`), when your code in `telegram.py` tries to add `delta` (which is an `int`) using `+=`, Python throws a `TypeError` because you cannot add an integer directly to a list using `+=`.
 
-`colab_leecher/__main__.py`
+### **How to fix it:**
+
+Simply go to `colab_leecher/utility/variables.py` and fix the `_DummyTransfer` fallback class to use integers instead of lists:
 
 ```python
-<<<<
-            try:
-                page_num = None
-                if ":" in query_data:
-                    page_num = int(query_data.split(":")[1])
-                
-                if query_data.startswith("dash_refresh"):
-                    await callback_query.answer("Refreshing Dashboard... 🔄")
-                else:
-                    await callback_query.answer()
-                
-                await force_update_summary(client, page=page_num)
-            except Exception as e:
-                log.error(f"Dashboard update error: {e}")
-            return
-====
-            try:
-                page_num = None
-                if ":" in query_data:
-                    page_num = int(query_data.split(":")[1])
-                
-                if query_data.startswith("dash_refresh"):
-                    await callback_query.answer("Refreshing Dashboard... 🔄")
-                else:
-                    await callback_query.answer()
-                
-                # Use move_to_bottom=False to prevent photo re-uploading and session disconnects
-                await force_update_summary(client, page=page_num, move_to_bottom=False)
-            except Exception as e:
-                log.error(f"Dashboard update error: {e}")
-            return
->>>>
+    class _DummyTransfer:
+        down_bytes = 0    # Changed from [0] to 0
+        up_bytes = 0      # Changed from [0] to 0
+        total_down_size = 0
+        sent_file = []
+        sent_file_names = []
+        def reset(self): pass
 
 ```
 
-### 4. Fix 7z updating loop
-
-`colab_leecher/utility/converters.py`
-
-```python
-<<<<
-                                    # Increased update frequency (1.5s instead of 2.5s) for a more "fluid" feel
-                                    if (percentage > last_reported_pct or (
-                                            current_time - last_update_time).total_seconds() >= 1.5):
-
-                                        # Update throttle variables
-                                        last_reported_pct = percentage
-                                        last_update_time = current_time
-
-                                        # Calculate Speed and ETA based on percentage and time
-                                        elapsed_seconds = (current_time - _task_start).total_seconds()
-                                        if elapsed_seconds > 0.5 and percentage > 0:
-                                            # Estimate bytes processed: total * percentage
-                                            bytes_done = total_size * (percentage / 100)
-                                            speed_bps = bytes_done / elapsed_seconds
-                                            remaining_bytes = total_size - bytes_done
-                                            
-                                            speed_text = f"{sizeUnit(speed_bps)}/s"
-                                            if speed_bps > 0:
-                                                eta_seconds = remaining_bytes / speed_bps
-                                                eta_text = getTime(eta_seconds)
-                                            else:
-                                                eta_text = "Calculating..."
-                                        else:
-                                            speed_text = "N/A"
-                                            eta_text = "Calculating..."
-
-                                        # Update TaskMessages archiving progress
-                                        _messages.total_files = 1
-                                        _messages.files_processed = 1 if percentage >= 100 else 0
-                                        _messages.current_file = archive_out_final_name
-
-                                        # Use the beautiful gradient style progress bar
-                                        bar = ProgressBar.generate(percentage, length=20, style='gradient')
-                                        
-                                        elapsed_time_str = getTime(elapsed_seconds)
-                                        status_text = build_archiver_progress_text(
-                                            _messages.status_head,
-                                            bar=bar,
-                                            percentage=percentage,
-                                            speed_text=speed_text,
-                                            eta_text=eta_text,
-                                            elapsed_time_text=elapsed_time_str,
-                                            source_size_text=total_in_unit,
-                                        )
-                                        # PASS REAL VALUES to status_bar for dashboard tracking
-                                        # Throttle updates in progress loops (force_update=False) to prevent Telegram FloodWait & pipe deadlocks!
-                                        await status_bar(
-                                            status_text, 
-                                            speed_text, 
-                                            percentage, 
-                                            eta_text, 
-                                            status_text, # Use status_text as 'done' for custom text mode
-                                            total_in_unit, # total_size
-                                            engine="Archiver (7z) 🗜️", 
-                                            use_custom_text=True, 
-                                            task_ctx=task_ctx, 
-                                            force_update=False
-                                        )
-====
-                                    # Use strict time-based throttling (3.0s) to avoid spamming the inner status_bar
-                                    # which could lead to its own debounce bugs or FloodWait.
-                                    if (current_time - last_update_time).total_seconds() >= 3.0 or percentage == 100:
-
-                                        # Update throttle variables
-                                        last_reported_pct = percentage
-                                        last_update_time = current_time
-
-                                        # Calculate Speed and ETA based on percentage and time
-                                        elapsed_seconds = (current_time - _task_start).total_seconds()
-                                        if elapsed_seconds > 0.5 and percentage > 0:
-                                            # Estimate bytes processed: total * percentage
-                                            bytes_done = total_size * (percentage / 100)
-                                            speed_bps = bytes_done / elapsed_seconds
-                                            remaining_bytes = total_size - bytes_done
-                                            
-                                            speed_text = f"{sizeUnit(speed_bps)}/s"
-                                            if speed_bps > 0:
-                                                eta_seconds = remaining_bytes / speed_bps
-                                                eta_text = getTime(eta_seconds)
-                                            else:
-                                                eta_text = "Calculating..."
-                                        else:
-                                            speed_text = "N/A"
-                                            eta_text = "Calculating..."
-
-                                        # Update TaskMessages archiving progress
-                                        _messages.total_files = 1
-                                        _messages.files_processed = 1 if percentage >= 100 else 0
-                                        _messages.current_file = archive_out_final_name
-
-                                        # Use the beautiful gradient style progress bar
-                                        bar = ProgressBar.generate(percentage, length=20, style='gradient')
-                                        
-                                        elapsed_time_str = getTime(elapsed_seconds)
-                                        status_text = build_archiver_progress_text(
-                                            _messages.status_head,
-                                            bar=bar,
-                                            percentage=percentage,
-                                            speed_text=speed_text,
-                                            eta_text=eta_text,
-                                            elapsed_time_text=elapsed_time_str,
-                                            source_size_text=total_in_unit,
-                                        )
-                                        # PASS REAL VALUES to status_bar for dashboard tracking
-                                        # Force update since we are strictly throttling it here
-                                        await status_bar(
-                                            status_text, 
-                                            speed_text, 
-                                            percentage, 
-                                            eta_text, 
-                                            status_text, # Use status_text as 'done' for custom text mode
-                                            total_in_unit, # total_size
-                                            engine="Archiver (7z) 🗜️", 
-                                            use_custom_text=True, 
-                                            task_ctx=task_ctx, 
-                                            force_update=True
-                                        )
->>>>
-
-```
+Once you fix this, Pyrogram's progress callback won't crash, and your split `.001`, `.002` archive files will upload properly!
