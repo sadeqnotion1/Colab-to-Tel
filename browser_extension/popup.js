@@ -297,7 +297,24 @@ async function checkCapturedSession() {
       document.getElementById('btn-use-captured').addEventListener('click', async () => {
         // Populate inputs with captured session details
         document.getElementById('download-url').value = session.url;
-        document.getElementById('referer-url').value = session.referer;
+        
+        // Intelligent Referer Selection: Chrome strips download referrers to just the origin.
+        // We override with the active tab's full URL if they share the same base domain or if it's playmogo.
+        let refererToUse = session.referer;
+        if (currentTab && currentTab.url) {
+          try {
+            const tabUrl = new URL(currentTab.url);
+            const refUrl = session.referer ? new URL(session.referer) : null;
+            if (refUrl && tabUrl.hostname.includes(refUrl.hostname.replace('www.', ''))) {
+              refererToUse = currentTab.url;
+            } else if (currentTab.url.includes('playmogo.com')) {
+              refererToUse = currentTab.url;
+            }
+          } catch (e) {
+            console.warn('Error parsing referer URLs:', e);
+          }
+        }
+        document.getElementById('referer-url').value = refererToUse || session.referer;
 
         // Load cookies
         capturedCookies = {};
