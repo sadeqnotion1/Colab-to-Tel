@@ -1461,7 +1461,8 @@ async def setThumbnail(message):
         log.info("Custom thumbnail set successfully.")
 
         # Update status message thumbnail if a task is ongoing
-        if BOT.State.task_going and MSG.status_msg:
+        from .task_context import TASK_QUEUE
+        if TASK_QUEUE.has_active_tasks() and MSG.status_msg:
             try:
                 from pyrogram.types import InputMediaPhoto  # Import locally
                 await MSG.status_msg.edit_media(

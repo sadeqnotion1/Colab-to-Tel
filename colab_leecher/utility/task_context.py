@@ -557,6 +557,7 @@ class TaskQueue:
         self.metrics = SystemMetrics()
         self.background_tasks: Set[asyncio.Task] = set()
         self.is_shutting_down: bool = False
+        self.user_locks: Dict[int, asyncio.Lock] = {}
 
         # --- Debounce state for force_update_summary (owned here, not in task_dashboard) ---
         # Holds the single in-flight delayed-update asyncio.Task (if any).
@@ -566,6 +567,16 @@ class TaskQueue:
         # Monotonic timestamp until which UI edits are suspended after a FloodWait.
         # A value of 0.0 means no active suspension.
         self._ui_suspended_until: float = 0.0
+
+    def get_user_lock(self, user_id: int) -> asyncio.Lock:
+        """
+        Get or create a thread-safe / task-safe asyncio.Lock for a specific user.
+        This prevents rapid-fire duplicate commands from the same user.
+        """
+        if user_id not in self.user_locks:
+            self.user_locks[user_id] = asyncio.Lock()
+        return self.user_locks[user_id]
+
 
     # ------------------------------------------------------------------
     # Dashboard pagination — thread-safe accessors

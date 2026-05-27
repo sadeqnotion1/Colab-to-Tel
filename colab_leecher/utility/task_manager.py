@@ -25,10 +25,24 @@ from .handler import (
     Leech, Unzip_Handler, Zip_Handler, SendLogs, cancelTask,
 )
 
-from .variables import (
-    BOT, MSG, BotTimes, Messages, Paths, Aria2c, TaskError,
-    TRANSFER
-)
+from .variables import Aria2c
+
+class LegacyGlobalAccessBlocked(RuntimeError):
+    pass
+
+class _BlockLegacyGlobal:
+    def __getattr__(self, name):
+        raise LegacyGlobalAccessBlocked(
+            "Strict Isolation Violation: Attempted to access legacy global object in task_manager."
+        )
+    def __setattr__(self, name, value):
+        raise LegacyGlobalAccessBlocked(
+            "Strict Isolation Violation: Attempted to modify legacy global object in task_manager."
+        )
+
+BOT = _BlockLegacyGlobal()
+MSG = _BlockLegacyGlobal()
+Paths = _BlockLegacyGlobal()
 
 # Import task context for multi-task support
 from .task_context import TASK_QUEUE, TaskContext, cleanup_task_artifacts
@@ -51,10 +65,11 @@ thumbnail_urls = _load_thumbnail_urls()
 
 
 async def task_starter(message, text):
-    """Handles the initial command, replies, and sets started state."""
-    global BOT
+    """Handles the initial command, replies, and checks queue-based admission under a per-user lock."""
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    from .variables import BOT as legacy_bot
     log.info(
-        f"task_starter called by user {message.from_user.id} for mode '{BOT.Mode.mode}'"
+        f"task_starter called by user {user_id} for mode '{legacy_bot.Mode.mode}'"
     )
     try:
         await message.delete()
@@ -62,38 +77,40 @@ async def task_starter(message, text):
     except Exception as e:
         log.error(f"Failed to delete user command message: {e}")
 
-    if not BOT.State.task_going:
-        BOT.State.started = True
-        log.debug(
-            f"BOT.State.started=True. BOT.State.task_going={BOT.State.task_going}"
-        )
-        log.info("Task not going. Replying to user to send links/path.")
-        try:
-            src_request_msg = await message.reply_text(
-                text,
-                parse_mode=enums.ParseMode.HTML,
-            )
-            log.info("Reply prompt sent.")
-            return src_request_msg
-        except Exception as e:
-            log.error(f"Failed reply in task_starter: {e}", exc_info=True)
-            BOT.State.started = False
-            try:
-                await message.reply_text(user_error("send the setup prompt"))
-            except Exception as reply_err:
-                log.debug(
-                    f"Could not send task starter error reply: {reply_err}")
-            return None
-    else:
+    # Acquire the per-user lock to prevent rapid-fire duplicate commands
+    user_lock = TASK_QUEUE.get_user_lock(user_id)
+    can_start = False
+    error_msg = ""
 
-        log.warning("Task already going. Informing user.")
-        try:
-            msg = await message.reply_text(build_task_in_progress_notice())
-            await sleep(15)
-            await msg.delete()
-        except Exception as e:
-            log.error(f"Failed 'task ongoing' message: {e}")
-        return None
+    async with user_lock:
+        can_start, error_msg = await TASK_QUEUE.can_start_task(user_id)
+        if can_start:
+            log.info(f"Task admission allowed for user {user_id}. Replying to user to send links/path.")
+            try:
+                src_request_msg = await message.reply_text(
+                    text,
+                    parse_mode=enums.ParseMode.HTML,
+                )
+                log.info("Reply prompt sent.")
+                return src_request_msg
+            except Exception as e:
+                log.error(f"Failed reply in task_starter: {e}", exc_info=True)
+                try:
+                    await message.reply_text(user_error("send the setup prompt"))
+                except Exception as reply_err:
+                    log.debug(f"Could not send task starter error reply: {reply_err}")
+                return None
+
+    # Handle rate-limit sleep and message deletion outside of the per-user lock
+    log.warning(f"Task admission denied for user {user_id}: {error_msg}")
+    try:
+        msg = await message.reply_text(error_msg)
+        await sleep(15)
+        await msg.delete()
+    except Exception as e:
+        log.error(f"Failed 'task ongoing/rate limit' message: {e}")
+    return None
+
 
 
 async def taskScheduler(task_ctx: TaskContext):
@@ -461,7 +478,7 @@ async def taskScheduler(task_ctx: TaskContext):
         # --- Execute Main Task ---
         # Only if no error has occurred yet
         if not _task_error.state:
-            BotTimes.current_time = time()  # Update time before starting main work
+            task_ctx.bot_times.current_time = time()  # Update time before starting main work
             is_ytdl_task = (selected_service == 'ytdl') or _bot.Mode.ytdl
             log.info(
                 f"Starting main task execution: Mode={current_mode}, Service={selected_service}, is_ytdl={is_ytdl_task}")
