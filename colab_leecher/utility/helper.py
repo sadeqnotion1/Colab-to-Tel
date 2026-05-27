@@ -377,10 +377,14 @@ def clean_filename(filename):
     decoded_name = decoded_name.replace('..', '__')
 
     # Remove control characters \x00-\x1f
+    # NOTE: Only strip leading/trailing dots, spaces, and hyphens — NOT underscores.
+    # Underscores are valid filename characters; stripping them causes a mismatch
+    # between our expected filename and what aria2c writes to disk (e.g. a URL whose
+    # path starts with '_' will have the underscore stripped here but kept on disk).
     cleaned = re.sub(
         r'[\\/:*?"<>|]+|[\x00-\x1f]',
         '_',
-        decoded_name).strip('._ -')
+        decoded_name).strip('. -')
 
     # Limit length (e.g., 240 characters)
     cleaned = cleaned[:240]

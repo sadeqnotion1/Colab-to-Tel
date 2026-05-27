@@ -324,6 +324,12 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
         else:
             log.warning(f"⚠️ NZBCloud download detected but cf_clearance cookie not configured. Download may fail with 403 error.")
 
+    # Force aria2c to write the file using exactly our determined filename.
+    # Without --out, aria2c derives its own name from the raw URL path which may
+    # differ from our cleaned expected_filename (e.g. leading underscore kept by
+    # aria2c but stripped by clean_filename). This eliminates the mismatch entirely.
+    command.extend(["-o", expected_filename])
+
     # Add the link as the final argument
     command.append(link)
     # --- End Command ---
