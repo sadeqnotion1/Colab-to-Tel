@@ -142,6 +142,7 @@ class TaskError:
 class TaskMessages:
     """Per-task message templates"""
     download_name: str = ""
+    current_action: str = "downloading"  # Model state identifier
     task_msg: str = ""
     status_head: str = ""
     dump_task: str = ""

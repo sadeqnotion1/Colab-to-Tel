@@ -207,13 +207,29 @@ async def update_summary_dashboard(
             elif d_bytes > 0:
                 is_proc = False
                 status_label = "Downloading ⬇️"
-                if task_ctx.messages and task_ctx.messages.status_head:
+                
+                # Check the strict model state first
+                current_action = getattr(task_ctx.messages, "current_action", "").lower()
+                if current_action == "archiving":
+                    status_label = "Archiving 🗜️"
+                    is_proc = True
+                elif current_action == "extracting":
+                    status_label = "Extracting 📦"
+                    is_proc = True
+                elif current_action == "splitting":
+                    status_label = "Splitting ✂️"
+                    is_proc = True
+                elif task_ctx.messages and task_ctx.messages.status_head:
+                    # Fallback to stringly-typed matching for legacy paths
                     sh = task_ctx.messages.status_head.lower()
                     if any(k in sh for k in ['archiving', 'zipping', 'compressing']):
                         status_label = "Archiving 🗜️"
                         is_proc = True
                     elif any(k in sh for k in ['extracting', 'unzipping', 'unpacking']):
                         status_label = "Extracting 📦"
+                        is_proc = True
+                    elif any(k in sh for k in ['splitting']):
+                        status_label = "Splitting ✂️"
                         is_proc = True
                 
                 if is_proc:
@@ -324,8 +340,7 @@ async def update_summary_dashboard(
                 except FloodWait as fw:
                     # Telegram is rate-limiting us.  Record the suspension window
                     # on the queue so *all* callers (not just this coroutine) will
-                    # back off for the required duration.  Then sleep non-blockingly
-                    # so we don't block the event loop or crash the caller.
+                    # back off for the required duration.
                     wait_secs = fw.value
                     log.warning(
                         "FloodWait hit while updating summary dashboard — "
@@ -333,12 +348,6 @@ async def update_summary_dashboard(
                         wait_secs,
                     )
                     TASK_QUEUE._ui_suspended_until = time.monotonic() + wait_secs
-                    # Release the lock *before* sleeping so other coroutines are
-                    # not blocked for the full flood-wait duration.  We do this by
-                    # returning immediately; the suspension guard at the top of
-                    # this function will protect us on the next invocation.
-                    await asyncio.sleep(wait_secs)
-                    TASK_QUEUE._ui_suspended_until = 0.0  # clear after sleep completes
                     return TASK_QUEUE.summary_msg
 
                 except Exception as edit_err:
@@ -378,8 +387,6 @@ async def update_summary_dashboard(
                 wait_secs,
             )
             TASK_QUEUE._ui_suspended_until = time.monotonic() + wait_secs
-            await asyncio.sleep(wait_secs)
-            TASK_QUEUE._ui_suspended_until = 0.0
             return TASK_QUEUE.summary_msg
 
         except Exception as e:

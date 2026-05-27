@@ -228,6 +228,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
     archive_out_path = ospath.join(_paths.temp_zpath, archive_out_final_name)
     _messages.download_name = archive_out_final_name
     _messages.status_head = f"<b>🔐 ARCHIVING ({format_display} via 7z) » </b>\n\n<code>{escape(archive_out_final_name)}</code>\n"
+    _messages.current_action = "archiving"
 
     # Get task_start from task context
     if task_ctx:
@@ -1076,6 +1077,7 @@ async def extract(zip_filepath, remove: bool, task_ctx: TaskContext = None):
 
     dir_path, filename = ospath.split(zip_filepath)
     _messages.status_head = f"<b>📂 EXTRACTING »</b>\n\n<code>{escape(filename)}</code>\n"
+    _messages.current_action = "extracting"
 
     password = _bot.Options.unzip_pswd  # Get potential password
 
@@ -1182,6 +1184,7 @@ async def extract(zip_filepath, remove: bool, task_ctx: TaskContext = None):
         sizeUnit(total_size_bytes) if total_size_bytes > 0 else "N/A"
         _messages.download_name = real_name
         _messages.status_head = f"<b>📂 EXTRACTING »</b>\n\n<code>{real_name}{ext}</code>\n"
+        _messages.current_action = "extracting"
     except Exception as size_err:
         log.error(f"Error calculating archive size for {filename}: {size_err}")
 
@@ -1386,6 +1389,7 @@ async def extract_zip_streaming(
     log.info(
         f"Starting streaming extraction of {zip_filename} ({zip_size_str}) to {extract_to}")
     _messages.status_head = f"<b>📂 EXTRACTING (Streaming) »</b>\n\n<code>{zip_filename}</code>\n"
+    _messages.current_action = "extracting"
 
     extraction_start_time = time.time()
     files_extracted = 0
@@ -1635,6 +1639,7 @@ async def extract_rar_streaming(
     log.info(
         f"Starting streaming extraction of {rar_filename} ({rar_size_str}) to {extract_to}")
     _messages.status_head = f"<b>📂 EXTRACTING (Streaming) »</b>\n\n<code>{real_name}.rar</code>\n"
+    _messages.current_action = "extracting"
 
     extraction_start_time = time.time()
     files_extracted = 0
@@ -2050,6 +2055,7 @@ async def splitArchive(
             break
 
     _messages.status_head = f"<b>✂️ SPLITTING ARCHIVE » </b>\n\n<code>{filename}</code>\n"
+    _messages.current_action = "splitting"
     total_size = getSize(file_path)
     total_size_str = sizeUnit(total_size) if total_size > 0 else "N/A"
     log.info(
@@ -2354,6 +2360,7 @@ async def splitVideo(
 
     log.info(f"Executing ffmpeg split: {' '.join(cmd_split_args)}")
     _messages.status_head = f"<b>✂️ SPLITTING » </b>\n\n<code>{escape(filename)}</code>\n"
+    _messages.current_action = "splitting"
 
     # Get task_start from task context
     if task_ctx:

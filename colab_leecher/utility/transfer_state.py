@@ -2,12 +2,8 @@
 
 class Transfer:
     """Holds state related to file transfer progress and results."""
-    down_bytes: int = 0
-    up_bytes: int = 0
-    total_down_size: int = 0
-    sent_file = [] 
-    sent_file_names = [] 
-    successful_downloads = []
+    def __init__(self):
+        self.reset()  # Force instance-level initialization
 
     def reset(self):
         """Resets the state for a new task."""

@@ -107,6 +107,13 @@ async def Leech(path: str, remove_source: bool, task_ctx: TaskContext = None):
         log.info(
             f"Leech: Processing item {index + 1}/{total_items_to_process}: {current_item_name}")
 
+        # Check for active cancellation inside the loop
+        if task_ctx and (task_ctx.is_cancelled or task_ctx.cancel_event.is_set()):
+            log.warning("Leech: Aborting upload loop. Task actively cancelled.")
+            _task_error.state = True
+            _task_error.text = "Task actively cancelled during upload."
+            break
+
         if _task_error.state:
             log.warning(
                 f"Leech: Skipping item '{current_item_name}' due to prior error state.")

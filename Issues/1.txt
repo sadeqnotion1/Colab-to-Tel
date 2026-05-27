@@ -1,53 +1,149 @@
-To answer your question directly: **No, it is not better to use the temporary zip file's size compared to the original file size for the progress percentage.** Here is why reading the `7z` output directly is much better:
+This is a classic "99% refactored" scenario. You’ve successfully moved the bulk of the system to an isolated, async architecture, but the remaining 1% contains critical design flaws that will manifest under load as deadlocks, memory leaks, and zombie processes.
 
-1. **Unpredictable Compression Ratios:** Archiving usually compresses files. If you are compressing a 10 GB file and it compresses down to 4 GB, comparing the output size to the input size means your progress bar would slowly tick up to `40%` and then suddenly jump to `100%` when the task finishes. It would never reflect the actual progress accurately.
-2. **Accurate Input Processing:** The percentage that `7z` natively reports (via the `-bsp1` flag) is based on **how many bytes of the input file it has processed**. This gives you a smooth, linear, and mathematically accurate progress bar, regardless of how much the data is being compressed.
+Here is the final system architecture audit across the 5 requested vectors. **I have found severe vulnerabilities in 4 out of 5 vectors.**
 
 ---
 
-### ⚠️ I found the exact reason your upload failed in the logs
+### 1. State Leakage: `transfer_state.py` Class Attribute Trap
 
-While reviewing your logs, I noticed exactly why the `UEL...` file failed to upload, and it's actually due to a bug in your code, not a Telegram API issue.
+**Status: VULNERABLE**
+While you successfully isolated the modern context in `task_context.py` using `dataclasses` and `default_factory`, you left behind a massive global state leak in `colab_leecher/utility/transfer_state.py`.
 
-Look at this part of your error log:
+Because you define `sent_file = []` and `successful_downloads = []` directly on the class body without an `__init__`, these are **class-level mutable attributes**. Any legacy fallback code that instances `Transfer()` will share the exact same list across *all concurrent tasks*. Task A will upload files and append to Task B's lists, resulting in mixed Telegram logs and cross-pollinated Google Drive records.
+
+**The Fix (`colab_leecher/utility/transfer_state.py`):**
 
 ```python
-2026-05-24 07:01:19,967 - pyrogram.methods.advanced.save_file - ERROR - 'int' object is not iterable
-Traceback (most recent call last):
-  ...
-  File "/content/Colab-to-Tel/colab_leecher/uploader/telegram.py", line 219, in up_progress
-    transfer_obj.up_bytes += delta
-TypeError: 'int' object is not iterable
+class Transfer:
+    """Holds state related to file transfer progress and results."""
+    def __init__(self):
+        self.reset()  # Force instance-level initialization
+
+    def reset(self):
+        self.down_bytes = 0
+        self.up_bytes = 0
+        self.total_down_size = 0
+        self.sent_file = []
+        self.sent_file_names = []
+        self.successful_downloads = []
 
 ```
 
-This error happens in your progress callback. When the progress callback crashes, Pyrogram's file-uploading chunk process (`save_file`) abruptly halts. It then passes an empty file object down the line, which results in the final crash you see: `AttributeError: 'NoneType' object has no attribute 'write'`.
+### 2. The "Zombie Slot" Trap: Unbounded `finally` Execution
 
-**Why did `transfer_obj.up_bytes += delta` throw that error?**
-If the `Transfer` class fails to import, your code falls back to a dummy class in `variables.py`. Look at lines 152-154 in `variables.py`:
+**Status: VULNERABLE**
+In `task_manager.py` -> `taskScheduler`, you properly put `await TASK_QUEUE.release_worker_slot(task_id)` inside the `finally` block (Line 344). However, right above it (Lines 329-331), you `await cancelTask(reason_to_report, task_ctx)`.
+
+If Pyrogram hangs during the `cancelTask` API calls (a common issue with Telegram's backend dropping sockets without closing them), `cancelTask` will block *forever*. The execution will never reach line 344, meaning the worker slot is permanently zombified. After `N` hangs, the bot will refuse all new tasks, requiring a hard reboot.
+
+**The Fix (`colab_leecher/utility/task_manager.py` Lines 329-332):**
 
 ```python
-    class _DummyTransfer:
-        down_bytes = [0]
-        up_bytes = [0]  # <--- HERE IS THE BUG
+        # 2. Dispatch reports/cancellation UI updates safely if task was cancelled or failed
+        if _task_error.state or task_ctx.is_cancelled:
+            try:
+                log.warning(f"taskScheduler finally: Task {task_id[:8]} is failed/cancelled. Dispatching reports.")
+                # Wrap in wait_for to guarantee it never blocks the slot release
+                await asyncio.wait_for(cancelTask(reason_to_report, task_ctx), timeout=15.0)
+            except Exception as cancel_dispatch_err:
+                log.error(f"taskScheduler finally: Failed to dispatch reports: {cancel_dispatch_err}", exc_info=True)
 
 ```
 
-Because `up_bytes` is defined as a **list** (`[0]`), when your code in `telegram.py` tries to add `delta` (which is an `int`) using `+=`, Python throws a `TypeError` because you cannot add an integer directly to a list using `+=`.
+### 3. Throttling Deadlocks: The Lock-Sleep Catastrophe
 
-### **How to fix it:**
+**Status: CRITICAL DEADLOCK**
+In `task_dashboard.py` -> `update_summary_dashboard`, you have built a system-killing deadlock. The author left a comment claiming to release the lock before sleeping on a `FloodWait`, but the code absolutely does not do this.
 
-Simply go to `colab_leecher/utility/variables.py` and fix the `_DummyTransfer` fallback class to use integers instead of lists:
+At Line 198, the `except FloodWait` block invokes `await asyncio.sleep(wait_secs)` **while still inside** `async with TASK_QUEUE._summary_lock:`. If Telegram issues a 60-second FloodWait, the lock is held for 60 seconds. Every single parallel worker trying to update its progress will stall indefinitely waiting for `_summary_lock`, freezing all background I/O.
+
+**The Fix (`colab_leecher/utility/task_dashboard.py` Lines 198-204):**
 
 ```python
-    class _DummyTransfer:
-        down_bytes = 0    # Changed from [0] to 0
-        up_bytes = 0      # Changed from [0] to 0
-        total_down_size = 0
-        sent_file = []
-        sent_file_names = []
-        def reset(self): pass
+                except FloodWait as fw:
+                    wait_secs = fw.value
+                    log.warning(
+                        "FloodWait hit while updating summary dashboard — "
+                        "suspending UI edits for %ds.", wait_secs
+                    )
+                    # Mark the suspension time, but DO NOT sleep here. Return immediately.
+                    # The suspension guard at the top of the function handles the logic.
+                    TASK_QUEUE._ui_suspended_until = time.monotonic() + wait_secs
+                    return TASK_QUEUE.summary_msg
 
 ```
 
-Once you fix this, Pyrogram's progress callback won't crash, and your split `.001`, `.002` archive files will upload properly!
+### 4. Kill Switch Integrity: Looping Ignorance
+
+**Status: VULNERABLE**
+You verified `cancel_event.is_set()` nicely in the orchestrator boundaries (`_stage_process`, `_stage_upload`), but deep pipeline loops ignore it.
+
+In `handler.py` -> `Leech()` (Line 84), the code iterates over `items_to_process` (which could be hundreds of files in an unzipped directory). It checks `if _task_error.state:`, but `cancel_task()` relies primarily on `task_ctx.mark_cancelled()`. If a user cancels a task while a 50-file folder is uploading, the loop will happily continue uploading the remaining files because `cancel_event` is never checked inside the iteration.
+
+**The Fix (`colab_leecher/utility/handler.py` Line 84):**
+
+```python
+    for index, item_path in enumerate(items_to_process):
+        current_item_name = ospath.basename(item_path)
+        log.info(f"Leech: Processing item {index + 1}/{total_items_to_process}: {current_item_name}")
+
+        # Check for active cancellation inside the loop
+        if task_ctx and task_ctx.cancel_event.is_set():
+            log.warning(f"Leech: Aborting upload loop. Task actively cancelled.")
+            _task_error.state = True
+            _task_error.text = "Task actively cancelled during upload."
+            break
+
+        if _task_error.state:
+            # ...
+
+```
+
+### 5. MVC Violation: "Stringly-Typed" State Checking
+
+**Status: VULNERABLE (Fragile Logic)**
+In `task_dashboard.py` (Lines 185-188), you are determining the task's business state by parsing raw HTML strings injected into `status_head` by `task_manager.py` and `handler.py`:
+
+```python
+sh = task_ctx.messages.status_head.lower()
+if any(k in sh for k in ['archiving', 'zipping', 'compressing']):
+    status_label = "Archiving 🗜️"
+
+```
+
+This is a severe MVC violation. The View layer (`task_dashboard`) is reverse-engineering application state by substring-matching HTML presentation data. If someone changes the emoji or capitalization in `handler.py`, the dashboard breaks entirely and falls back to displaying "Downloading ⬇️".
+
+**The Fix:** Add a strict `current_action: str` field to the Model, and read that in the View.
+
+1. In `colab_leecher/utility/task_context.py` (TaskMessages class):
+
+```python
+@dataclass
+class TaskMessages:
+    download_name: str = ""
+    current_action: str = "downloading" # Model state identifier
+    # ...
+
+```
+
+2. In `colab_leecher/utility/task_dashboard.py` (Line 183):
+
+```python
+                is_proc = False
+                status_label = "Downloading ⬇️"
+                
+                # Check the strict model state, not the HTML presentation string
+                current_action = getattr(task_ctx.messages, "current_action", "downloading").lower()
+                
+                if current_action == "archiving":
+                    status_label = "Archiving 🗜️"
+                    is_proc = True
+                elif current_action == "extracting":
+                    status_label = "Extracting 📦"
+                    is_proc = True
+
+```
+
+### Audit Conclusion
+
+The architectural isolation (`TaskContext`) is fundamentally sound, but the execution boundary lacks defensive programming against Telegram's unpredictable network stack. Apply the `wait_for` on your cancellations, rip the `sleep` out of your dashboard lock, fix the iteration loops, and the bot will survive production workloads safely.
