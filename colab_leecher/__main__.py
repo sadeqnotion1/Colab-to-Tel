@@ -179,7 +179,8 @@ def _build_task_paths(task_ctx: TaskContext):
         'HERO_IMAGE': task_ctx.hero_image,
         'THMB_PATH': Paths.THMB_PATH,
         'DEFAULT_HERO': Paths.DEFAULT_HERO,
-        'VIDEO_FRAME': f"{task_ctx.work_path}/video_frame.jpg"
+        'VIDEO_FRAME': f"{task_ctx.work_path}/video_frame.jpg",
+        'mirror_dir': Paths.mirror_dir
     })()
 
 

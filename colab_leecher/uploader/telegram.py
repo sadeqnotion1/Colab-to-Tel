@@ -14,6 +14,7 @@ from pyrogram import enums
 from pyrogram.errors import FloodWait, SlowmodeWait
 from ..utility.variables import BOT, BotTimes, Messages, MSG, Paths, TRANSFER, TaskError
 from ..utility.task_context import TaskContext  # NEW: Import for multi-task support
+from ..utility.transfer_state import SmartBytes
 from ..utility import helper
 from .. import colab_bot, OWNER, DUMP_ID
 

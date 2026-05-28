@@ -482,7 +482,7 @@ async def taskScheduler(task_ctx: TaskContext):
             is_ytdl_task = (selected_service == 'ytdl') or _bot.Mode.ytdl
             log.info(
                 f"Starting main task execution: Mode={current_mode}, Service={selected_service}, is_ytdl={is_ytdl_task}")
-            if current_mode == "leech":
+            if current_mode in ["leech", "dir-leech"]:
                 await Do_Leech(_bot.SOURCE, is_dir, is_ytdl_task, is_zip, is_unzip, is_dualzip, is_stream_unzip, task_ctx)
             elif current_mode == "mirror":
                 await Do_Mirror(_bot.SOURCE, is_ytdl_task, is_zip, is_unzip, is_dualzip, is_stream_unzip, task_ctx)
