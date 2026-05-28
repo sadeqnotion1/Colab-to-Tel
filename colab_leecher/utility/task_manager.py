@@ -837,7 +837,13 @@ async def _stage_process(download_path: str, task_ctx: TaskContext) -> str | Non
     mode_type = task_ctx.mode_type
 
     # Map normal mode under leech/dir-leech to zip if required by legacy logic
-    is_zip_leech = (mode_type == "normal" and current_mode in ["leech", "dir-leech"])
+    # Upgrade: If 'normal' (Regular) is chosen, we ONLY compress to zip/7z if the total size is >= 1.8 GB.
+    # Otherwise, it uploads the files directly as media (uncompressed).
+    is_zip_leech = (
+        mode_type == "normal" 
+        and current_mode in ["leech", "dir-leech"] 
+        and _transfer.total_down_size >= 1.8 * 1024 * 1024 * 1024
+    )
 
     try:
         if mode_type == "zip" or is_zip_leech:

@@ -515,7 +515,7 @@ async def ask_leech_type(client, chat_id, mode_name, reply_to_message_id=None):
 
     # 📝 Option descriptions
     options = [
-        ("Regular", "Normal file upload without processing"),
+        ("Regular", "Upload directly as media if under 1.8GB, otherwise compress to 7z split archives"),
         ("Compress", "Compress files into a ZIP archive before upload"),
         ("Extract", "Extract archive contents before upload"),
         ("UnDoubleZip", "Extract nested archives, then compress")
