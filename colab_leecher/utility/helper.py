@@ -920,6 +920,19 @@ def is_terabox(link):
     return isinstance(link, str) and ("terabox" in link or "1024tera" in link)
 
 
+def is_doodstream(link):
+    """Checks if the link is a DoodStream link or mirror."""
+    if not isinstance(link, str):
+        return False
+    dood_patterns = [
+        "dood.to", "dood.la", "dood.so", "dood.sh", "dood.cx",
+        "dood.pm", "dood.wf", "dood.li", "dood.re", "dood.video",
+        "d-s.io", "playmogo.com", "ds2play.com", "ds2video.com"
+    ]
+    link_lower = link.lower()
+    return any(pattern in link_lower for pattern in dood_patterns) and ("/d/" in link_lower or "/e/" in link_lower)
+
+
 def is_instagram(link):
     """
     Checks if the link is an Instagram link.

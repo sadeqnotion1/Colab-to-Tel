@@ -14,6 +14,7 @@ from asyncio import sleep, get_running_loop
 from .mega import megadl
 from ..utility.handler import cancelTask, TaskContext
 from .terabox_enhanced import TeraBoxDownloader  # Enhanced TeraBox with cookie support & fallback
+from .doodstream import DoodStreamDownloader
 from .instagram import instagram_download, instagram_profile_download, is_profile_url
 from .ytdl import YTDL_Status, get_YT_Name 
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
@@ -21,7 +22,7 @@ from .aria2 import aria2_Download, get_Aria2c_Name
 from .telegram import TelegramDownload, media_Identifier 
 from ..utility.variables import BOT, Gdrive, MSG, Messages, Aria2c, BotTimes, Paths, TRANSFER, TaskError
 from ..utility.helper import (
-    isYtdlComplete, keyboard, sysINFO, is_google_drive, is_mega, is_terabox,
+    isYtdlComplete, keyboard, sysINFO, is_google_drive, is_mega, is_terabox, is_doodstream,
     is_instagram, is_nzbcloud, is_ytdl_link, is_telegram, status_bar, getTime, sizeUnit, speedETA,
     clean_filename, extract_filename_from_url, apply_dot_style, is_torrent
 )
@@ -448,6 +449,9 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
                  elif is_terabox(link):
                       terabox_downloader = TeraBoxDownloader(client=None, message=None, task_ctx=task_ctx)
                       link_success = await terabox_downloader.download(link, i + 1)
+                 elif is_doodstream(link):
+                      dood_downloader = DoodStreamDownloader(client=None, message=None, task_ctx=task_ctx)
+                      link_success = await dood_downloader.download(link, i + 1)
                  elif is_instagram(link):
                       if is_profile_url(link):
                           link_success = await instagram_profile_download(link, i + 1, max_posts=9999)
