@@ -1703,33 +1703,53 @@ async def status_bar(
             # Update transfer stats for dashboard to read, but don't edit
             # Telegram message
             try:
-                # Parse size string to bytes for dashboard to detect download
-                # progress
-                done_bytes = 0
-                # Helper to extract numeric value from string like "✅ Downloaded 252 videos (484.19 MiB)"
-                def extract_size_from_str(s: str, unit: str) -> float:
+                # Local helper to robustly parse size string (with or without space/units) to bytes
+                def parse_any_size(val) -> int:
+                    if val is None:
+                        return 0
+                    if isinstance(val, (int, float)):
+                        return int(val)
+                    val_str = str(val).strip()
+                    if not val_str or val_str in ("N/A", "Unknown"):
+                        return 0
+                    
+                    # Try direct conversion to float/int
                     try:
-                        # Find numeric value before the unit
-                        match = re.search(r"(\d+\.?\d*)\s*" + unit, s)
-                        if match:
-                            return float(match.group(1))
-                        return 0.0
-                    except:
-                        return 0.0
+                        return int(float(val_str))
+                    except ValueError:
+                        pass
+                    
+                    # Regex to extract the first decimal/integer number and unit
+                    match = re.search(r"(\d+\.?\d*)\s*([a-zA-Z]+)", val_str)
+                    if not match:
+                        # Fallback: maybe just digits exist?
+                        number_match = re.search(r"(\d+\.?\d*)", val_str)
+                        if number_match:
+                            try:
+                                return int(float(number_match.group(1)))
+                            except ValueError:
+                                return 0
+                        return 0
+                    
+                    num_val = float(match.group(1))
+                    unit = match.group(2).upper()
+                    
+                    # Determine multiplier
+                    multiplier = 1
+                    if 'G' in unit:
+                        multiplier = 1024**3
+                    elif 'M' in unit:
+                        multiplier = 1024**2
+                    elif 'K' in unit:
+                        multiplier = 1024
+                    elif 'T' in unit:
+                        multiplier = 1024**4
+                    elif 'P' in unit:
+                        multiplier = 1024**5
+                        
+                    return int(num_val * multiplier)
 
-                done_bytes = 0
-                if ' GiB' in done:
-                    val = extract_size_from_str(done, 'GiB')
-                    done_bytes = int(val * 1024 * 1024 * 1024)
-                elif ' MiB' in done:
-                    val = extract_size_from_str(done, 'MiB')
-                    done_bytes = int(val * 1024 * 1024)
-                elif ' KiB' in done:
-                    val = extract_size_from_str(done, 'KiB')
-                    done_bytes = int(val * 1024)
-                elif ' B' in done:
-                    val = extract_size_from_str(done, ' B')
-                    done_bytes = int(val)
+                done_bytes = parse_any_size(done)
 
                 # Update appropriate bytes based on engine (Upload vs Download)
                 is_upload = any(x in engine.lower() for x in ["upload", "up", "mirror", "gdrive"])
@@ -1739,63 +1759,36 @@ async def status_bar(
                 else:
                     task_ctx.transfer.down_bytes = [done_bytes]
 
-                # Parse total_size string to bytes for dashboard display
-                total_bytes = 0
-                if isinstance(total_size, str):
-                    if ' GiB' in total_size:
-                        total_bytes = int(
-                            float(
-                                total_size.replace(
-                                    ' GiB',
-                                    '').strip()) *
-                            1024 *
-                            1024 *
-                            1024)
-                    elif ' MiB' in total_size:
-                        total_bytes = int(
-                            float(
-                                total_size.replace(
-                                    ' MiB',
-                                    '').strip()) *
-                            1024 *
-                            1024)
-                    elif ' KiB' in total_size:
-                        total_bytes = int(
-                            float(
-                                total_size.replace(
-                                    ' KiB',
-                                    '').strip()) *
-                            1024)
-                    elif ' B' in total_size:
-                        total_bytes = int(
-                            float(
-                                total_size.replace(
-                                    ' B',
-                                    '').strip()))
-                elif isinstance(total_size, (int, float)):
-                    total_bytes = int(total_size)
-
+                # Parse total_size string/number to bytes for dashboard display
+                total_bytes = parse_any_size(total_size)
                 task_ctx.transfer.total_size = total_bytes
 
                 # Also update speed for dashboard display (parsed as float bytes-per-second)
                 parsed_speed = 0.0
                 try:
                     if speed and speed != "N/A":
-                        speed_parts = speed.split()[0]
-                        unit = speed.split()[1].replace('/s', '')
-                        speed_val = float(speed_parts)
-                        
-                        multipliers = {'B': 1, 'KiB': 1024, 'MiB': 1024**2, 'GiB': 1024**3}
-                        # Also handle KB, MB, GB from other downloaders
-                        multipliers.update({'KB': 1024, 'MB': 1024**2, 'GB': 1024**3})
-                        
-                        parsed_speed = speed_val * multipliers.get(unit, 1)
-                except (IndexError, ValueError):
-                    pass
+                        speed_str = str(speed).strip()
+                        # Extract speed value and unit (handles both space-separated and unseparated units)
+                        speed_match = re.search(r"(\d+\.?\d*)\s*([a-zA-Z/]+)", speed_str)
+                        if speed_match:
+                            speed_val = float(speed_match.group(1))
+                            unit = speed_match.group(2).replace('/s', '').upper().strip()
+                            
+                            multiplier = 1
+                            if 'G' in unit:
+                                multiplier = 1024**3
+                            elif 'M' in unit:
+                                multiplier = 1024**2
+                            elif 'K' in unit:
+                                multiplier = 1024
+                                
+                            parsed_speed = speed_val * multiplier
+                except Exception as speed_parse_err:
+                    log.warning(f"Failed to parse speed '{speed}': {speed_parse_err}")
 
                 task_ctx.transfer.last_speed = parsed_speed
                 task_ctx.transfer.last_speed_bytes = parsed_speed
-            except (ValueError, AttributeError) as e:
+            except Exception as e:
                 # Use engine to decide which one to set to 1
                 is_upload = any(x in engine.lower() for x in ["upload", "up", "mirror", "gdrive"])
                 if is_upload:
