@@ -4,6 +4,7 @@ Provides modern, beautiful message templates and formatting utilities
 """
 
 from typing import List, Dict, Any
+import math
 
 
 class Emoji:
@@ -91,7 +92,7 @@ class ProgressBar:
         Args:
             percentage: Completion percentage (0-100)
             length: Bar length in characters
-            style: 'blocks', 'circles', 'squares', 'dots', 'arrows', 'gradient'
+            style: 'blocks', 'circles', 'squares', 'dots', 'arrows', 'gradient', 'smooth', 'ascii'
 
         Returns:
             Formatted progress bar string (no surrounding brackets)
@@ -107,7 +108,23 @@ class ProgressBar:
             'arrows': ('\u25b0', '\u25b1'),
             'ascii': ('=', '-'),
             'gradient': ('\u2588', '\u2593', '\u2592', '\u2591'),
+            'smooth': ('\u2588', '\u2591'),
         }
+
+        if style == 'smooth':
+            # Smooth fraction fills using 8 fractional blocks
+            fractions = ('', '\u258f', '\u258e', '\u258d', '\u258c', '\u258b', '\u258a', '\u2589', '\u2588')
+            full_blocks = filled
+            # Calculate the fractional part
+            fractional_percentage = (percentage / 100) * length - filled
+            fraction_idx = int(round(fractional_percentage * 8))
+            fraction_idx = max(0, min(8, fraction_idx))
+            
+            bar = '\u2588' * full_blocks
+            if full_blocks < length:
+                bar += fractions[fraction_idx]
+                bar += '\u2591' * (length - full_blocks - 1)
+            return bar
 
         if style == 'gradient' and length >= 4:
             chars = styles['gradient']
