@@ -927,9 +927,12 @@ def is_doodstream(link):
     dood_patterns = [
         "dood.to", "dood.la", "dood.so", "dood.sh", "dood.cx",
         "dood.pm", "dood.wf", "dood.li", "dood.re", "dood.video",
-        "d-s.io", "playmogo.com", "ds2play.com", "ds2video.com"
+        "d-s.io", "playmogo.com", "ds2play.com", "ds2video.com",
+        "cloudatacdn.com"
     ]
     link_lower = link.lower()
+    if "cloudatacdn.com" in link_lower:
+        return True
     return any(pattern in link_lower for pattern in dood_patterns) and ("/d/" in link_lower or "/e/" in link_lower)
 
 

@@ -52,106 +52,121 @@ class DoodStreamDownloader:
     async def download(self, url: str, index: int = 1) -> bool:
         log.info(f"[DoodStream] Resolving link {index}: {url}")
         
-        # Extract the video ID
-        # Support URLs ending with /d/ID or /e/ID
-        match = re.search(r'/(?:d|e)/([a-zA-Z0-9]+)', url)
-        if not match:
-            log.error(f"[DoodStream] Invalid DoodStream URL structure: {url}")
-            if TaskError:
-                TaskError.failed_links.append({
-                    "link": url,
-                    "filename": f"doodstream_video_{index}",
-                    "index": index,
-                    "reason": "Invalid DoodStream URL structure."
-                })
-            return False
-            
-        video_id = match.group(1)
-        
-        # Build the mirror fallback list, placing the input domain first
-        input_domain = urlparse(url).netloc or "playmogo.com"
-        mirrors = [input_domain]
-        alternate_mirrors = [
-            "dood.wf", "dood.pm", "dood.li", "dood.cx", "dood.la", 
-            "dood.to", "dood.so", "dood.sh", "dood.re", "dood.yt",
-            "playmogo.com", "ds2play.com", "ds2video.com"
-        ]
-        for m in alternate_mirrors:
-            if m not in mirrors:
-                mirrors.append(m)
-
         direct_url = None
         title = f"doodstream_video_{index}"
-        resolved_domain = None
+        resolved_domain = "playmogo.com"
 
-        try:
-            # Step 1: Use curl_cffi with Chrome Impersonation to bypass Cloudflare
-            # Loop through mirrors to handle Colab Cloudflare Turnstile blocks
-            async with HTTPClientSession() as session:
-                for domain in mirrors:
-                    current_embed_url = f"https://{domain}/e/{video_id}"
-                    log.info(f"[DoodStream] Attempting resolution via mirror: {domain}")
-                    
-                    headers = {
-                        "Referer": current_embed_url
-                    }
+        # Check if it is already a direct DoodStream CDN link
+        if "cloudatacdn.com" in url.lower():
+            log.info(f"[DoodStream] Detected pre-extracted direct CDN link for index {index}")
+            direct_url = url
+            filename = f"doodstream_video_{index}.mp4"
+            
+            # Extract filename from URL path if possible
+            match_name = re.search(r'/([^/]+\.mp4)', url)
+            if match_name:
+                import urllib.parse
+                try:
+                    filename = urllib.parse.unquote(match_name.group(1))
+                except Exception as e:
+                    log.warning(f"[DoodStream] Failed to decode filename from URL: {e}")
+            
+            title = filename.replace(".mp4", "")
+            resolved_domain = "playmogo.com"
+        else:
+            # Extract the video ID from the mirror URL
+            match = re.search(r'/(?:d|e)/([a-zA-Z0-9]+)', url)
+            if not match:
+                log.error(f"[DoodStream] Invalid DoodStream URL structure: {url}")
+                if TaskError:
+                    TaskError.failed_links.append({
+                        "link": url,
+                        "filename": title,
+                        "index": index,
+                        "reason": "Invalid DoodStream URL structure."
+                    })
+                return False
+                
+            video_id = match.group(1)
+            
+            # Build the mirror fallback list, placing the input domain first
+            input_domain = urlparse(url).netloc or "playmogo.com"
+            mirrors = [input_domain]
+            alternate_mirrors = [
+                "dood.wf", "dood.pm", "dood.li", "dood.cx", "dood.la", 
+                "dood.to", "dood.so", "dood.sh", "dood.re", "dood.yt",
+                "playmogo.com", "ds2play.com", "ds2video.com"
+            ]
+            for m in alternate_mirrors:
+                if m not in mirrors:
+                    mirrors.append(m)
 
-                    try:
-                        html_content = await session.get_text(current_embed_url, headers=headers)
+            try:
+                # Step 1: Use curl_cffi with Chrome Impersonation to bypass Cloudflare
+                # Loop through mirrors to handle Colab Cloudflare Turnstile blocks
+                async with HTTPClientSession() as session:
+                    for domain in mirrors:
+                        current_embed_url = f"https://{domain}/e/{video_id}"
+                        log.info(f"[DoodStream] Attempting resolution via mirror: {domain}")
                         
-                        # Verify if this is a Cloudflare challenge page
-                        if "challenges.cloudflare.com" in html_content or "Just a moment..." in html_content:
-                            log.warning(f"[DoodStream] Cloudflare Turnstile challenge encountered on {domain}. Rotating mirror...")
-                            continue
+                        headers = {
+                            "Referer": current_embed_url
+                        }
+
+                        try:
+                            html_content = await session.get_text(current_embed_url, headers=headers)
                             
-                        pass_md5_match = re.search(r'/pass_md5/([^"\']+)', html_content)
-                        if not pass_md5_match:
-                            log.warning(f"[DoodStream] 'pass_md5' not found on mirror: {domain}. Rotating mirror...")
+                            # Verify if this is a Cloudflare challenge page
+                            if "challenges.cloudflare.com" in html_content or "Just a moment..." in html_content:
+                                log.warning(f"[DoodStream] Cloudflare Turnstile challenge encountered on {domain}. Rotating mirror...")
+                                continue
+                                
+                            pass_md5_match = re.search(r'/pass_md5/([^"\']+)', html_content)
+                            if not pass_md5_match:
+                                log.warning(f"[DoodStream] 'pass_md5' not found on mirror: {domain}. Rotating mirror...")
+                                continue
+                            
+                            pass_md5_path = pass_md5_match.group(1)
+                            pass_md5_url = f"https://{domain}/pass_md5/{pass_md5_path}"
+                            
+                            media_url_base = await session.get_text(pass_md5_url, headers=headers)
+                            
+                            token = pass_md5_path.split('/')[-1]
+                            random_chars = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', k=10))
+                            
+                            direct_url = f"{media_url_base}{random_chars}?token={token}&expiry={int(time.time())}"
+                            resolved_domain = domain
+                            
+                            soup = BeautifulSoup(html_content, "html.parser")
+                            title_tag = soup.find("title")
+                            if title_tag:
+                                title = title_tag.text.strip()
+                            
+                            # Cleanup filename
+                            title = re.sub(r'[\\/*?:"<>|]', "", title)
+                            title = title.replace(" - DoodStream", "").strip()
+                            
+                            log.info(f"[DoodStream] Direct link successfully resolved via mirror {domain}!")
+                            break  # Successfully resolved, exit mirror loop
+                            
+                        except Exception as e:
+                            log.warning(f"[DoodStream] Mirror {domain} failed: {e}. Rotating mirror...")
                             continue
-                        
-                        pass_md5_path = pass_md5_match.group(1)
-                        pass_md5_url = f"https://{domain}/pass_md5/{pass_md5_path}"
-                        
-                        media_url_base = await session.get_text(pass_md5_url, headers=headers)
-                        
-                        token = pass_md5_path.split('/')[-1]
-                        random_chars = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', k=10))
-                        
-                        direct_url = f"{media_url_base}{random_chars}?token={token}&expiry={int(time.time())}"
-                        resolved_domain = domain
-                        
-                        soup = BeautifulSoup(html_content, "html.parser")
-                        title_tag = soup.find("title")
-                        if title_tag:
-                            title = title_tag.text.strip()
-                        
-                        # Cleanup filename
-                        title = re.sub(r'[\\/*?:"<>|]', "", title)
-                        title = title.replace(" - DoodStream", "").strip()
-                        
-                        log.info(f"[DoodStream] Direct link successfully resolved via mirror {domain}!")
-                        break  # Successfully resolved, exit mirror loop
-                        
-                    except Exception as e:
-                        log.warning(f"[DoodStream] Mirror {domain} failed: {e}. Rotating mirror...")
-                        continue
 
-            if not direct_url:
-                raise ValueError("All DoodStream mirror domains returned Cloudflare challenges or failed.")
+                if not direct_url:
+                    raise ValueError("All DoodStream mirror domains returned Cloudflare challenges or failed.")
 
-            log.info(f"[DoodStream] Final direct link resolved successfully for '{title}'")
-
-        except Exception as e:
-            error_reason = f"DoodStream resolution failed: {str(e)[:100]}"
-            log.error(f"[DoodStream] Failed to resolve link {url}: {e}")
-            if TaskError:
-                TaskError.failed_links.append({
-                    "link": url,
-                    "filename": title,
-                    "index": index,
-                    "reason": error_reason
-                })
-            return False
+            except Exception as e:
+                error_reason = f"DoodStream resolution failed: {str(e)[:100]}"
+                log.error(f"[DoodStream] Failed to resolve link {url}: {e}")
+                if TaskError:
+                    TaskError.failed_links.append({
+                        "link": url,
+                        "filename": title,
+                        "index": index,
+                        "reason": error_reason
+                    })
+                return False
 
         # Step 2: Pass the direct link to the bot's standard aria2 downloader
         # Pass the resolved title as pre_determined_name and add Referer header
