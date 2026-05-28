@@ -78,3 +78,7 @@ class Transfer:
         self.sent_file = []
         self.sent_file_names = []
         self.successful_downloads = []
+
+
+AWAITING_UPLOAD_DECISION = "AWAITING_UPLOAD_DECISION"
+

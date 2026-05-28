@@ -390,6 +390,17 @@ class MessageTemplate:
 
         return "\n".join(lines)
 
+    @staticmethod
+    def get_upload_error_keyboard(task_id: str):
+        """Create a keyboard for upload/split failure"""
+        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🗑️ Delete Files", callback_data=f"err_action:delete:{task_id}"),
+                InlineKeyboardButton("💾 Keep Files", callback_data=f"err_action:keep:{task_id}")
+            ]
+        ])
+
 
 class TimeFormatter:
     """Format time durations"""

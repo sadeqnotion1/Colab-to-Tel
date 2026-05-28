@@ -1031,7 +1031,9 @@ async def run_parallel_task(client, message, task_ctx, skip_registration=False):
             if os.path.exists(task_ctx.work_path):
                 # Only cleanup if task failed or was cancelled
                 # Successful uploads already cleanup in handler.py
-                if task_ctx.error.state or task_ctx.is_cancelled:
+                if getattr(task_ctx, "keep_files_decision", False):
+                    log.info(f"Bypassing workspace cleanup because keep_files_decision is True: {task_ctx.work_path}")
+                elif task_ctx.error.state or task_ctx.is_cancelled:
                     log.info(f"Cleaning up workspace for failed/cancelled task: {task_ctx.work_path}")
                     shutil.rmtree(task_ctx.work_path, ignore_errors=True)
                     cleanup_success = True

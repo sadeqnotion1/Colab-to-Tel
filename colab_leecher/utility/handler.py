@@ -17,7 +17,9 @@ from .helper import fileType, getSize, getTime, keyboard, shortFileName, sizeUni
 from .message_safety import escape_html, safe_href
 from pyrogram.errors import MessageNotModified
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from .task_context import TaskContext, cleanup_task_artifacts  # NEW: Import for multi-task support
+from pyrogram import filters
+from .task_context import TaskContext, TASK_QUEUE, cleanup_task_artifacts  # NEW: Import for multi-task support
+from .transfer_state import AWAITING_UPLOAD_DECISION
 
 log = logging.getLogger(__name__)
 
@@ -261,6 +263,50 @@ async def Leech(path: str, remove_source: bool, task_ctx: TaskContext = None):
                 # Use the specific error message if _task_error.text wasn't set
                 # by the failing function
                 _task_error.text = _task_error.text or f"Error processing {current_item_name}: {str(item_err)[:100]}"
+
+            if task_ctx:
+                # 1. State Management: Change task action to AWAITING_UPLOAD_DECISION
+                task_ctx.messages.current_action = AWAITING_UPLOAD_DECISION
+
+                # 2. Release worker slot
+                log.info(f"Releasing worker slot for task {task_ctx.get_short_id()} during user decision wait")
+                await TASK_QUEUE.release_worker_slot(task_ctx.task_id)
+
+                # 3. Send Pyrogram message with InlineKeyboardMarkup
+                from .ui_components import MessageTemplate
+                keyboard = MessageTemplate.get_upload_error_keyboard(task_ctx.task_id)
+                msg_text = "⚠️ Upload/Split failed. Files are saved locally. What would you like to do?"
+                try:
+                    await colab_bot.send_message(
+                        chat_id=task_ctx.chat_id,
+                        text=msg_text,
+                        reply_markup=keyboard
+                    )
+                except Exception as e:
+                    log.error(f"Failed to send upload error keyboard message: {e}")
+
+                # 4. Wait for decision (with 1 hour timeout)
+                log.info(f"Task {task_ctx.get_short_id()} paused, waiting for user decision...")
+                try:
+                    await asyncio.wait_for(task_ctx.user_decision_event.wait(), timeout=3600.0)
+                except asyncio.TimeoutError:
+                    log.warning(f"Task {task_ctx.get_short_id()} timed out waiting for user decision. Defaulting to delete/fail.")
+                    task_ctx.keep_files_decision = False
+
+                # 5. Re-acquire worker slot before resuming pipeline
+                log.info(f"Re-acquiring worker slot for task {task_ctx.get_short_id()} after user decision")
+                await TASK_QUEUE.acquire_worker_slot(task_ctx.task_id)
+
+                # 6. Post-Decision Logic
+                if task_ctx.keep_files_decision:
+                    log.info(f"User decided to keep files. Marking task as ABORTED.")
+                    task_ctx.is_aborted = True
+                    _task_error.set_error("ABORTED")
+                    raise Exception("ABORTED")
+                else:
+                    log.info(f"User decided to delete files or timeout occurred. Cleaning up workspace...")
+                    cleanup_task_artifacts(task_ctx)
+                    raise Exception(f"Upload/split failed: {item_err}")
             # The loop will continue to the next item unless _task_error.state
             # causes skipping at the top
 
@@ -1209,3 +1255,53 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
             exc_info=True)
     finally:
         log.info(f"SendLogs complete {task_id_str}.")
+
+
+@colab_bot.on_callback_query(filters.regex(r"^err_action:(delete|keep):(.+)"))
+async def handle_upload_error_callback(client, callback_query):
+    """
+    Handle inline buttons for keeping or deleting files on upload/split failures.
+    """
+    action = None
+    task_id = None
+    if callback_query.matches:
+        action = callback_query.matches[0].group(1)
+        task_id = callback_query.matches[0].group(2)
+    else:
+        parts = callback_query.data.split(":")
+        if len(parts) >= 3:
+            action = parts[1]
+            task_id = parts[2]
+
+    log.info(f"Callback received: action={action}, task_id={task_id}")
+
+    # Retrieve the active TaskContext
+    task_ctx = await TASK_QUEUE.get_task(task_id)
+
+    if task_ctx:
+        if action == "keep":
+            task_ctx.keep_files_decision = True
+            await callback_query.answer("Action recorded: files will be kept.", show_alert=False)
+            try:
+                await callback_query.edit_message_text("✅ Files kept on disk.")
+            except Exception as e:
+                log.warning(f"Could not edit message text: {e}")
+        else:
+            task_ctx.keep_files_decision = False
+            await callback_query.answer("Action recorded: files will be deleted.", show_alert=False)
+            try:
+                await callback_query.edit_message_text("🗑️ Files deleted.")
+            except Exception as e:
+                log.warning(f"Could not edit message text: {e}")
+
+        # Set the event to unpause the task
+        task_ctx.user_decision_event.set()
+    else:
+        # Task not found (e.g. timed out, already handled, or bot restarted)
+        await callback_query.answer("Task expired or already handled.", show_alert=True)
+        try:
+            # Edit the message to remove the buttons (reply_markup=None)
+            await callback_query.edit_message_reply_markup(reply_markup=None)
+        except Exception as e:
+            log.warning(f"Could not remove reply markup: {e}")
+

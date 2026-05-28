@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Dict, Optional, List, Set, Deque, Any
 from pyrogram.types import Message
 from .ui_copy import build_health_summary_text
-from .transfer_state import SmartBytes
+from .transfer_state import SmartBytes, AWAITING_UPLOAD_DECISION
 
 log = logging.getLogger(__name__)
 
@@ -473,6 +473,9 @@ class TaskContext:
     is_completed: bool = False
     report_dispatched: bool = False
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    user_decision_event: asyncio.Event = field(default_factory=asyncio.Event)
+    keep_files_decision: Optional[bool] = None
+    is_aborted: bool = False
 
     # Strictly isolated containers - initialized during task factory creation
     _bot_isolated: Any = field(default=None, init=False, repr=False, compare=False)
@@ -838,6 +841,7 @@ def create_task_context(
         mode=mode,
     )
     task_ctx.cancel_event = asyncio.Event()
+    task_ctx.user_decision_event = asyncio.Event()
 
     # Import globals exactly once, at task-creation time.
     from .variables import Paths, BOT, MSG
@@ -888,6 +892,10 @@ def cleanup_task_artifacts(task_ctx: "TaskContext"):
     log = logging.getLogger(__name__)
 
     # 1. Retrieve the isolated work path
+    if getattr(task_ctx, "keep_files_decision", False):
+        log.info(f"Bypassing cleanup for task {task_ctx.get_short_id()} because keep_files_decision is True.")
+        return
+
     try:
         work_path = task_ctx.paths.work_path
     except Exception as e:
