@@ -534,7 +534,7 @@ async def ask_leech_type(client, chat_id, mode_name, reply_to_message_id=None):
     # Add cancel button manually
     from pyrogram.types import InlineKeyboardButton
     keyboard.inline_keyboard.append([
-        InlineKeyboardButton(f"{Emoji.ERROR} Cancel", callback_data="cancel")
+        InlineKeyboardButton("🔴 Cancel", callback_data="cancel")
     ])
 
     text = header + options_text
@@ -550,7 +550,7 @@ async def ask_filename_option(client, chat_id, service_name):
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("Extract from URLs", callback_data=f'fn_{service_name.lower()}_extract')],
         [InlineKeyboardButton("Enter Names Manually", callback_data=f'fn_{service_name.lower()}_manual')],
-        [InlineKeyboardButton("Cancel", callback_data='cancel')]
+        [InlineKeyboardButton("🔴 Cancel", callback_data='cancel')]
     ])
     await client.send_message(
         chat_id,
@@ -580,7 +580,7 @@ async def ask_upload_destination(client, chat_id):
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("Google Drive", callback_data="destination_gdrive")],
         [InlineKeyboardButton("Local Mirror (Colab)", callback_data="destination_mirror")],
-        [InlineKeyboardButton("Cancel", callback_data="cancel")]
+        [InlineKeyboardButton("🔴 Cancel", callback_data="cancel")]
     ])
     text = build_upload_destination_prompt()
     try:
@@ -2040,7 +2040,7 @@ async def ask_mode_selection(client, message):
             InlineKeyboardButton("🎥 YTDL Leech", callback_data="modepick_ytdl")
         ],
         [
-            InlineKeyboardButton("❌ Cancel", callback_data="cancel")
+            InlineKeyboardButton("🔴 Cancel", callback_data="cancel")
         ]
     ])
     
@@ -2070,7 +2070,7 @@ async def ask_service_type(client, message):
     keyboard_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("Aria", callback_data="service_direct"), InlineKeyboardButton("Debrid", callback_data="service_Debrid")],
         [InlineKeyboardButton("Bitso", callback_data="service_bitso")],
-        [InlineKeyboardButton("Cancel", callback_data="cancel")],
+        [InlineKeyboardButton("🔴 Cancel", callback_data="cancel")],
     ])
     try:
         if message and hasattr(message, "reply_text"):

@@ -306,9 +306,9 @@ async def update_summary_dashboard(
             if task_idx < len(tasks_list):
                 task_ctx = tasks_list[task_idx]
                 short_id = task_ctx.get_short_id()
-                buttons.append([InlineKeyboardButton("❌ Cancel This Task", callback_data=f"cancel:{short_id}")])
+                buttons.append([InlineKeyboardButton("🔴 Cancel This Task", callback_data=f"cancel:{short_id}")])
         elif tasks_list:
-            buttons.append([InlineKeyboardButton("❌ Cancel All Tasks", callback_data="cancel_all_tasks")])
+            buttons.append([InlineKeyboardButton("🚫 Cancel All Tasks", callback_data="cancel_all_tasks")])
 
         keyboard = InlineKeyboardMarkup(buttons) if buttons else None
         keyboard_signature = _keyboard_signature(keyboard)
