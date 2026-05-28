@@ -196,11 +196,12 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
     upload_start_time = 0 
     
     # Delta tracker for safe continuous integer arithmetic
-    last_current = 0 
+    if transfer_obj:
+        transfer_obj.previous_bytes = 0
 
     # --- Define Progress Callback ---
-    async def up_progress(current, total):
-        nonlocal last_progress_time, upload_start_time, base_upload_name, last_current 
+    async def up_progress(current, total, *args):
+        nonlocal last_progress_time, upload_start_time, base_upload_name
         
         # 1. CHECK FOR GRACEFUL ABORT BEFORE PROCESSING CHUNK
         if task_ctx and task_ctx.is_cancelled:
@@ -211,24 +212,50 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
 
         now = time.time()
         
-        # Calculate delta and apply to the continuous integer
-        delta = current - last_current
-        last_current = current
+        # Get integers strictly
+        try:
+            current_int = int(current)
+        except (ValueError, TypeError):
+            current_int = 0
+
+        previous_bytes = 0
+        if transfer_obj:
+            if not hasattr(transfer_obj, 'previous_bytes') or transfer_obj.previous_bytes is None:
+                transfer_obj.previous_bytes = 0
+            previous_bytes = transfer_obj.previous_bytes
+
+        # Calculate delta strictly using integer subtraction
+        delta = current_int - previous_bytes
+        if delta < 0:
+            delta = 0
         
         if transfer_obj:
-            transfer_obj.up_bytes += delta
+            transfer_obj.previous_bytes = current_int
+            # Safely increment up_bytes
+            if isinstance(transfer_obj.up_bytes, SmartBytes):
+                transfer_obj.up_bytes += delta
+            elif isinstance(transfer_obj.up_bytes, list):
+                if not transfer_obj.up_bytes:
+                    transfer_obj.up_bytes.append(delta)
+                else:
+                    transfer_obj.up_bytes[-1] += delta
+            else:
+                try:
+                    transfer_obj.up_bytes += delta
+                except Exception:
+                    transfer_obj.up_bytes = delta
             
         if now - last_progress_time > 2.5: 
             last_progress_time = now
             try:
-                speed_string, eta_seconds, percentage = helper.speedETA(upload_start_time, current, total)
+                speed_string, eta_seconds, percentage = helper.speedETA(upload_start_time, current_int, total)
                 
                 if transfer_obj:
-                    raw_speed = current / (now - upload_start_time) if (now - upload_start_time) > 0 else 0.0
+                    raw_speed = current_int / (now - upload_start_time) if (now - upload_start_time) > 0 else 0.0
                     transfer_obj.last_speed = raw_speed
                     transfer_obj.last_speed_bytes = raw_speed
                 
-                done_str = helper.sizeUnit(current)
+                done_str = helper.sizeUnit(current_int)
                 total_str = helper.sizeUnit(total)
                 eta_str = helper.getTime(eta_seconds)
 
@@ -244,10 +271,18 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
             last_progress_time = 0 
             
             # CRITICAL: If Pyrogram retry triggered, we rollback the corrupted partial bytes 
-            # from the last failed attempt using our `last_current` state before restarting.
-            if transfer_obj and last_current > 0:
-                transfer_obj.up_bytes -= last_current
-            last_current = 0
+            # from the last failed attempt using our `previous_bytes` state before restarting.
+            if transfer_obj and hasattr(transfer_obj, 'previous_bytes') and transfer_obj.previous_bytes > 0:
+                if isinstance(transfer_obj.up_bytes, SmartBytes):
+                    transfer_obj.up_bytes -= transfer_obj.previous_bytes
+                elif isinstance(transfer_obj.up_bytes, list) and transfer_obj.up_bytes:
+                    transfer_obj.up_bytes[-1] -= transfer_obj.previous_bytes
+                else:
+                    try:
+                        transfer_obj.up_bytes -= transfer_obj.previous_bytes
+                    except Exception:
+                        pass
+                transfer_obj.previous_bytes = 0
 
             # Determine target chat ID (use DUMP_ID if set, otherwise OWNER)
             target_chat_id = DUMP_ID if DUMP_ID else OWNER
@@ -260,48 +295,52 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
 
             log.debug(f"Upload attempt {retry_count + 1}/{max_retries + 1} for {actual_upload_filename} to chat {target_chat_id}. Thumb: {thumb_path}")
 
-            # --- Select Pyrogram Upload Method ---
-            if BOT.Options.stream_upload and is_video:
-                log.debug(f"Calling send_video for {actual_upload_filename}...")
-                sent_message = await colab_bot.send_video(
-                    chat_id=target_chat_id,
-                    video=file_path,
-                    file_name=base_upload_name,  # Override display name with proper content name
-                    caption=caption,
-                    progress=up_progress,
-                    duration=duration,
-                    width=width,
-                    height=height,
-                    thumb=thumb_path,
-                    supports_streaming=True,
-                    parse_mode=enums.ParseMode.HTML
-                )
-                log.debug(f"send_video call returned for {actual_upload_filename}. Message received: {bool(sent_message)}")
-            elif not BOT.Options.stream_upload and is_photo:
-                # Use send_photo only if explicitly NOT stream_upload AND it's a photo
-                log.debug(f"Calling send_photo for {actual_upload_filename}...")
-                sent_message = await colab_bot.send_photo(
-                    chat_id=target_chat_id,
-                    photo=file_path,
-                    caption=caption,
-                    progress=up_progress,
-                    parse_mode=enums.ParseMode.HTML
-                )
-                log.debug(f"send_photo call returned for {actual_upload_filename}. Message received: {bool(sent_message)}")
-            else:
-                # Default to send_document for non-videos, non-photos, or if stream_upload is False for videos
-                log.debug(f"Calling send_document for {actual_upload_filename}...")
-                sent_message = await colab_bot.send_document(
-                    chat_id=target_chat_id,
-                    document=file_path,
-                    file_name=base_upload_name,  # Override display name with proper content name
-                    caption=caption,
-                    progress=up_progress,
-                    thumb=thumb_path, # send_document uses thumb too
-                    force_document=True, # Ensure it sends as document, not potentially photo/video
-                    parse_mode=enums.ParseMode.HTML
-                )
-                log.debug(f"send_document call returned for {actual_upload_filename}. Message received: {bool(sent_message)}")
+            try:
+                # --- Select Pyrogram Upload Method ---
+                if BOT.Options.stream_upload and is_video:
+                    log.debug(f"Calling send_video for {actual_upload_filename}...")
+                    sent_message = await colab_bot.send_video(
+                        chat_id=target_chat_id,
+                        video=file_path,
+                        file_name=base_upload_name,  # Override display name with proper content name
+                        caption=caption,
+                        progress=up_progress,
+                        duration=duration,
+                        width=width,
+                        height=height,
+                        thumb=thumb_path,
+                        supports_streaming=True,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    log.debug(f"send_video call returned for {actual_upload_filename}. Message received: {bool(sent_message)}")
+                elif not BOT.Options.stream_upload and is_photo:
+                    # Use send_photo only if explicitly NOT stream_upload AND it's a photo
+                    log.debug(f"Calling send_photo for {actual_upload_filename}...")
+                    sent_message = await colab_bot.send_photo(
+                        chat_id=target_chat_id,
+                        photo=file_path,
+                        caption=caption,
+                        progress=up_progress,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    log.debug(f"send_photo call returned for {actual_upload_filename}. Message received: {bool(sent_message)}")
+                else:
+                    # Default to send_document for non-videos, non-photos, or if stream_upload is False for videos
+                    log.debug(f"Calling send_document for {actual_upload_filename}...")
+                    sent_message = await colab_bot.send_document(
+                        chat_id=target_chat_id,
+                        document=file_path,
+                        file_name=base_upload_name,  # Override display name with proper content name
+                        caption=caption,
+                        progress=up_progress,
+                        thumb=thumb_path, # send_document uses thumb too
+                        force_document=True, # Ensure it sends as document, not potentially photo/video
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    log.debug(f"send_document call returned for {actual_upload_filename}. Message received: {bool(sent_message)}")
+            except Exception as upload_api_err:
+                log.warning(f"Pyrogram session abort or upload error occurred: {upload_api_err}", exc_info=True)
+                raise TimeoutError(f"Pyrogram upload session error: {str(upload_api_err)}")
 
             # --- Check Upload Result ---
             if sent_message:
@@ -359,7 +398,10 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
         log.error(f"Final upload status {task_id_str} for {actual_upload_filename}: FAILED. Reason: {error_reason}")
         failed_info = {"link": "N/A", "filename": base_upload_name, "index": "Upload", "reason": error_reason}
         try:
-            if error_obj: error_obj.failed_links.append(failed_info)
+            if error_obj:
+                error_obj.failed_links.append(failed_info)
+                # Ensure the state transitions explicitly to failed
+                error_obj.set_error(error_reason)
         except AttributeError:
              log.warning(f"Could not record failed link {task_id_str}, error object might be missing attributes.")
         return False
@@ -367,9 +409,18 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
         # Final safety catch: if Pyrogram misses the final 100% callback, we append the missed bytes exactly.
         try:
             if transfer_obj:
-                missed_bytes = file_size - last_current
+                previous_bytes = getattr(transfer_obj, 'previous_bytes', 0)
+                missed_bytes = file_size - previous_bytes
                 if missed_bytes > 0:
-                    transfer_obj.up_bytes += missed_bytes
+                    if isinstance(transfer_obj.up_bytes, SmartBytes):
+                        transfer_obj.up_bytes += missed_bytes
+                    elif isinstance(transfer_obj.up_bytes, list):
+                        if not transfer_obj.up_bytes:
+                            transfer_obj.up_bytes.append(missed_bytes)
+                        else:
+                            transfer_obj.up_bytes[-1] += missed_bytes
+                    else:
+                        transfer_obj.up_bytes += missed_bytes
         except Exception as report_err:
             log.error(f"Error reporting uploaded bytes {task_id_str} for {actual_upload_filename}: {report_err}")
         return True

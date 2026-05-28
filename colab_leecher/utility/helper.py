@@ -1661,8 +1661,15 @@ async def status_bar(
 
     # Debug logging
     task_id_str = f"[{task_ctx.get_short_id()}]" if task_ctx else "[legacy]"
+    
+    try:
+        percentage_val = float(percentage)
+        pct_str = f"{percentage_val:.2f}%"
+    except (ValueError, TypeError):
+        pct_str = f"{percentage}%"
+
     log.info(
-        f"📊 status_bar {task_id_str} called. Pct={percentage}%, Speed={speed}")
+        f"📊 status_bar {task_id_str} called. Pct={pct_str}, Speed={speed}")
 
     # Unified throttling logic: ALWAYS use per-task timer if available, otherwise global
     if not force_update:
