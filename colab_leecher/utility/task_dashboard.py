@@ -145,7 +145,7 @@ async def update_summary_dashboard(
 
         if current_page == 0:
             # --- PAGE 0: GLOBAL MANAGER VIEW ---
-            summary_text += "<b>╔═══ Active Tasks Summary ═══╗</b>\n║\n"
+            summary_text += "╔═══ Active Tasks Summary ═══╗\n║\n"
             for idx, task_ctx in enumerate(tasks_list, 1):
                 short_id = task_ctx.get_short_id()
                 raw_name = task_ctx.messages.download_name if task_ctx.messages else None
@@ -168,7 +168,7 @@ async def update_summary_dashboard(
                 if idx < len(tasks_list):
                     summary_text += "║\n"
             
-            summary_text += "║\n<b>╚════════════════════════════╝</b>\n\n"
+            summary_text += "║\n╚════════════════════════════╝\n\n"
             summary_text += f"<i>Use the buttons below to view details for each task.</i>"
             
         else:
@@ -196,19 +196,19 @@ async def update_summary_dashboard(
                 
                 bar = ProgressBar.generate(percentage, 15, "smooth")
                 summary_text = header + (
-                    f"<b>╔═════ 📤 [ UPLOADING TO TG ] ═════╗</b>\n"
-                    f"<b>║</b>\n"
-                    f"<b>║  File  »</b> <code>{escape(filename)}</code>\n"
-                    f"<b>║  ID    »</b> <code>{escape(short_id)}</code>\n"
-                    f"<b>║</b>\n"
-                    f"<b>╠══════════════════════════════════╣</b>\n"
-                    f"<b>║  Progress »</b> ▕{bar}▏ <b>{percentage:.1f}%</b>\n"
-                    f"<b>║</b>\n"
-                    f"<b>║  ⚡️ Speed   :</b> <code>{escape(speed)}</code>\n"
-                    f"<b>║  ⚙️ Status  :</b> <code>Uploading 📤</code>\n"
-                    f"<b>║  ✅ Uploaded:</b> <code>{uploaded}</code> / <code>{total}</code>\n"
-                    f"<b>║</b>\n"
-                    f"<b>╚══════════════════════════════════╝</b>"
+                    f"╔═════ 📤 [ UPLOADING TO TG ] ═════╗\n"
+                    f"║\n"
+                    f"║  <b>File  »</b> <code>{escape(filename)}</code>\n"
+                    f"║  <b>ID    »</b> <code>{escape(short_id)}</code>\n"
+                    f"║\n"
+                    f"╠══════════════════════════════════╣\n"
+                    f"║  <b>Progress »</b> ▕{bar}▏ <b>{percentage:.1f}%</b>\n"
+                    f"║\n"
+                    f"║  ⚡️ <b>Speed   :</b> <code>{escape(speed)}</code>\n"
+                    f"║  ⚙️ <b>Status  :</b> <code>Uploading 📤</code>\n"
+                    f"║  ✅ <b>Uploaded:</b> <code>{uploaded}</code> / <code>{total}</code>\n"
+                    f"║\n"
+                    f"╚══════════════════════════════════╝"
                 )
 
             elif d_bytes > 0:
@@ -228,26 +228,26 @@ async def update_summary_dashboard(
                     is_proc = True
                 
                 if is_proc:
-                    percentage = 0.0
-                    if task_ctx.messages.total_files > 0:
+                    percentage = task_ctx.transfer.get_percentage()
+                    if percentage == 0.0 and task_ctx.messages.total_files > 0:
                         percentage = (task_ctx.messages.files_processed / task_ctx.messages.total_files) * 100
                     
                     bar = ProgressBar.generate(percentage, 15, "smooth")
                     elapsed = getTime(task_ctx.get_elapsed_time())
                     summary_text = header + (
-                        f"<b>╔═════ 🗜️ [ PROCESSING FILE ] ═════╗</b>\n"
-                        f"<b>║</b>\n"
-                        f"<b>║  File  »</b> <code>{escape(filename)}</code>\n"
-                        f"<b>║  ID    »</b> <code>{escape(short_id)}</code>\n"
-                        f"<b>║</b>\n"
-                        f"<b>╠══════════════════════════════════╣</b>\n"
-                        f"<b>║  Progress »</b> ▕{bar}▏ <b>{percentage:.1f}%</b>\n"
-                        f"<b>║</b>\n"
-                        f"<b>║  ⚙️ Status  :</b> <code>{status_label}</code>\n"
-                        f"<b>║  ⏱️ Elapsed :</b> <code>{elapsed}</code>\n"
-                        f"<b>║  📦 Files   :</b> <code>{task_ctx.messages.files_processed}</code> / <code>{task_ctx.messages.total_files}</code>\n"
-                        f"<b>║</b>\n"
-                        f"<b>╚══════════════════════════════════╝</b>"
+                        f"╔═════ 🗜️ [ PROCESSING FILE ] ═════╗\n"
+                        f"║\n"
+                        f"║  <b>File  »</b> <code>{escape(filename)}</code>\n"
+                        f"║  <b>ID    »</b> <code>{escape(short_id)}</code>\n"
+                        f"║\n"
+                        f"╠══════════════════════════════════╣\n"
+                        f"║  <b>Progress »</b> ▕{bar}▏ <b>{percentage:.1f}%</b>\n"
+                        f"║\n"
+                        f"║  ⚙️ <b>Status  :</b> <code>{status_label}</code>\n"
+                        f"║  ⏱️ <b>Elapsed :</b> <code>{elapsed}</code>\n"
+                        f"║  📦 <b>Files   :</b> <code>{task_ctx.messages.files_processed}</code> / <code>{task_ctx.messages.total_files}</code>\n"
+                        f"║\n"
+                        f"╚══════════════════════════════════╝"
                     )
                 else:
                     speed = SizeFormatter.format_speed(task_ctx.transfer.get_speed())
@@ -259,32 +259,32 @@ async def update_summary_dashboard(
                     
                     bar = ProgressBar.generate(percentage, 15, "smooth")
                     summary_text = header + (
-                        f"<b>╔═════ 📥 [ DOWNLOADING FILE ] ═════╗</b>\n"
-                        f"<b>║</b>\n"
-                        f"<b>║  File  »</b> <code>{escape(filename)}</code>\n"
-                        f"<b>║  ID    »</b> <code>{escape(short_id)}</code>\n"
-                        f"<b>║</b>\n"
-                        f"<b>╠══════════════════════════════════╣</b>\n"
-                        f"<b>║  Progress »</b> ▕{bar}▏ <b>{percentage:.1f}%</b>\n"
-                        f"<b>║</b>\n"
-                        f"<b>║  ⚡️ Speed   :</b> <code>{escape(speed)}</code>\n"
-                        f"<b>║  ⚙️ Status  :</b> <code>{status_label}</code>\n"
-                        f"<b>║  ⏳ ETA     :</b> <code>{eta_str}</code>\n"
-                        f"<b>║  ✅ Done    :</b> <code>{downloaded}</code> / <code>{total}</code>\n"
-                        f"<b>║</b>\n"
-                        f"<b>╚══════════════════════════════════╝</b>"
+                        f"╔═════ 📥 [ DOWNLOADING FILE ] ═════╗\n"
+                        f"║\n"
+                        f"║  <b>File  »</b> <code>{escape(filename)}</code>\n"
+                        f"║  <b>ID    »</b> <code>{escape(short_id)}</code>\n"
+                        f"║\n"
+                        f"╠══════════════════════════════════╣\n"
+                        f"║  <b>Progress »</b> ▕{bar}▏ <b>{percentage:.1f}%</b>\n"
+                        f"║\n"
+                        f"║  ⚡️ <b>Speed   :</b> <code>{escape(speed)}</code>\n"
+                        f"║  ⚙️ <b>Status  :</b> <code>{status_label}</code>\n"
+                        f"║  ⏳ <b>ETA     :</b> <code>{eta_str}</code>\n"
+                        f"║  ✅ <b>Done    :</b> <code>{downloaded}</code> / <code>{total}</code>\n"
+                        f"║\n"
+                        f"╚══════════════════════════════════╝"
                     )
             else:
                 summary_text = header + (
-                    f"<b>╔═════ ⏳ [ INITIALIZING ] ═════╗</b>\n"
-                    f"<b>║</b>\n"
-                    f"<b>║  File  »</b> <code>{escape(filename)}</code>\n"
-                    f"<b>║  ID    »</b> <code>{escape(short_id)}</code>\n"
-                    f"<b>║</b>\n"
-                    f"<b>╠═══════════════════════════════╣</b>\n"
-                    f"<b>║  Status  :</b> <code>Initializing... ⏳</code>\n"
-                    f"<b>║</b>\n"
-                    f"<b>╚═══════════════════════════════╝</b>"
+                    f"╔═════ ⏳ [ INITIALIZING ] ═════╗\n"
+                    f"║\n"
+                    f"║  <b>File  »</b> <code>{escape(filename)}</code>\n"
+                    f"║  <b>ID    »</b> <code>{escape(short_id)}</code>\n"
+                    f"║\n"
+                    f"╠═══════════════════════════════╣\n"
+                    f"║  <b>Status  :</b> <code>Initializing... ⏳</code>\n"
+                    f"║\n"
+                    f"╚═══════════════════════════════╝"
                 )
 
         # --- NAVIGATION BUTTONS ---
