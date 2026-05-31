@@ -12,7 +12,7 @@ from datetime import datetime
 from asyncio import sleep
 from os import makedirs, path as ospath
 from pyrogram import enums
-from .. import OWNER, colab_bot, DUMP_ID
+from .. import colab_bot
 from ..downlader.manager import calDownSize, get_d_name, downloadManager
 from .helper import (
     getSize, applyCustomName, keyboard, sysINFO, is_google_drive,
@@ -120,6 +120,8 @@ async def taskScheduler(task_ctx: TaskContext):
         task_ctx: Required. Strictly isolated TaskContext for this execution.
                   Global state is never accessed; all state is sourced from here.
     """
+    from .. import OWNER, DUMP_ID
+
     task_id = task_ctx.task_id
     log.info(
         f"taskScheduler started using TaskContext for task_id: {task_id}"
@@ -245,27 +247,35 @@ async def taskScheduler(task_ctx: TaskContext):
         makedirs(_paths.WORK_PATH, exist_ok=True)
         makedirs(_paths.down_path, exist_ok=True)
 
+        # Check if parallel mode is active to optimize thumbnail downloading
+        is_parallel_mode = await TASK_QUEUE.has_task(task_ctx.task_id)
+
         # --- Conditional Random Thumbnail Download ---
         default_pic_url = Aria2c.pic_dwn_url  # Get default from Aria2c settings
         chosen_url = None
         hero_image_path = _paths.HERO_IMAGE  # Path where thumbnail will be saved
+        download_success = False  # Flag to track if download worked
 
-        # Assume 'thumbnail_urls' list is populated earlier (e.g., from
-        # Paths.list_hero)
-        if thumbnail_urls:  # Check if the random list exists and is not empty
-            log.info("Choosing random thumbnail from list.")
-            chosen_url = random.choice(thumbnail_urls)
-            log.info(f"Randomly selected thumbnail URL: {chosen_url}")
+        need_thumbnail = not is_parallel_mode or _bot.Setting.thumbnail
+
+        if need_thumbnail:
+            # Assume 'thumbnail_urls' list is populated earlier (e.g., from
+            # Paths.list_hero)
+            if thumbnail_urls:  # Check if the random list exists and is not empty
+                log.info("Choosing random thumbnail from list.")
+                chosen_url = random.choice(thumbnail_urls)
+                log.info(f"Randomly selected thumbnail URL: {chosen_url}")
+            else:
+                # Fallback to default if the random list is empty or not defined
+                log.warning(
+                    "Random thumbnail URL list is empty or not available. Falling back to default URL.")
+                chosen_url = default_pic_url
+            # --- End Always Random Choice ---
         else:
-            # Fallback to default if the random list is empty or not defined
-            log.warning(
-                "Random thumbnail URL list is empty or not available. Falling back to default URL.")
-            chosen_url = default_pic_url
-        # --- End Always Random Choice ---
+            log.info("Skipping random thumbnail download: task is in parallel mode and thumbnail setting is disabled.")
 
         # --- Download the chosen thumbnail (Your existing download logic) ---
-        download_success = False  # Flag to track if download worked
-        if chosen_url:
+        if chosen_url and need_thumbnail:
             log.info(
                 f"Attempting asynchronous download of thumbnail from: {chosen_url}")
             try:
@@ -672,6 +682,7 @@ async def _stage_download(batch_links, task_ctx: TaskContext) -> str | None:
     log.info(f"[Pipeline] Updating download name from: {batch_download_path}")
     smart_name = update_download_name_from_directory(batch_download_path, task_ctx)
     log.info(f"[Pipeline] Smart name determined: {smart_name}")
+    task_ctx.messages.download_name = smart_name
 
     return batch_download_path
 
@@ -952,7 +963,7 @@ async def Do_Leech(
                 raise Exception(_task_error.text)
         else:
             source_links = list(source)
-            batch_size = 1
+            batch_size = getattr(task_ctx.bot.Options, 'batch_size', 1)
             total_links = len(source_links)
 
             # Validate filenames count if provided
@@ -1067,9 +1078,8 @@ async def Do_Mirror(
             makedirs(_paths.mirror_dir)
             log.info(f"Created local mirror directory: {_paths.mirror_dir}")
         except Exception as mkdir_err:
-            if _task_error:
-                _task_error.state = True
-                _task_error.text = f"Cannot create local mirror dir: {mkdir_err}"
+            _task_error.state = True
+            _task_error.text = f"Cannot create local mirror dir: {mkdir_err}"
             log.error(_task_error.text)
             return
 
@@ -1096,7 +1106,7 @@ async def Do_Mirror(
         await downloadManager(source, is_ytdl, filenames_to_pass, task_ctx)
 
         # Check _task_error state *after* downloadManager returns
-        if _task_error and _task_error.state:
+        if _task_error.state:
             log.error(
                 "Download failed before mirroring (downloadManager reported error).")
             return  # Stop Do_Mirror if download failed
@@ -1203,9 +1213,8 @@ async def Do_Mirror(
                 log.error(
                     f"Error mirroring content: {copy_err}",
                     exc_info=True)
-                if _task_error:
-                    _task_error.state = True
-                    _task_error.text = f"Mirror copy error: {copy_err}"
+                _task_error.state = True
+                _task_error.text = f"Mirror copy error: {copy_err}"
 
         else:
             log.warning("Skipping mirror processing due to download failure.")
@@ -1214,7 +1223,7 @@ async def Do_Mirror(
         log.error(
             f"Error in Do_Mirror main execution: {mirror_err}",
             exc_info=True)
-        if _task_error and not _task_error.state:
+        if not _task_error.state:
             _task_error.state = True
             _task_error.text = f"Unexpected Mirror Error: {mirror_err}"
     finally:
@@ -1235,7 +1244,7 @@ async def Do_Mirror(
             log.debug("Restored original _paths.down_path for Mirror")
 
     # Final logging/reporting based on _task_error state
-    if _task_error and _task_error.state:
+    if _task_error.state:
         log.warning(
             f"Do_Mirror finished with error: {_task_error.text}. Logs skipped/Cancel called."
         )
@@ -1374,7 +1383,7 @@ async def Do_GDrive_Upload(
         # --- Handle Link Modes with Batch Processing ---
         else:
             source_links = list(source)
-            batch_size = 1
+            batch_size = getattr(task_ctx.bot.Options, 'batch_size', 1)
             total_links = len(source_links)
             manual_filenames_provided = bool(full_filenames_list)
 

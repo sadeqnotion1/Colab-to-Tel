@@ -16,7 +16,7 @@ from typing import Optional
 from pyrogram import enums
 from pyrogram.errors import MessageNotModified, FloodWait
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
-from .. import OWNER, colab_bot
+from .. import colab_bot
 from .task_context import TASK_QUEUE
 from .helper import getTime
 from .variables import Paths, BOT
@@ -74,6 +74,8 @@ async def update_summary_dashboard(
     Returns:
         Updated/created summary message, or None if no tasks active
     """
+    from .. import OWNER
+
     if not client:
         client = colab_bot
 

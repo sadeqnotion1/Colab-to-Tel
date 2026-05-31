@@ -6,7 +6,7 @@ import logging
 import pathlib
 import asyncio
 from time import time
-from .. import OWNER, colab_bot, DUMP_ID
+from .. import colab_bot
 from natsort import natsorted
 from datetime import datetime
 from os import makedirs, path as ospath
@@ -519,7 +519,8 @@ async def cancel_task(reason: str, task_ctx: TaskContext = None):
         reason: Reason for cancellation.
         task_ctx: TaskContext for per-task cancellation.
     """
-    global OWNER, colab_bot, log
+    global colab_bot, log
+    from .. import OWNER
     import io
     from pyrogram import enums
     from pyrogram.errors import MessageNotModified
@@ -1053,10 +1054,17 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
         is_leech: True for leech mode, False for mirror mode
         task_ctx: TaskContext for this task
     """
-    global OWNER, colab_bot
+    global colab_bot
+    from .. import OWNER
 
     if task_ctx is None:
         raise ValueError("SendLogs requires task_ctx")
+
+    task_id_str = f"[{task_ctx.get_short_id()}]"
+    if task_ctx.report_dispatched:
+        log.warning(f"SendLogs {task_id_str}: Report already dispatched, skipping.")
+        return
+    task_ctx.report_dispatched = True
 
     transfer_obj = task_ctx.transfer
     messages_obj = task_ctx.messages

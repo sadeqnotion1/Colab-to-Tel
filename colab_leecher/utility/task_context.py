@@ -359,7 +359,6 @@ class IsolatedPaths:
         self.temp_unzip_path = f"{self.work_path}/temp_unzip"
         self.temp_unzip = self.temp_unzip_path        # legacy alias
         self.temp_dirleech_path = f"{self.work_path}/dir_leech_temp"
-        self.temp_files_dir = f"{self.work_path}/leech_temp"
 
 
 class IsolatedBotOptions:
@@ -811,6 +810,7 @@ class TaskQueue:
 TASK_QUEUE = TaskQueue()
 
 def get_current_task_ctx() -> Optional[TaskContext]:
+    log.warning("get_current_task_ctx() called: this is a legacy compatibility shim and always returns None.")
     return None
 
 def create_task_context(

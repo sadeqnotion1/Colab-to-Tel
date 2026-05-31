@@ -37,7 +37,7 @@ from .ui_copy import (
     build_converter_progress_text,
 )
 # Import bot client and owner ID for password prompts
-from .. import colab_bot, OWNER
+from .. import colab_bot
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,8 @@ async def prompt_for_password(
     task_ctx: TaskContext | None = None,
 ) -> bool:
     """Send a password prompt and store per-user retry context."""
+    from .. import OWNER
+
     try:
         target_user_id = OWNER
         target_chat_id = OWNER
