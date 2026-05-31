@@ -1859,14 +1859,9 @@ async def status_bar(
                         f"status_bar received invalid percentage type: {percentage}. Defaulting to 0.")
                     percentage_float = 0.0
 
-                # Calculate filled part of the bar
-                filled_length = min(
-                    bar_length, max(
-                        0, int(
-                            percentage_float / 100 * bar_length)))
-                
-                # Enhanced visual bar style
-                bar = "█" * filled_length + "▒" * (bar_length - filled_length)
+                # Enhanced visual bar style using centralized modern UI components
+                from .ui_components import ProgressBar
+                bar = ProgressBar.generate(percentage_float, length=bar_length, style='smooth')
 
                 eta_str = eta
 
