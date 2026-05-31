@@ -1822,19 +1822,6 @@ async def status_bar(
             # Trigger dashboard update
             from .task_dashboard import try_update_summary
             await try_update_summary()
-
-            # Handle Telegram message update for custom text
-            if use_custom_text:
-                # Throttling logic already handled at top
-                if _status_msg:
-                    try:
-                        final_text = done + sysINFO()
-                        await _edit_status_message(_status_msg, final_text, _kb_markup, enums.ParseMode.HTML)
-                    except Exception as e:
-                        if "message is not modified" not in str(e).lower():
-                            log.warning(f"Failed to update custom status: {e}")
-            
-            return
     # ===== END PARALLEL MODE CHECK =====
 
     if _status_msg and hasattr(_status_msg, 'edit_text'):
