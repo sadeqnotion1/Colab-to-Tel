@@ -13,7 +13,7 @@ from asyncio import sleep, get_event_loop
 from colab_leecher import ConfigError, DUMP_ID, OWNER, colab_bot, ensure_runtime_config  # Absolute import
 from .utility.handler import cancelTask
 from .utility.variables import BOT, MSG, BotTimes, Paths, TRANSFER, TaskError, Aria2c
-from .utility.task_context import TaskContext, TASK_QUEUE, create_task_context
+from .utility.task_context import TaskContext, TASK_QUEUE, create_task_context, IsolatedBot
 from .utility.task_dashboard import update_summary_dashboard, force_update_summary
 from .utility.task_manager import taskScheduler, task_starter
 from .utility.rate_limiter import RATE_LIMITER
@@ -194,24 +194,28 @@ def _build_task_bot(
     archive_format: str,
 ):
     """Build a BOT-like object expected by taskScheduler(task_ctx)."""
+    # Use IsolatedBot to safely copy all class attributes/variables
+    # to maintain full backward compatibility and prevent missing attributes.
+    bot_obj = IsolatedBot(BOT, task_ctx)
+    
+    # Overwrite SOURCE with list of source links
+    bot_obj.SOURCE = list(source_links or [])
+    
+    # Overwrite specific Mode settings for the task context
     is_ytdl = task_ctx.service_type == "ytdl"
-    return type('obj', (object,), {
-        'Mode': type('obj', (object,), {
-            'mode': task_ctx.mode,
-            'ytdl': is_ytdl,
-            'type': task_ctx.mode_type
-        })(),
-        'Options': type('obj', (object,), {
-            'service_type': task_ctx.service_type,
-            'filenames': list(filenames or []),
-            'custom_name': custom_name or '',
-            'zip_pswd': zip_pswd or '',
-            'unzip_pswd': unzip_pswd or '',
-            'archive_format': archive_format or '7z'
-        })(),
-        'SOURCE': list(source_links or []),
-        'Setting': BOT.Setting
-    })()
+    bot_obj.Mode.mode = task_ctx.mode
+    bot_obj.Mode.ytdl = is_ytdl
+    bot_obj.Mode.type = task_ctx.mode_type
+    
+    # Overwrite specific Options settings for the task context
+    bot_obj.Options.service_type = task_ctx.service_type
+    bot_obj.Options.filenames = list(filenames or [])
+    bot_obj.Options.custom_name = custom_name or ''
+    bot_obj.Options.zip_pswd = zip_pswd or ''
+    bot_obj.Options.unzip_pswd = unzip_pswd or ''
+    bot_obj.Options.archive_format = archive_format or '7z'
+    
+    return bot_obj
 
 
 def _prepare_task_context(
