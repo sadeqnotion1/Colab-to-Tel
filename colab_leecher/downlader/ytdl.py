@@ -180,9 +180,6 @@ def YouTubeDL(url):
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "merge_output_format": "mp4",
 
-        # Browser Impersonation - Bypasses bot detection (requires curl_cffi)
-        "impersonate": "chrome" if has_impersonate else None,
-
         # Cookies - Load automatically if file exists
         "cookiefile": "cookies.txt" if ospath.exists("cookies.txt") else None,
 
@@ -237,15 +234,15 @@ def YouTubeDL(url):
         "logger": MyLogger(),
     }
 
+    if has_impersonate:
+        ydl_opts["impersonate"] = "chrome"
+
     try:
         ydl = yt_dlp.YoutubeDL(ydl_opts)
     except Exception as e:
-        if "impersonate" in str(e).lower():
-            log.warning(f"Impersonation target failed to initialize: {e}. Retrying without impersonation.")
-            ydl_opts["impersonate"] = None
-            ydl = yt_dlp.YoutubeDL(ydl_opts)
-        else:
-            raise
+        log.warning(f"Failed to initialize yt-dlp with current options: {e}. Retrying without impersonation.")
+        ydl_opts.pop("impersonate", None)
+        ydl = yt_dlp.YoutubeDL(ydl_opts)
 
     with ydl:
         if not ospath.exists(Paths.thumbnail_ytdl):
@@ -308,12 +305,9 @@ async def get_YT_Name(link, task_ctx=None):
     try:
         ydl = yt_dlp.YoutubeDL(ydl_opts)
     except Exception as e:
-        if "impersonate" in str(e).lower():
-            log.warning(f"Impersonation target failed to initialize in get_YT_Name: {e}. Retrying without impersonation.")
-            ydl_opts["impersonate"] = None
-            ydl = yt_dlp.YoutubeDL(ydl_opts)
-        else:
-            raise
+        log.warning(f"Failed to initialize yt-dlp in get_YT_Name: {e}. Retrying without impersonation.")
+        ydl_opts.pop("impersonate", None)
+        ydl = yt_dlp.YoutubeDL(ydl_opts)
 
     with ydl:
         try:
