@@ -3932,6 +3932,98 @@ async def mindvalley_download(client, message):
     log.debug("/mindvalley: task_starter called, source prompt tracked per user")
 
 
+async def resolve_and_parse_input_to_tasks(text, depth=0, max_depth=3):
+    if depth > max_depth:
+        log.warning("Max depth reached in resolve_and_parse_input_to_tasks")
+        return []
+
+    lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
+    tasks = []
+    
+    # We will accumulate direct lines to parse as a task
+    direct_lines = []
+    
+    async def flush_direct_lines():
+        if not direct_lines:
+            return
+        
+        # Parse the direct lines
+        current_title = None
+        current_subtitle_only = False
+        current_urls = []
+        
+        for line in direct_lines:
+            if line.upper().startswith('TITLE='):
+                if current_urls:
+                    tasks.append({
+                        'urls': current_urls,
+                        'custom_title': current_title,
+                        'subtitle_only': current_subtitle_only
+                    })
+                    current_urls = []
+                    current_subtitle_only = False
+                current_title = line.split('=', 1)[1].strip()
+                continue
+                
+            if line.upper().startswith('DOWNLOAD_TYPE='):
+                download_type = line.split('=', 1)[1].strip().lower()
+                if download_type in ('subtitle-only', 'subtitle_only'):
+                    current_subtitle_only = True
+                continue
+                
+            if '.m3u8' in line.lower() or '.webvtt' in line.lower():
+                if '=' in line:
+                    url = line.split('=', 1)[1].strip()
+                else:
+                    url = line
+                current_urls.append(url)
+                
+        if current_urls:
+            tasks.append({
+                'urls': current_urls,
+                'custom_title': current_title,
+                'subtitle_only': current_subtitle_only
+            })
+        
+        direct_lines.clear()
+
+    for line in lines:
+        if 'gist.githubusercontent.com' in line or 'gist.github.com' in line:
+            # First, flush any direct lines we accumulated so far
+            await flush_direct_lines()
+            
+            # Now resolve this gist URL
+            raw_url = line
+            if 'gist.github.com' in line and '/raw' not in line:
+                raw_url = f"{line.rstrip('/')}/raw"
+            
+            try:
+                log.info(f"Fetching Gist content from: {raw_url}")
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(raw_url, timeout=20) as response:
+                        response.raise_for_status()
+                        gist_content = await response.text()
+                
+                sub_tasks = await resolve_and_parse_input_to_tasks(gist_content, depth + 1, max_depth)
+                for t in sub_tasks:
+                    if not t.get('gist_url'):
+                        t['gist_url'] = line
+                tasks.extend(sub_tasks)
+            except Exception as e:
+                log.error(f"Failed to fetch or process Gist {raw_url}: {e}")
+                tasks.append({
+                    'error': f"Failed to fetch Gist: {line}\nError: {str(e)}",
+                    'gist_url': line
+                })
+        else:
+            direct_lines.append(line)
+            
+    # Flush any remaining direct lines
+    await flush_direct_lines()
+    
+    return tasks
+
+
 # Handler for Mindvalley URLs and NZB URLs (when user sends URLs after commands)
 # Exclude commands so they can be handled by specific command handlers
 @colab_bot.on_message(filters.text & not_command_filter & filters.private)
@@ -4034,435 +4126,308 @@ async def handle_text_input(client, message):
     # Delete the per-user help/request message.
     await _clear_source_waiting(client, _extract_user_id(message))
 
-    # NEW: Create TaskContext for this download (enables parallel tasks)
-    task_ctx = create_task_context(
-        user_id=message.from_user.id,
-        chat_id=message.chat.id,
-        mode="leech"
-    )
-    task_ctx.service_type = "mindvalley"
-    log.info(f"Created TaskContext {task_ctx.get_short_id()} for Mindvalley download")
-
     try:
         input_text = message.text.strip()
-        urls = []
-        custom_title = None  # Store custom title from TITLE= line
-        subtitle_only = False  # NEW: Flag for subtitle-only mode
+        tasks = await resolve_and_parse_input_to_tasks(input_text)
+        
+        if not tasks:
+            await message.reply_text("❌ No valid Mindvalley download configurations or Gist URLs found.", quote=True)
+            return
 
-        # Check if input is a gist URL
-        if 'gist.githubusercontent.com' in input_text or 'gist.github.com' in input_text:
-            log.info(f"Detected gist URL: {input_text}")
-
-            # Convert to raw URL if needed
-            raw_url = input_text
-            if 'gist.github.com' in input_text and '/raw' not in input_text:
-                # User sent the normal gist URL, convert to raw
+        for idx, task_data in enumerate(tasks):
+            if 'error' in task_data:
                 await message.reply_text(
-                    f"⚠️ {build_raw_gist_warning()}",
+                    f"❌ <b>Error in Task {idx+1}:</b>\n{task_data['error']}",
                     quote=True,
-                    parse_mode=enums.ParseMode.HTML,
+                    parse_mode=enums.ParseMode.HTML
                 )
-                return
+                continue
 
-            # Fetch content from gist
+            urls = task_data['urls']
+            custom_title = task_data['custom_title']
+            subtitle_only = task_data['subtitle_only']
+            gist_url = task_data.get('gist_url')
+
+            if not urls:
+                continue
+
+            # Auto-detect subtitle-only mode if user sends a single subtitle URL
+            if not subtitle_only and len(urls) == 1:
+                url_lower = urls[0].lower()
+                if 'subtitle' in url_lower or 'webvtt' in url_lower or url_lower.endswith('.webvtt.m3u8'):
+                    subtitle_only = True
+                    log.info("Auto-detected subtitle-only mode from URL pattern")
+
+            # Parse URLs based on mode
+            if subtitle_only:
+                subtitle_url = urls[0] if len(urls) > 0 else None
+                video_url = None
+                audio_url = None
+
+                if not subtitle_url or ('.m3u8' not in subtitle_url.lower() and '.webvtt' not in subtitle_url.lower()):
+                    await message.reply_text(
+                        f"❌ <b>Task {idx+1} Invalid:</b> Invalid subtitle URL. Must be M3U8 or WebVTT.",
+                        quote=True,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    continue
+            else:
+                video_url = urls[0] if len(urls) > 0 else None
+                audio_url = urls[1] if len(urls) > 1 else None
+                subtitle_url = urls[2] if len(urls) > 2 else None
+
+                if not video_url or ('.m3u8' not in video_url.lower()):
+                    await message.reply_text(
+                        f"❌ <b>Task {idx+1} Invalid:</b> Invalid video URL. First line must be M3U8.",
+                        quote=True,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    continue
+
+            # Create TaskContext for this specific task
+            task_ctx = create_task_context(
+                user_id=message.from_user.id,
+                chat_id=message.chat.id,
+                mode="leech"
+            )
+            task_ctx.service_type = "mindvalley"
+            log.info(f"Created TaskContext {task_ctx.get_short_id()} for Mindvalley download task {idx+1}")
+
+            # Create unique directories for this task
+            os.makedirs(task_ctx.work_path, exist_ok=True)
+            os.makedirs(task_ctx.down_path, exist_ok=True)
+
+            downloader = MindvalleyDownloader(client, message, task_ctx)
+
+            # Generate output filename
+            if custom_title:
+                base_name = clean_filename(custom_title)
+                base_name = apply_dot_style(base_name) if base_name else "mindvalley_course"
+                if subtitle_only:
+                    output_filename = base_name if base_name.lower().endswith('.vtt') else f"{base_name}.vtt"
+                else:
+                    output_filename = base_name if base_name.lower().endswith('.mp4') else f"{base_name}.mp4"
+            else:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                if subtitle_only:
+                    output_filename = f"mindvalley_subtitle_{timestamp}_{idx+1}.vtt"
+                else:
+                    output_filename = f"mindvalley_course_{timestamp}_{idx+1}.mp4"
+
+            # Store URLs in task context
+            task_ctx.source_urls = urls
+            task_ctx.filenames = [output_filename]
+
+            # Initialize status message for progress tracking
+            if subtitle_only:
+                status_text = (
+                    f"<b>Mindvalley Subtitle Download</b> [<code>{task_ctx.get_short_id()}</code>]\n\n"
+                    f"<b>Title:</b> <code>{custom_title or 'N/A'}</code>\n"
+                    "<b>Subtitle:</b> ✅\n"
+                    "<b>Video:</b> ❌ (subtitle-only mode)\n"
+                    "<b>Audio:</b> ❌ (subtitle-only mode)\n\n"
+                    "<i>Download will start shortly...</i>"
+                )
+            else:
+                status_text = (
+                    f"<b>Mindvalley Download Started</b> [<code>{task_ctx.get_short_id()}</code>]\n\n"
+                    f"<b>Title:</b> <code>{custom_title or 'N/A'}</code>\n"
+                    "<b>Video:</b> ✅\n"
+                    f"<b>Audio:</b> {'✅' if audio_url else '❌ (using embedded audio)'}\n"
+                    f"<b>Subtitle:</b> {'✅' if subtitle_url else '❌'}\n\n"
+                    "<i>Download will start shortly...</i>"
+                )
+
+            # Download random thumbnail
+            from .utility.task_manager import thumbnail_urls
+            hero_image_path = task_ctx.hero_image
+            chosen_url = random.choice(thumbnail_urls) if thumbnail_urls else Aria2c.pic_dwn_url
+
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(raw_url, timeout=20) as response:
-                        response.raise_for_status()
-                        gist_content = await response.text()
+                    async with session.get(chosen_url, timeout=30) as response:
+                        if response.status == 200:
+                            async with aiofiles.open(hero_image_path, mode='wb') as f:
+                                while True:
+                                    chunk = await response.content.read(1024)
+                                    if not chunk:
+                                        break
+                                    await f.write(chunk)
+            except Exception as e:
+                log.error(f"Error downloading random thumbnail: {e}")
 
-                        # Parse M3U8 URLs from gist
-                        lines = gist_content.strip().split('\n')
-                        for line in lines:
-                            line = line.strip()
-
-                            # Check for TITLE= line (case-insensitive)
-                            if line.upper().startswith('TITLE='):
-                                custom_title = line.split('=', 1)[1].strip()
-                                log.info(f"Extracted custom title from gist: {custom_title}")
-                                continue  # Skip this line, don't add to URLs
-
-                            # NEW: Check for DOWNLOAD_TYPE=subtitle-only
-                            if line.upper().startswith('DOWNLOAD_TYPE='):
-                                download_type = line.split('=', 1)[1].strip().lower()
-                                if download_type == 'subtitle-only' or download_type == 'subtitle_only':
-                                    subtitle_only = True
-                                    log.info("Subtitle-only mode enabled via DOWNLOAD_TYPE")
-                                continue  # Skip this line, don't add to URLs
-
-                            # Support both direct URLs and KEY=VALUE format
-                            # Accept .m3u8 or .webvtt.m3u8 (for subtitles)
-                            if '.m3u8' in line.lower() or '.webvtt' in line.lower():
-                                if '=' in line:  # Format: VIDEO_URL=https://...
-                                    url = line.split('=', 1)[1].strip()
-                                else:  # Direct URL format
-                                    url = line
-                                urls.append(url)
-
-                        log.info(f"Fetched {len(urls)} M3U8 URLs from gist")
-            except Exception as fetch_err:
-                log.error(f"Failed to fetch gist: {fetch_err}")
-                await _reply_with_generic_error(message, "fetch the gist", quote=True)
-                return
-
-        # Direct M3U8 URLs input (including .webvtt.m3u8 for subtitles)
-        elif '.m3u8' in input_text.lower() or '.webvtt' in input_text.lower() or input_text.upper().startswith('TITLE=') or input_text.upper().startswith('DOWNLOAD_TYPE='):
-            lines = input_text.split('\n')
-            for line in lines:
-                line = line.strip()
-
-                # Check for TITLE= line (case-insensitive)
-                if line.upper().startswith('TITLE='):
-                    custom_title = line.split('=', 1)[1].strip()
-                    log.info(f"Extracted custom title from input: {custom_title}")
-                    continue  # Skip this line, don't add to URLs
-
-                # Check for DOWNLOAD_TYPE=subtitle-only
-                if line.upper().startswith('DOWNLOAD_TYPE='):
-                    download_type = line.split('=', 1)[1].strip().lower()
-                    if download_type == 'subtitle-only' or download_type == 'subtitle_only':
-                        subtitle_only = True
-                        log.info("Subtitle-only mode enabled via DOWNLOAD_TYPE")
-                    continue  # Skip this line, don't add to URLs
-
-                # Accept M3U8 URLs (including .webvtt.m3u8 for subtitles)
-                if line and ('.m3u8' in line.lower() or '.webvtt' in line.lower()):
-                    urls.append(line)
-
-            log.info(f"Parsed {len(urls)} direct M3U8 URLs")
-
-        else:
-            await message.reply_text("❌ Please send either M3U8 URLs or a raw gist URL.", quote=True)
-            return
-
-        if not urls:
-            await message.reply_text("❌ No valid M3U8 URLs found. Please try again.", quote=True)
-            return
-
-        # Auto-detect subtitle-only mode if user sends a single subtitle URL
-        if not subtitle_only and len(urls) == 1:
-            url_lower = urls[0].lower()
-            # Check if URL contains subtitle indicators
-            if 'subtitle' in url_lower or 'webvtt' in url_lower or url_lower.endswith('.webvtt.m3u8'):
-                subtitle_only = True
-                log.info("Auto-detected subtitle-only mode from URL pattern")
-
-        # Parse URLs based on mode
-        if subtitle_only:
-            # Subtitle-only mode: first (and only) URL is subtitle
-            subtitle_url = urls[0] if len(urls) > 0 else None
-            video_url = None
-            audio_url = None
-
-            # Validate subtitle URL (accepts .m3u8 or .webvtt.m3u8)
-            if not subtitle_url or ('.m3u8' not in subtitle_url.lower() and '.webvtt' not in subtitle_url.lower()):
-                await message.reply_text(
-                    "❌ Invalid subtitle URL. Must be a valid M3U8 or WebVTT playlist URL (.m3u8 or .webvtt.m3u8).",
-                    quote=True
-                )
-                return
-        else:
-            # Normal mode: video, optional audio, optional subtitle
-            video_url = urls[0] if len(urls) > 0 else None
-            audio_url = urls[1] if len(urls) > 1 else None
-            subtitle_url = urls[2] if len(urls) > 2 else None
-
-            # Validate video URL
-            if not video_url or ('.m3u8' not in video_url.lower()):
-                await message.reply_text(
-                    "❌ Invalid video URL. First line must be a valid M3U8 playlist URL.",
-                    quote=True
-                )
-                return
-
-        # NEW: Create unique directories for this task
-        os.makedirs(task_ctx.work_path, exist_ok=True)
-        os.makedirs(task_ctx.down_path, exist_ok=True)
-        log.info(f"Created task-specific directories: {task_ctx.work_path}")
-
-        # Create downloader instance with task context
-        downloader = MindvalleyDownloader(client, message, task_ctx)
-
-        # Generate output filename
-        if custom_title:
-            # Use custom title from TITLE= line
-            base_name = clean_filename(custom_title)
-            # Apply dot style for consistency with other downloads
-            base_name = apply_dot_style(base_name) if base_name else "mindvalley_course"
-            # Ensure correct extension based on mode
-            if subtitle_only:
-                output_filename = base_name if base_name.lower().endswith('.vtt') else f"{base_name}.vtt"
+            # Get thumbnail path
+            if BOT.Setting.thumbnail and os.path.exists(Paths.THMB_PATH):
+                thumb_path = Paths.THMB_PATH
+            elif os.path.exists(task_ctx.hero_image):
+                thumb_path = task_ctx.hero_image
             else:
-                output_filename = base_name if base_name.lower().endswith('.mp4') else f"{base_name}.mp4"
-            log.info(f"Using custom filename from title: {output_filename}")
-        else:
-            # Fallback to timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            if subtitle_only:
-                output_filename = f"mindvalley_subtitle_{timestamp}.vtt"
+                thumb_path = Paths.DEFAULT_HERO
+
+            # Send status message with thumbnail
+            if os.path.exists(thumb_path):
+                task_ctx.status_msg = await client.send_photo(
+                    OWNER,
+                    photo=thumb_path,
+                    caption=status_text,
+                    reply_markup=keyboard(task_ctx.get_short_id()),
+                    parse_mode=enums.ParseMode.HTML,
+                )
             else:
-                output_filename = f"mindvalley_course_{timestamp}.mp4"
-            log.info(f"Using timestamp filename: {output_filename}")
+                task_ctx.status_msg = await client.send_message(
+                    OWNER,
+                    status_text,
+                    reply_markup=keyboard(task_ctx.get_short_id()),
+                    parse_mode=enums.ParseMode.HTML,
+                )
 
-        # Store URLs in task context
-        task_ctx.source_urls = urls
-        task_ctx.filenames = [output_filename]
+            # Also set global MSG for backward compatibility
+            MSG.status_msg = task_ctx.status_msg
 
-        # Initialize status message for progress tracking
-        if subtitle_only:
-            status_text = (
-                f"<b>Mindvalley Subtitle Download</b> [<code>{task_ctx.get_short_id()}</code>]\n\n"
-                "<b>Subtitle:</b> ✅\n"
-                "<b>Video:</b> ❌ (subtitle-only mode)\n"
-                "<b>Audio:</b> ❌ (subtitle-only mode)\n\n"
-                "<i>Download will start shortly...</i>"
-            )
-        else:
-            status_text = (
-                f"<b>Mindvalley Download Started</b> [<code>{task_ctx.get_short_id()}</code>]\n\n"
-                "<b>Video:</b> ✅\n"
-                f"<b>Audio:</b> {'✅' if audio_url else '❌ (using embedded audio)'}\n"
-                f"<b>Subtitle:</b> {'✅' if subtitle_url else '❌'}\n\n"
-                "<i>Download will start shortly...</i>"
-            )
+            # Set task message for completion
+            task_ctx.messages.task_msg = f"<b>TASK MODE » </b><i>Mindvalley Leech</i>\n\n"
+            task_ctx.messages.src_link = gist_url if gist_url else "M3U8 URLs"
+            task_ctx.messages.download_name = output_filename
 
-        # Download random thumbnail - use shared pool from task_manager
-        # Import the full thumbnail collection (~472 URLs) instead of hardcoded subset
-        from .utility.task_manager import thumbnail_urls
+            # Also set globals for backward compat
+            MSG.task_msg = task_ctx.messages.task_msg
+            MSG.src_link = task_ctx.messages.src_link
+            MSG.download_name = output_filename
 
-        # NEW: Use task-specific hero image path
-        hero_image_path = task_ctx.hero_image
-        chosen_url = random.choice(thumbnail_urls) if thumbnail_urls else Aria2c.pic_dwn_url
+            # Bind closure variables to defaults
+            async def run_mindvalley_task_bound(
+                t_ctx=task_ctx,
+                v_url=video_url,
+                a_url=audio_url,
+                s_url=subtitle_url,
+                out_fn=output_filename,
+                sub_only=subtitle_only,
+                dl=downloader
+            ):
+                try:
+                    t_ctx.mark_started()
+                    BotTimes.start_time = datetime.now()
+                    log.info(f"Task {t_ctx.get_short_id()} started: Mindvalley download")
 
-        log.info(f"Downloading random thumbnail for task {task_ctx.get_short_id()}: {chosen_url}")
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(chosen_url, timeout=30) as response:
-                    if response.status == 200:
-                        async with aiofiles.open(hero_image_path, mode='wb') as f:
-                            while True:
-                                chunk = await response.content.read(1024)
-                                if not chunk:
-                                    break
-                                await f.write(chunk)
-                        if os.path.exists(hero_image_path):
-                            log.info(f"Random thumbnail downloaded to {hero_image_path}")
-                        else:
-                            log.warning(f"Thumbnail download failed: file not found")
+                    vtt_path = None
+                    srt_path = None
+                    if sub_only:
+                        success, vtt_path, srt_path = await dl.download_subtitle_only(
+                            s_url, out_fn
+                        )
+                        final_path = vtt_path if success else None
                     else:
-                        log.warning(f"Thumbnail download failed: HTTP {response.status}")
-        except Exception as e:
-            log.error(f"Error downloading random thumbnail: {e}")
+                        success, final_path, vtt_path, srt_path = await dl.download_and_merge(
+                            v_url, a_url, s_url, out_fn
+                        )
 
-        # Get thumbnail path (priority: custom > random downloaded > static default)
-        if BOT.Setting.thumbnail and os.path.exists(Paths.THMB_PATH):
-            thumb_path = Paths.THMB_PATH  # Use custom thumbnail
-        elif os.path.exists(task_ctx.hero_image):
-            thumb_path = task_ctx.hero_image  # Use task-specific random thumbnail
-        else:
-            thumb_path = Paths.DEFAULT_HERO  # Fallback to static default
+                    if success and final_path:
+                        try:
+                            if sub_only:
+                                log.info(f"Task {t_ctx.get_short_id()}: Uploading subtitle files...")
+                                upload_success = True
 
-        # Send status message with thumbnail (store in task_ctx, not global MSG)
-        if os.path.exists(thumb_path):
-            task_ctx.status_msg = await client.send_photo(
-                OWNER,
-                photo=thumb_path,
-                caption=status_text,
-                reply_markup=keyboard(task_ctx.get_short_id()),  # Add cancel button with task short ID
-                parse_mode=enums.ParseMode.HTML,
-            )
-            log.info(f"Sent Mindvalley status with thumbnail: {thumb_path} (task {task_ctx.get_short_id()})")
-        else:
-            # Fallback to text if no thumbnail exists
-            log.warning(f"Thumbnail not found at {thumb_path}, sending text message")
-            task_ctx.status_msg = await client.send_message(
-                OWNER,
-                status_text,
-                reply_markup=keyboard(task_ctx.get_short_id()),  # Add cancel button with task short ID
-                parse_mode=enums.ParseMode.HTML,
-            )
+                                if srt_path and os.path.exists(srt_path):
+                                    srt_display_name = os.path.basename(srt_path)
+                                    srt_upload = await upload_file(srt_path, srt_display_name, t_ctx)
+                                    if srt_upload:
+                                        try:
+                                            os.remove(srt_path)
+                                        except Exception as cleanup_err:
+                                            log.warning(f"Failed to clean up SRT file: {cleanup_err}")
+                                    else:
+                                        upload_success = False
 
-        # Also set global MSG for backward compatibility with status_bar()
-        # TODO: Remove this in Phase 3 when status_bar() is refactored
-        MSG.status_msg = task_ctx.status_msg
+                                if vtt_path and os.path.exists(vtt_path):
+                                    vtt_display_name = os.path.basename(vtt_path)
+                                    vtt_upload = await upload_file(vtt_path, vtt_display_name, t_ctx)
+                                    if vtt_upload:
+                                        try:
+                                            os.remove(vtt_path)
+                                        except Exception as cleanup_err:
+                                            log.warning(f"Failed to clean up VTT file: {cleanup_err}")
+                                    else:
+                                        upload_success = False
+                            else:
+                                log.info(f"Task {t_ctx.get_short_id()}: Uploading {final_path} to Telegram...")
+                                display_name = os.path.basename(final_path)
+                                upload_success = await upload_file(final_path, display_name, t_ctx)
 
-        # Set task message for completion (in task_ctx)
-        task_ctx.messages.task_msg = f"<b>TASK MODE » </b><i>Mindvalley Leech</i>\n\n"
-        task_ctx.messages.src_link = f"https://gist.githubusercontent.com/..." if 'gist' in input_text else "M3U8 URLs"
-        task_ctx.messages.download_name = output_filename
+                            if upload_success:
+                                if srt_path and os.path.exists(srt_path):
+                                    srt_display_name = os.path.basename(srt_path)
+                                    srt_upload = await upload_file(srt_path, srt_display_name, t_ctx)
+                                    if srt_upload:
+                                        try:
+                                            os.remove(srt_path)
+                                        except Exception as cleanup_err:
+                                            log.warning(f"Failed to clean up SRT file: {cleanup_err}")
 
-        # Also set globals for backward compat
-        MSG.task_msg = task_ctx.messages.task_msg
-        MSG.src_link = task_ctx.messages.src_link
-        MSG.download_name = output_filename
+                                if vtt_path and os.path.exists(vtt_path):
+                                    vtt_display_name = os.path.basename(vtt_path)
+                                    vtt_upload = await upload_file(vtt_path, vtt_display_name, t_ctx)
+                                    if vtt_upload:
+                                        try:
+                                            os.remove(vtt_path)
+                                        except Exception as cleanup_err:
+                                            log.warning(f"Failed to clean up VTT file: {cleanup_err}")
 
-        # NEW: Define async task function for parallel execution
-        async def run_mindvalley_task():
-            """Async task function that runs download+upload in the background"""
-            try:
-                task_ctx.mark_started()
-                BotTimes.start_time = datetime.now()
-                log.info(f"Task {task_ctx.get_short_id()} started: Mindvalley download")
-
-                # Download based on mode
-                vtt_path = None
-                srt_path = None
-                if subtitle_only:
-                    # Returns (success, vtt_path, srt_path) - no final_path for subtitle-only
-                    success, vtt_path, srt_path = await downloader.download_subtitle_only(
-                        subtitle_url, output_filename
-                    )
-                    # For subtitle-only, set final_path to vtt_path for backward compatibility
-                    final_path = vtt_path if success else None
-                else:
-                    # Returns (success, mp4_path, vtt_path, srt_path)
-                    success, final_path, vtt_path, srt_path = await downloader.download_and_merge(
-                        video_url, audio_url, subtitle_url, output_filename
-                    )
-
-                if success and final_path:
-                    try:
-                        # Handle subtitle-only mode differently
-                        if subtitle_only:
-                            log.info(f"Task {task_ctx.get_short_id()}: Uploading subtitle files...")
-                            upload_success = True  # Will be set to False if uploads fail
-
-                            # Upload SRT file (more compatible) using upload_file for proper stats tracking
-                            if srt_path and os.path.exists(srt_path):
-                                srt_display_name = os.path.basename(srt_path)
-                                log.info(f"Uploading SRT subtitle: {srt_display_name}")
-                                srt_upload = await upload_file(srt_path, srt_display_name, task_ctx)
-                                if srt_upload:
-                                    log.info(f"SRT file uploaded successfully: {srt_display_name}")
-                                    try:
-                                        os.remove(srt_path)
-                                        log.info(f"Cleaned up SRT file: {srt_path}")
-                                    except Exception as cleanup_err:
-                                        log.warning(f"Failed to clean up SRT file: {cleanup_err}")
-                                else:
-                                    log.error(f"SRT upload failed: {srt_display_name}")
-                                    upload_success = False
-
-                            # Upload VTT file (original) using upload_file for proper stats tracking
-                            if vtt_path and os.path.exists(vtt_path):
-                                vtt_display_name = os.path.basename(vtt_path)
-                                log.info(f"Uploading VTT subtitle: {vtt_display_name}")
-                                vtt_upload = await upload_file(vtt_path, vtt_display_name, task_ctx)
-                                if vtt_upload:
-                                    log.info(f"VTT file uploaded successfully: {vtt_display_name}")
-                                    try:
-                                        os.remove(vtt_path)
-                                        log.info(f"Cleaned up VTT file: {vtt_path}")
-                                    except Exception as cleanup_err:
-                                        log.warning(f"Failed to clean up VTT file: {cleanup_err}")
-                                else:
-                                    log.error(f"VTT upload failed: {vtt_display_name}")
-                                    upload_success = False
-
-                        else:
-                            # Normal mode: Upload MP4 video
-                            log.info(f"Task {task_ctx.get_short_id()}: Uploading {final_path} to Telegram...")
-                            display_name = os.path.basename(final_path)
-                            upload_success = await upload_file(final_path, display_name, task_ctx)
-
-                        # If successful and we have subtitle files, upload them using upload_file
-                        if upload_success:
-                            # Upload SRT file (more widely compatible) using upload_file for proper stats tracking
-                            if srt_path and os.path.exists(srt_path):
-                                log.info(f"Task {task_ctx.get_short_id()}: Uploading SRT subtitle {srt_path}...")
-                                srt_display_name = os.path.basename(srt_path)
-
-                                srt_upload = await upload_file(srt_path, srt_display_name, task_ctx)
-                                if srt_upload:
-                                    log.info(f"SRT file uploaded successfully: {srt_display_name}")
-                                    # Clean up SRT file after upload
-                                    try:
-                                        os.remove(srt_path)
-                                        log.info(f"Cleaned up SRT file: {srt_path}")
-                                    except Exception as cleanup_err:
-                                        log.warning(f"Failed to clean up SRT file: {cleanup_err}")
-                                else:
-                                    log.error(f"Failed to upload SRT file: {srt_display_name}")
-                                    # Continue to VTT upload
-
-                            # Upload VTT file (original format) using upload_file for proper stats tracking
-                            if vtt_path and os.path.exists(vtt_path):
-                                log.info(f"Task {task_ctx.get_short_id()}: Uploading VTT subtitle {vtt_path}...")
-                                vtt_display_name = os.path.basename(vtt_path)
-
-                                vtt_upload = await upload_file(vtt_path, vtt_display_name, task_ctx)
-                                if vtt_upload:
-                                    log.info(f"VTT file uploaded successfully: {vtt_display_name}")
-                                    # Clean up VTT file after upload
-                                    try:
-                                        os.remove(vtt_path)
-                                        log.info(f"Cleaned up VTT file: {vtt_path}")
-                                    except Exception as cleanup_err:
-                                        log.warning(f"Failed to clean up VTT file: {cleanup_err}")
-                                else:
-                                    log.error(f"Failed to upload VTT file: {vtt_display_name}")
-                                    # Continue anyway - main file was uploaded
-
-                        if upload_success:
-                            # Pass task_ctx to SendLogs for per-task completion tracking
-                            await SendLogs(is_leech=True, task_ctx=task_ctx)
-                            task_ctx.mark_completed()
-                            log.info(f"Task {task_ctx.get_short_id()} completed successfully")
-                        else:
-                            task_ctx.error.set_error("Upload failed")
+                            if upload_success:
+                                await SendLogs(is_leech=True, task_ctx=t_ctx)
+                                t_ctx.mark_completed()
+                                log.info(f"Task {t_ctx.get_short_id()} completed successfully")
+                            else:
+                                t_ctx.error.set_error("Upload failed")
+                                await message.reply_text(
+                                    f"<b>Upload Failed</b> [task {t_ctx.get_short_id()}]\n\n"
+                                    "File downloaded but upload to Telegram failed.\n"
+                                    f"File saved at: <code>{final_path}</code>",
+                                    quote=True,
+                                    parse_mode=enums.ParseMode.HTML,
+                                )
+                        except Exception as upload_error:
+                            log.exception(f"Task {t_ctx.get_short_id()}: Upload error")
+                            t_ctx.error.set_error(str(upload_error))
                             await message.reply_text(
-                                f"<b>Upload Failed</b> [task {task_ctx.get_short_id()}]\n\n"
-                                "File downloaded but upload to Telegram failed.\n"
-                                f"File saved at: <code>{final_path}</code>",
+                                f"<b>Upload Error</b> [task {t_ctx.get_short_id()}]: {str(upload_error)}\n\n"
+                                f"File saved locally at: <code>{final_path}</code>",
                                 quote=True,
                                 parse_mode=enums.ParseMode.HTML,
                             )
-                    except Exception as upload_error:
-                        log.exception(f"Task {task_ctx.get_short_id()}: Upload error")
-                        task_ctx.error.set_error(str(upload_error))
+                    else:
+                        t_ctx.error.set_error("Download failed")
                         await message.reply_text(
-                            f"<b>Upload Error</b> [task {task_ctx.get_short_id()}]: {str(upload_error)}\n\n"
-                            f"File saved locally at: <code>{final_path}</code>",
+                            f"<b>Download Failed</b> [task {t_ctx.get_short_id()}]\n\n"
+                            "Please check:\n"
+                            "• URLs are valid M3U8 playlists\n"
+                            "• Network connection is stable\n"
+                            "• Try again with /mindvalley",
                             quote=True,
                             parse_mode=enums.ParseMode.HTML,
                         )
-                else:
-                    task_ctx.error.set_error("Download failed")
+
+                except Exception as task_error:
+                    log.exception(f"Task {t_ctx.get_short_id()} error")
+                    t_ctx.error.set_error(str(task_error))
+                    t_ctx.mark_completed()
                     await message.reply_text(
-                        f"<b>Download Failed</b> [task {task_ctx.get_short_id()}]\n\n"
-                        "Please check:\n"
-                        "• URLs are valid M3U8 playlists\n"
-                        "• Network connection is stable\n"
-                        "• Try again with /mindvalley",
+                        f"<b>Task Error</b> [task {t_ctx.get_short_id()}]: {str(task_error)}",
                         quote=True,
                         parse_mode=enums.ParseMode.HTML,
                     )
+                finally:
+                    await TASK_QUEUE.remove_task(t_ctx.task_id)
+                    await force_update_summary(client)
+                    log.info(f"Task {t_ctx.get_short_id()} cleanup complete")
 
-            except Exception as task_error:
-                log.exception(f"Task {task_ctx.get_short_id()} error")
-                task_ctx.error.set_error(str(task_error))
-                task_ctx.mark_completed()  # Mark as completed even on error
-                await message.reply_text(
-                    f"<b>Task Error</b> [task {task_ctx.get_short_id()}]: {str(task_error)}",
-                    quote=True,
-                    parse_mode=enums.ParseMode.HTML,
-                )
-            finally:
-                # Clean up: remove from queue and update dashboard
-                await TASK_QUEUE.remove_task(task_ctx.task_id)
-                await force_update_summary(client)
-                log.info(f"Task {task_ctx.get_short_id()} cleanup complete")
+            # Register task and launch it (non-blocking)
+            await TASK_QUEUE.add_task(task_ctx)
+            task_ctx.async_task = asyncio.create_task(run_mindvalley_task_bound())
+            log.info(f"Task {task_ctx.get_short_id()} launched in background")
 
-        # NEW: Register task and launch it (non-blocking)
-        await TASK_QUEUE.add_task(task_ctx)
-        task_ctx.async_task = asyncio.create_task(run_mindvalley_task())
-        log.info(f"Task {task_ctx.get_short_id()} launched in background")
-
-        # NEW: Update summary dashboard to show new task
+        # Update summary dashboard to show new tasks
         await force_update_summary(client)
-
-        # Return immediately - task runs in background!
-        log.info(f"Mindvalley handler returning - task {task_ctx.get_short_id()} continues in background")
+        log.info("Mindvalley handler successfully started all background tasks")
 
     except Exception as e:
         log.exception("Error processing Mindvalley URLs")
