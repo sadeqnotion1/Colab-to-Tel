@@ -49,6 +49,7 @@ class BOT:
         prefix = ""
         suffix = ""
         thumbnail = False
+        concurrency = "Parallel"
         nzb_cf_clearance = ""
         bitso_identity_cookie = ""
         bitso_phpsessid_cookie = ""
@@ -72,6 +73,7 @@ class BOT:
         custom_name = ""
         zip_pswd = ""
         unzip_pswd = ""
+        concurrency = "parallel"
         # Options: "zip", "rar", "7z" (default: 7z - best compression, works on
         # all platforms, less corruption)
         archive_format = "7z"

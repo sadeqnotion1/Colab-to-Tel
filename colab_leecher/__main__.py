@@ -3116,6 +3116,17 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
              BOT.Options.stream_upload = True; BOT.Setting.stream_upload = "Media"
              await callback_query.answer("Uploading As Media", show_alert=False)
              await send_settings(client, message, msg_id, False)
+        elif query_data.startswith("set_concurrency:"):
+             concurrency_choice = query_data.split(":")[1]
+             if concurrency_choice == "serial":
+                 BOT.Options.concurrency = "serial"
+                 BOT.Setting.concurrency = "Serial"
+                 await callback_query.answer("Tasks will run one-by-one", show_alert=False)
+             else:
+                 BOT.Options.concurrency = "parallel"
+                 BOT.Setting.concurrency = "Parallel"
+                 await callback_query.answer("Tasks will run in parallel", show_alert=False)
+             await send_settings(client, message, msg_id, False)
         elif query_data == "document":
              BOT.Options.stream_upload = False; BOT.Setting.stream_upload = "Document"
              await callback_query.answer("Uploading As Document", show_alert=False)
@@ -4305,6 +4316,8 @@ async def handle_text_input(client, message):
                 dl=downloader
             ):
                 try:
+                    # Enforce worker slots concurrency limit
+                    await TASK_QUEUE.acquire_worker_slot(t_ctx.task_id)
                     t_ctx.mark_started()
                     BotTimes.start_time = datetime.now()
                     log.info(f"Task {t_ctx.get_short_id()} started: Mindvalley download")
@@ -4392,8 +4405,8 @@ async def handle_text_input(client, message):
                                 f"<b>Upload Error</b> [task {t_ctx.get_short_id()}]: {str(upload_error)}\n\n"
                                 f"File saved locally at: <code>{final_path}</code>",
                                 quote=True,
-                                parse_mode=enums.ParseMode.HTML,
-                            )
+                                        parse_mode=enums.ParseMode.HTML,
+                                    )
                     else:
                         t_ctx.error.set_error("Download failed")
                         await message.reply_text(
@@ -4416,6 +4429,7 @@ async def handle_text_input(client, message):
                         parse_mode=enums.ParseMode.HTML,
                     )
                 finally:
+                    await TASK_QUEUE.release_worker_slot(t_ctx.task_id)
                     await TASK_QUEUE.remove_task(t_ctx.task_id)
                     await force_update_summary(client)
                     log.info(f"Task {t_ctx.get_short_id()} cleanup complete")

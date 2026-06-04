@@ -330,6 +330,7 @@ def build_settings_text(
     has_nzb_cf_cookie: bool,
     has_bitso_identity_cookie: bool,
     has_bitso_session_cookie: bool,
+    concurrency: str = "Parallel",
 ) -> str:
     """Build settings panel text with consistent HTML formatting."""
     prefix_value = "Set" if has_prefix else "Not set"
@@ -347,7 +348,8 @@ def build_settings_text(
         f"<b>Caption:</b> <i>{escape(caption)}</i>\n"
         f"<b>Prefix:</b> <i>{prefix_value}</i>\n"
         f"<b>Suffix:</b> <i>{suffix_value}</i>\n"
-        f"<b>Thumbnail:</b> <i>{thumbnail_value}</i>\n\n"
+        f"<b>Thumbnail:</b> <i>{thumbnail_value}</i>\n"
+        f"<b>Concurrency:</b> <i>{escape(concurrency)}</i>\n\n"
         "<b>Cookies</b>\n"
         f"NZB CF: <i>{nzb_cf_value}</i>\n"
         f"Bitso ID: <i>{bitso_identity_value}</i>\n"

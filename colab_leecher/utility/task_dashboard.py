@@ -331,6 +331,11 @@ async def update_summary_dashboard(
         if not thumbnail_path and os.path.exists(Paths.DEFAULT_HERO):
             thumbnail_path = Paths.DEFAULT_HERO
 
+        # Check if we should use photo (only if text length permits caption limits)
+        use_photo = False
+        if thumbnail_path and os.path.exists(thumbnail_path) and len(summary_text) <= 1024:
+            use_photo = True
+
         try:
             if move_to_bottom and TASK_QUEUE.summary_msg:
                 try:
@@ -341,8 +346,19 @@ async def update_summary_dashboard(
                     TASK_QUEUE.summary_msg = None
 
             if TASK_QUEUE.summary_msg:
+                # If message type (photo vs text) mismatches our current need, delete and recreate
+                is_photo_msg = bool(hasattr(TASK_QUEUE.summary_msg, 'photo') and TASK_QUEUE.summary_msg.photo)
+                if is_photo_msg != use_photo:
+                    try:
+                        await TASK_QUEUE.summary_msg.delete()
+                    except Exception:
+                        pass
+                    finally:
+                        TASK_QUEUE.summary_msg = None
+
+            if TASK_QUEUE.summary_msg:
                 try:
-                    if hasattr(TASK_QUEUE.summary_msg, 'photo') and TASK_QUEUE.summary_msg.photo:
+                    if use_photo:
                         await TASK_QUEUE.summary_msg.edit_caption(
                             summary_text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard
                         )
@@ -392,7 +408,7 @@ async def update_summary_dashboard(
                     return TASK_QUEUE.summary_msg
 
             if not TASK_QUEUE.summary_msg:
-                if thumbnail_path and os.path.exists(thumbnail_path):
+                if use_photo:
                     TASK_QUEUE.summary_msg = await client.send_photo(OWNER, photo=thumbnail_path, caption=summary_text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard)
                 else:
                     TASK_QUEUE.summary_msg = await client.send_message(OWNER, text=summary_text, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True, reply_markup=keyboard)

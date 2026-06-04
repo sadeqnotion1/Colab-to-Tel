@@ -1598,6 +1598,9 @@ async def send_settings(client, message, msg_id, is_command: bool):
     up_mode_display = "Media" if BOT.Options.stream_upload else "Document"
     next_up_mode_action = "document" if BOT.Options.stream_upload else "media"
 
+    concurrency_display = "Parallel" if getattr(BOT.Options, "concurrency", "parallel") == "parallel" else "Serial"
+    next_concurrency_action = "set_concurrency:serial" if concurrency_display == "Parallel" else "set_concurrency:parallel"
+
     # Create keyboard layout
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"Upload As: {up_mode_display}", callback_data=next_up_mode_action),
@@ -1606,7 +1609,8 @@ async def send_settings(client, message, msg_id, is_command: bool):
          InlineKeyboardButton("Thumbnail", callback_data="thumb")],
         [InlineKeyboardButton("Set Suffix", callback_data="set-suffix"),
          InlineKeyboardButton("Set Prefix", callback_data="set-prefix")],
-        [InlineKeyboardButton("Close ❌", callback_data="close")],
+        [InlineKeyboardButton(f"Concurrency: {concurrency_display}", callback_data=next_concurrency_action),
+         InlineKeyboardButton("Close ❌", callback_data="close")],
     ])
 
     text = build_settings_text(
@@ -1620,6 +1624,7 @@ async def send_settings(client, message, msg_id, is_command: bool):
         has_nzb_cf_cookie=bool(BOT.Setting.nzb_cf_clearance),
         has_bitso_identity_cookie=bool(BOT.Setting.bitso_identity_cookie),
         has_bitso_session_cookie=bool(BOT.Setting.bitso_phpsessid_cookie),
+        concurrency=concurrency_display,
     )
 
     try:

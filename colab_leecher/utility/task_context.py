@@ -614,6 +614,11 @@ class TaskQueue:
             log.debug("Dashboard page set to %d", page)
 
     def get_worker_limit(self) -> int:
+        from .variables import BOT
+        concurrency = getattr(BOT.Options, "concurrency", "parallel")
+        if concurrency == "serial":
+            return 1
+
         if not self.active_tasks:
             return 2
         all_tiktok = all(
