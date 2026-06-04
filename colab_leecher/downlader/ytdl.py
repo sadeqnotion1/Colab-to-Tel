@@ -128,6 +128,23 @@ class MyLogger:
         pass
 
 
+class SilentLogger:
+    def debug(self, msg): pass
+    def warning(self, msg): pass
+    def error(self, msg): pass
+
+
+# Check for curl_cffi availability and yt-dlp support for impersonation target
+has_impersonate = False
+try:
+    import curl_cffi
+    with yt_dlp.YoutubeDL({"impersonate": "chrome", "logger": SilentLogger()}) as test_ydl:
+        pass
+    has_impersonate = True
+except Exception:
+    has_impersonate = False
+
+
 def YouTubeDL(url):
     global YTDL
 
@@ -157,13 +174,6 @@ def YouTubeDL(url):
             pass
         else:
             logging.info(d)
-
-    # Check for curl_cffi availability for impersonation
-    try:
-        import curl_cffi
-        has_impersonate = True
-    except ImportError:
-        has_impersonate = False
 
     ydl_opts = {
         # Format selection - better quality/size balance with MP4 preference
@@ -227,7 +237,17 @@ def YouTubeDL(url):
         "logger": MyLogger(),
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    try:
+        ydl = yt_dlp.YoutubeDL(ydl_opts)
+    except Exception as e:
+        if "impersonate" in str(e).lower():
+            log.warning(f"Impersonation target failed to initialize: {e}. Retrying without impersonation.")
+            ydl_opts["impersonate"] = None
+            ydl = yt_dlp.YoutubeDL(ydl_opts)
+        else:
+            raise
+
+    with ydl:
         if not ospath.exists(Paths.thumbnail_ytdl):
             makedirs(Paths.thumbnail_ytdl)
         try:
@@ -277,7 +297,25 @@ def YouTubeDL(url):
 
 
 async def get_YT_Name(link, task_ctx=None):
-    with yt_dlp.YoutubeDL({"logger": MyLogger()}) as ydl:
+    ydl_opts = {
+        "logger": MyLogger(),
+    }
+    if has_impersonate:
+        ydl_opts["impersonate"] = "chrome"
+    if ospath.exists("cookies.txt"):
+        ydl_opts["cookiefile"] = "cookies.txt"
+
+    try:
+        ydl = yt_dlp.YoutubeDL(ydl_opts)
+    except Exception as e:
+        if "impersonate" in str(e).lower():
+            log.warning(f"Impersonation target failed to initialize in get_YT_Name: {e}. Retrying without impersonation.")
+            ydl_opts["impersonate"] = None
+            ydl = yt_dlp.YoutubeDL(ydl_opts)
+        else:
+            raise
+
+    with ydl:
         try:
             info = ydl.extract_info(link, download=False)
             if "title" in info and info["title"]: 
