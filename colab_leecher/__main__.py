@@ -969,6 +969,226 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
         log.exception(f"Critical error in _execute_tiktok_bulk: {e}")
         await _safe_edit(f"{Emoji.ERROR} <b>Critical Error:</b> {str(e)[:100]}")
 
+async def run_github_ytdl_task(client, message, task_ctx):
+    from colab_leecher import credentials
+    import aiohttp
+    import os
+    from pyrogram import enums
+    
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    msg_id = message.id
+    
+    gh_token = credentials.get("GITHUB_TOKEN")
+    gh_owner = credentials.get("GITHUB_OWNER", "theSadeQ")
+    gh_repo = credentials.get("GITHUB_REPO", "ytdlp")
+    
+    if not gh_token:
+        await client.send_message(
+            chat_id,
+            "❌ <b>GitHub Token missing!</b>\nPlease configure <code>GITHUB_TOKEN</code> in your <code>credentials.json</code> file to use remote downloading.",
+            parse_mode=enums.ParseMode.HTML,
+            reply_to_message_id=msg_id
+        )
+        task_ctx.error.set_error("GitHub Token missing")
+        return
+
+    tag_name = f"tag-{task_ctx.get_short_id()}"
+    status_msg = task_ctx.status_msg
+    
+    if status_msg:
+        try:
+            await status_msg.edit_text(
+                f"🚀 <b>GitHub Action: Triggering remote download...</b>\n"
+                f"<b>Task ID:</b> <code>{task_ctx.get_short_id()}</code>\n"
+                f"<b>Tag:</b> <code>{tag_name}</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception:
+            pass
+
+    dispatch_url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/dispatches"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {gh_token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    
+    payload = {
+        "event_type": "trigger-download",
+        "client_payload": {
+            "url": task_ctx.source_urls[0],
+            "chat_id": str(chat_id),
+            "message_id": str(task_ctx.get_short_id())
+        }
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(dispatch_url, json=payload, headers=headers) as resp:
+                if resp.status != 204:
+                    err_text = await resp.text()
+                    raise Exception(f"GitHub API returned HTTP {resp.status}: {err_text}")
+        except Exception as trigger_err:
+            log.error(f"Failed to trigger dispatch: {trigger_err}")
+            if status_msg:
+                try:
+                    await status_msg.edit_text(f"❌ <b>Trigger failed:</b> {trigger_err}", parse_mode=enums.ParseMode.HTML)
+                except Exception:
+                    pass
+            task_ctx.error.set_error(str(trigger_err))
+            return
+
+        if status_msg:
+            try:
+                await status_msg.edit_text(
+                    f"⏳ <b>GitHub Action: Downloading on remote server...</b>\n"
+                    f"<i>This may take a few minutes. Please wait...</i>\n\n"
+                    f"<b>Task ID:</b> <code>{task_ctx.get_short_id()}</code>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except Exception:
+                pass
+            
+        release_url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/releases/tags/{tag_name}"
+        poll_interval = 10
+        timeout = 900
+        start_time = asyncio.get_event_loop().time()
+        release_data = None
+        
+        while asyncio.get_event_loop().time() - start_time < timeout:
+            if task_ctx.is_cancelled():
+                log.warning(f"Task {task_ctx.get_short_id()} was cancelled during polling.")
+                return
+
+            try:
+                async with session.get(release_url, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get("assets"):
+                            release_data = data
+                            break
+                    elif resp.status != 404:
+                        log.warning(f"Unexpected GitHub API response code {resp.status} during polling.")
+            except Exception as poll_err:
+                log.warning(f"Error during release polling: {poll_err}")
+                
+            await asyncio.sleep(poll_interval)
+            
+        if not release_data:
+            if status_msg:
+                try:
+                    await status_msg.edit_text("❌ <b>Download failed:</b> GitHub Action timed out or failed to create release.", parse_mode=enums.ParseMode.HTML)
+                except Exception:
+                    pass
+            task_ctx.error.set_error("GitHub Action timeout")
+            return
+
+        assets = release_data["assets"]
+        release_id = release_data["id"]
+        downloaded_files = []
+        
+        os.makedirs(task_ctx.work_path, exist_ok=True)
+        
+        try:
+            for idx, asset in enumerate(assets):
+                filename = asset["name"]
+                download_url = asset["browser_download_url"]
+                local_path = os.path.join(task_ctx.work_path, filename)
+                
+                if status_msg:
+                    try:
+                        await status_msg.edit_text(
+                            f"📥 <b>Downloading part {idx+1}/{len(assets)} from GitHub...</b>\n"
+                            f"<code>{filename}</code>\n\n"
+                            f"<b>Task ID:</b> <code>{task_ctx.get_short_id()}</code>",
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                    except Exception:
+                        pass
+                
+                async with session.get(download_url, headers=headers) as download_resp:
+                    if download_resp.status == 200:
+                        with open(local_path, "wb") as f:
+                            async for chunk in download_resp.content.iter_chunked(8192):
+                                f.write(chunk)
+                        downloaded_files.append(local_path)
+                    else:
+                        raise Exception(f"Failed to download asset {filename}: HTTP {download_resp.status}")
+
+            for idx, file_path in enumerate(downloaded_files):
+                filename = os.path.basename(file_path)
+                if status_msg:
+                    try:
+                        await status_msg.edit_text(
+                            f"📤 <b>Uploading part {idx+1}/{len(downloaded_files)} to Telegram...</b>\n"
+                            f"<code>{filename}</code>\n\n"
+                            f"<b>Task ID:</b> <code>{task_ctx.get_short_id()}</code>",
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                    except Exception:
+                        pass
+                
+                await client.send_document(
+                    chat_id=chat_id,
+                    document=file_path,
+                    reply_to_message_id=msg_id
+                )
+                
+            if status_msg:
+                try:
+                    await status_msg.edit_text(
+                        f"✅ <b>Upload complete! Cleaning up...</b>\n"
+                        f"<b>Task ID:</b> <code>{task_ctx.get_short_id()}</code>",
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+                
+        except Exception as run_err:
+            log.exception(f"Error executing GitHub download/upload pipeline")
+            if status_msg:
+                try:
+                    await status_msg.edit_text(f"❌ <b>Error:</b> {run_err}", parse_mode=enums.ParseMode.HTML)
+                except Exception:
+                    pass
+            task_ctx.error.set_error(str(run_err))
+        finally:
+            for file_path in downloaded_files:
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception as clean_err:
+                        log.warning(f"Could not remove local file {file_path}: {clean_err}")
+            
+            # Clean up GitHub Release and Git Tag
+            del_release_url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/releases/{release_id}"
+            try:
+                async with session.delete(del_release_url, headers=headers) as delete_resp:
+                    if delete_resp.status == 204:
+                        log.info(f"Successfully deleted GitHub release {release_id}")
+                    else:
+                        log.warning(f"Failed to delete GitHub release {release_id}: HTTP {delete_resp.status}")
+            except Exception as del_err:
+                log.warning(f"Error deleting release: {del_err}")
+                
+            del_tag_url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/git/refs/tags/{tag_name}"
+            try:
+                async with session.delete(del_tag_url, headers=headers) as delete_resp:
+                    if delete_resp.status == 204:
+                        log.info(f"Successfully deleted Git tag {tag_name}")
+                    else:
+                        log.warning(f"Failed to delete Git tag {tag_name}: HTTP {delete_resp.status}")
+            except Exception as del_err:
+                log.warning(f"Error deleting Git tag: {del_err}")
+                
+            if status_msg:
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+
+
 @timed_operation("parallel_task")
 async def run_parallel_task(client, message, task_ctx, skip_registration=False):
     """
@@ -1004,6 +1224,9 @@ async def run_parallel_task(client, message, task_ctx, skip_registration=False):
             if task_ctx.service_type == "tiktokbulk":
                 slog.info(f"Calling _execute_tiktok_bulk")
                 await _execute_tiktok_bulk(client, message, task_ctx)
+            elif task_ctx.service_type == "ytdl":
+                slog.info(f"Calling run_github_ytdl_task")
+                await run_github_ytdl_task(client, message, task_ctx)
             else:
                 # Run the task via taskScheduler (already supports task_ctx)
                 slog.info(f"Calling taskScheduler")
