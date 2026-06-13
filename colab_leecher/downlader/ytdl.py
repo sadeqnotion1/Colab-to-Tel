@@ -144,9 +144,10 @@ def _build_ydl_opts(output_template):
         "no_abort_on_error": False,
 
         "writesubtitles": True,
-        "writeautomaticsub": True,
+        "writeautomaticsub": False,
         "subtitleslangs": ["en", "ar"],
         "subtitlesformat": "srt/best",
+        "sleep_interval_subtitles": 3,   # throttle subtitle requests to avoid HTTP 429
 
         "writethumbnail": True,
         "embedthumbnail": True,
@@ -278,27 +279,85 @@ def YouTubeDL(url, task_ctx=None):
                     try:
                         with yt_dlp.YoutubeDL(entry_opts) as entry_ydl:
                             entry_ydl.download([video_url])
-                    except yt_dlp.utils.DownloadError as e:
-                        log.warning(f"Playlist item failed: {e}. Retrying with fallback template.")
-                        entry_opts["outtmpl"]["default"] = fallback_template
-                        try:
-                            with yt_dlp.YoutubeDL(entry_opts) as entry_ydl:
-                                entry_ydl.download([video_url])
-                        except Exception as e2:
-                            log.error(f"Playlist item failed again: {e2}")
+                    except Exception as e:
+                        err_msg = str(e).lower()
+                        if "subtitle" in err_msg or "429" in err_msg:
+                            log.warning(f"Playlist item failed with subtitle/429 error: {e}. Retrying with subtitles disabled.")
+                            entry_opts["writesubtitles"] = False
+                            entry_opts["writeautomaticsub"] = False
+                            try:
+                                with yt_dlp.YoutubeDL(entry_opts) as entry_ydl_nosub:
+                                    entry_ydl_nosub.download([video_url])
+                            except Exception as e_nosub:
+                                log.warning(f"Playlist item fallback with disabled subtitles failed: {e_nosub}. Retrying with fallback template.")
+                                entry_opts["outtmpl"]["default"] = fallback_template
+                                try:
+                                    with yt_dlp.YoutubeDL(entry_opts) as entry_ydl_fallback:
+                                        entry_ydl_fallback.download([video_url])
+                                except Exception as e2:
+                                    log.error(f"Playlist item fallback with disabled subtitles failed again: {e2}")
+                        else:
+                            log.warning(f"Playlist item failed: {e}. Retrying with fallback template.")
+                            entry_opts["outtmpl"]["default"] = fallback_template
+                            try:
+                                with yt_dlp.YoutubeDL(entry_opts) as entry_ydl_fallback:
+                                    entry_ydl_fallback.download([video_url])
+                            except Exception as e2:
+                                err_msg2 = str(e2).lower()
+                                if "subtitle" in err_msg2 or "429" in err_msg2:
+                                    log.warning(f"Playlist item fallback failed with subtitle/429 error: {e2}. Retrying with subtitles disabled.")
+                                    entry_opts["writesubtitles"] = False
+                                    entry_opts["writeautomaticsub"] = False
+                                    try:
+                                        with yt_dlp.YoutubeDL(entry_opts) as entry_ydl_nosub:
+                                            entry_ydl_nosub.download([video_url])
+                                    except Exception as e3:
+                                        log.error(f"Playlist item fallback with disabled subtitles failed again: {e3}")
+                                else:
+                                    log.error(f"Playlist item failed again: {e2}")
             else:
                 YTDL.header = ""
                 try:
                     ydl.download([url])
-                except yt_dlp.utils.DownloadError as e:
-                    log.warning(f"Download failed: {e}. Retrying with fallback template.")
-                    ydl_opts["outtmpl"]["default"] = fallback_template
-                    try:
-                        with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
-                            ydl2.download([url])
-                    except Exception as e2:
-                        log.error(f"Fallback download failed: {e2}")
-                        raise e2
+                except Exception as e:
+                    err_msg = str(e).lower()
+                    if "subtitle" in err_msg or "429" in err_msg:
+                        log.warning(f"Download failed due to subtitle or 429 error: {e}. Retrying with subtitles disabled.")
+                        ydl_opts["writesubtitles"] = False
+                        ydl_opts["writeautomaticsub"] = False
+                        try:
+                            with yt_dlp.YoutubeDL(ydl_opts) as ydl_nosub:
+                                ydl_nosub.download([url])
+                        except Exception as e_nosub:
+                            log.warning(f"Download with disabled subtitles failed: {e_nosub}. Retrying with fallback template.")
+                            ydl_opts["outtmpl"]["default"] = fallback_template
+                            try:
+                                with yt_dlp.YoutubeDL(ydl_opts) as ydl_fallback:
+                                    ydl_fallback.download([url])
+                            except Exception as e2:
+                                log.error(f"Fallback download with disabled subtitles failed: {e2}")
+                                raise e2
+                    else:
+                        log.warning(f"Download failed: {e}. Retrying with fallback template.")
+                        ydl_opts["outtmpl"]["default"] = fallback_template
+                        try:
+                            with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
+                                ydl2.download([url])
+                        except Exception as e2:
+                            err_msg_fallback = str(e2).lower()
+                            if "subtitle" in err_msg_fallback or "429" in err_msg_fallback:
+                                log.warning(f"Fallback failed due to subtitle or 429 error: {e2}. Retrying with subtitles disabled.")
+                                ydl_opts["writesubtitles"] = False
+                                ydl_opts["writeautomaticsub"] = False
+                                try:
+                                    with yt_dlp.YoutubeDL(ydl_opts) as ydl2_nosub:
+                                        ydl2_nosub.download([url])
+                                except Exception as e3:
+                                    log.error(f"Fallback download with disabled subtitles failed: {e3}")
+                                    raise e3
+                            else:
+                                log.error(f"Fallback download failed: {e2}")
+                                raise e2
 
             # Verify if any files were produced
             files_after = get_files_in_dir(down_path)
