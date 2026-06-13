@@ -827,6 +827,12 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
             log.info("Successfully downloaded torrent file.")
 
         # Step 2: Parse torrent content using aria2c -S
+        try:
+            sz = os.path.getsize(torrent_file_path)
+            log.info(f"Local torrent file size: {sz} bytes")
+        except Exception as sz_err:
+            log.warning(f"Could not get torrent file size: {sz_err}")
+
         cmd = ["aria2c", "-S", torrent_file_path]
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -857,7 +863,10 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
                     pass
 
         if not files:
-            log.error("No files found in torrent.")
+            stderr_str = stderr.decode('utf-8', errors='ignore')
+            log.error(f"No files found in torrent. Exit code: {proc.returncode}")
+            log.error(f"aria2c -S stdout:\n{stdout_str}")
+            log.error(f"aria2c -S stderr:\n{stderr_str}")
             if _task_error:
                 _task_error.set_error("No files found in torrent")
             return False
