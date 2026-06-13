@@ -10,7 +10,7 @@ import aiofiles # Import aiofiles for async file writing
 from pyrogram import enums, filters, Client, ContinuePropagation
 from datetime import datetime
 from asyncio import sleep, get_event_loop
-from colab_leecher import ConfigError, DUMP_ID, OWNER, colab_bot, ensure_runtime_config  # Absolute import
+from colab_leecher import credentials, ConfigError, DUMP_ID, OWNER, colab_bot, ensure_runtime_config  # Absolute import
 from .utility.handler import cancelTask
 from .utility.variables import BOT, MSG, BotTimes, Paths, TRANSFER, TaskError, Aria2c
 from .utility.task_context import TaskContext, TASK_QUEUE, create_task_context, IsolatedBot
@@ -1226,8 +1226,14 @@ async def run_parallel_task(client, message, task_ctx, skip_registration=False):
                 slog.info(f"Calling _execute_tiktok_bulk")
                 await _execute_tiktok_bulk(client, message, task_ctx)
             elif task_ctx.service_type == "ytdl":
-                slog.info(f"Calling run_github_ytdl_task")
-                await run_github_ytdl_task(client, message, task_ctx)
+                is_standalone = credentials.get("STANDALONE", False) or credentials.get("STANDALONE_YTDL", False)
+                gh_token = credentials.get("GITHUB_TOKEN")
+                if not is_standalone and gh_token:
+                    slog.info(f"Calling run_github_ytdl_task")
+                    await run_github_ytdl_task(client, message, task_ctx)
+                else:
+                    slog.info(f"GITHUB_TOKEN missing or STANDALONE active. Calling taskScheduler for local download")
+                    await taskScheduler(task_ctx)
             else:
                 # Run the task via taskScheduler (already supports task_ctx)
                 slog.info(f"Calling taskScheduler")
