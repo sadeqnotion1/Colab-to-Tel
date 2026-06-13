@@ -423,12 +423,33 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
                 log.warning("Active cancellation detected in ytdl loop.")
                 batch_had_failures = True
                 break
+            
+            # Clear error state for this specific link download attempt
+            if _task_error:
+                _task_error.state = False
+                _task_error.text = ""
+
             await YTDL_Status(link, i + 1, task_ctx=task_ctx)
+
             if _task_error and _task_error.state:
                  failed_info = {"link": link, "filename": "YTDL Download", "index": i + 1, "reason": _task_error.text or "YTDL Failed"}
                  _task_error.failed_links.append(failed_info)
                  batch_had_failures = True
                  _task_error.state = False; _task_error.text = ""
+            else:
+                 import os
+                 downloaded_filename = "YTDL Download"
+                 if task_ctx and "ytdl_results" in task_ctx.metadata and link in task_ctx.metadata["ytdl_results"]:
+                     res = task_ctx.metadata["ytdl_results"][link]
+                     if res.get("files"):
+                         downloaded_filename = ", ".join([os.path.basename(f) for f in res["files"]])
+                     else:
+                         downloaded_filename = task_ctx.messages.download_name or "YTDL Download"
+                 _transfer.successful_downloads.append({'url': link, 'filename': downloaded_filename})
+
+        if batch_had_failures:
+            _task_error.state = True
+            _task_error.text = "One or more YTDL downloads failed."
 
     elif selected_service == "direct" or selected_service is None:
          total_links = len(source)

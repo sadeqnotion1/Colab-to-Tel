@@ -17,7 +17,7 @@ pyrofork==2.3.69
 requests==2.32.4
 tgcrypto
 uvloop; platform_system != "Windows"
-yt-dlp[default,curl-cffi]==2026.2.21
+yt-dlp[default,curl-cffi]>=2026.2.21
 pymegatools
 rarfile>=4.2
 sabyenc>=3.3.6

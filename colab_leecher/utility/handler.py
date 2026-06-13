@@ -610,11 +610,14 @@ async def cancel_task(reason: str, task_ctx: TaskContext = None):
                 len(transfer_obj.successful_downloads) + len(error_obj.failed_links)):
             for i, url in enumerate(original_links):
                 if url not in processed_urls:
-                    filename = (
-                        original_filenames[i]
-                        if i < len(original_filenames)
-                        else "N/A (Filename List Mismatch?)"
-                    )
+                    if i < len(original_filenames) and original_filenames[i]:
+                        filename = original_filenames[i]
+                    else:
+                        if original_filenames:
+                            filename = "N/A (Filename List Mismatch?)"
+                        else:
+                            name_val = messages_obj.download_name if (messages_obj and messages_obj.download_name) else url
+                            filename = f"Not downloaded (no file produced) - {name_val}"
                     skipped_links.append({"url": url, "filename": filename})
 
         report_content += f"--- Skipped / Not Attempted ({len(skipped_links)}) ---\n"

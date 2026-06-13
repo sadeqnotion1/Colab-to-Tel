@@ -56,21 +56,35 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
 
                 await sleep(2.5)
 
+            # Check outcome from the task_ctx metadata
+            res = task_ctx.metadata.get("ytdl_results", {}).get(link, {}) if task_ctx else {}
+            if not res.get("success", False):
+                error_msg = res.get("error", "Unknown YTDL error")
+                raise yt_dlp.utils.DownloadError(error_msg)
+
             log.info(f"YTDL download completed for link {num}")
             break
 
-        except yt_dlp.utils.DownloadError as e:
+        except Exception as e:
+            err_str = str(e)
+            hint = ""
+            lower_err = err_str.lower()
+            if any(term in lower_err for term in ["sign in to confirm", "confirm you're not a bot", "format is not available", "403", "forbidden", "player response", "bot"]):
+                hint = " [HINT: YouTube is blocking this request. Please supply a fresh cookies.txt file and/or update yt-dlp]"
+            final_err = f"{err_str}{hint}"
+
             if attempt < max_retries - 1:
-                log.warning(f"Download failed (attempt {attempt + 1}/{max_retries}): {e}")
+                log.warning(f"Download failed (attempt {attempt + 1}/{max_retries}): {final_err}")
+                if task_ctx:
+                    task_ctx.error.state = False
+                    task_ctx.error.text = ""
                 await sleep(5)
             else:
-                log.error(f"Download failed after {max_retries} attempts: {e}")
-                await cancelTask(f"Download failed after {max_retries} attempts: {str(e)[:100]}", task_ctx)
-
-        except Exception as e:
-            log.error(f"Unexpected error in YTDL_Status: {e}", exc_info=True)
-            await cancelTask(f"YouTube download error: {str(e)[:100]}", task_ctx)
-            break
+                log.error(f"Download failed after {max_retries} attempts: {final_err}")
+                if task_ctx:
+                    task_ctx.error.state = True
+                    task_ctx.error.text = final_err
+                break
 
 
 class MyLogger:
@@ -122,8 +136,8 @@ def _build_ydl_opts(output_template):
         "retries": 10,
         "fragment_retries": 10,
         "skip_unavailable_fragments": True,
-        "ignoreerrors": True,
-        "no_abort_on_error": True,
+        "ignoreerrors": False,
+        "no_abort_on_error": False,
 
         "writesubtitles": True,
         "writeautomaticsub": True,
@@ -187,12 +201,30 @@ def _progress_hook(d):
 
 def YouTubeDL(url, task_ctx=None):
     global YTDL
+    import os
 
     down_path = task_ctx.paths.down_path if task_ctx else Paths.down_path
     thumbnail_ytdl = task_ctx.paths.thumbnail_ytdl if task_ctx else Paths.thumbnail_ytdl
 
     if not ospath.exists(thumbnail_ytdl):
         makedirs(thumbnail_ytdl)
+
+    def get_files_in_dir(directory):
+        files = set()
+        if ospath.exists(directory):
+            for root, _, filenames in os.walk(directory):
+                for f in filenames:
+                    files.add(ospath.join(root, f))
+        return files
+
+    files_before = get_files_in_dir(down_path)
+
+    # Initialize results dict in metadata
+    result = {"success": False, "error": "Unknown error", "files": []}
+    if task_ctx:
+        if "ytdl_results" not in task_ctx.metadata:
+            task_ctx.metadata["ytdl_results"] = {}
+        task_ctx.metadata["ytdl_results"][url] = result
 
     base_template = f"{down_path}/%(extractor_key,unknown_site)s/%(uploader,unknown_uploader)s/%(upload_date>%Y-%m-%d,unknown_date)s_%(title,id)s.%(ext)s"
     fallback_template = f"{down_path}/%(id)s.%(ext)s"
@@ -230,6 +262,9 @@ def YouTubeDL(url, task_ctx=None):
                         continue
 
                     entry_opts = _build_ydl_opts(fallback_template)
+                    # For playlists, keep ignoreerrors / no_abort_on_error to True so one failing item doesn't crash the whole run
+                    entry_opts["ignoreerrors"] = True
+                    entry_opts["no_abort_on_error"] = True
                     entry_opts["outtmpl"] = {
                         "default": f"{playlist_dir}/%(title,id)s.%(ext)s",
                         "thumbnail": thumb_template,
@@ -255,11 +290,37 @@ def YouTubeDL(url, task_ctx=None):
                 except yt_dlp.utils.DownloadError as e:
                     log.warning(f"Download failed: {e}. Retrying with fallback template.")
                     ydl_opts["outtmpl"]["default"] = fallback_template
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
-                        ydl2.download([url])
+                    try:
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
+                            ydl2.download([url])
+                    except Exception as e2:
+                        log.error(f"Fallback download failed: {e2}")
+                        raise e2
+
+            # Verify if any files were produced
+            files_after = get_files_in_dir(down_path)
+            new_files = files_after - files_before
+            if new_files:
+                result["success"] = True
+                result["error"] = None
+                result["files"] = list(new_files)
+            else:
+                if info_dict and info_dict.get("_type") == "playlist":
+                    result["success"] = False
+                    result["error"] = "Playlist completed, but no new files were downloaded."
+                else:
+                    result["success"] = False
+                    result["error"] = "Download completed but no file was produced on disk."
 
         except Exception as e:
             log.error(f"YTDL ERROR: {e}")
+            result["success"] = False
+            err_str = str(e)
+            hint = ""
+            lower_err = err_str.lower()
+            if any(term in lower_err for term in ["sign in to confirm", "confirm you're not a bot", "format is not available", "403", "forbidden", "player response", "bot"]):
+                hint = " [HINT: YouTube is blocking this request. Please supply a fresh cookies.txt file and/or update yt-dlp]"
+            result["error"] = f"{err_str}{hint}"
 
 
 async def get_YT_Name(link, task_ctx=None):
@@ -287,5 +348,5 @@ async def get_YT_Name(link, task_ctx=None):
                 return info["title"]
             return "UNKNOWN DOWNLOAD NAME"
         except Exception as e:
-            await cancelTask(f"Can't Download from this link. Because: {str(e)}", task_ctx)
-            return "UNKNOWN DOWNLOAD NAME"
+            log.warning(f"get_YT_Name metadata extraction failed: {e}")
+            raise e
