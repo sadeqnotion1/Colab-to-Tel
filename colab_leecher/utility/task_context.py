@@ -628,21 +628,18 @@ class TaskQueue:
         return 3 if all_tiktok else 2
 
     async def acquire_worker_slot(self, task_id: str):
-        async with self._worker_cond:
-            while True:
-                limit = self.get_worker_limit()
-                if len(self.running_tasks) < limit:
-                    self.running_tasks.add(task_id)
-                    log.info(f"Task {task_id[:8]} acquired worker slot. ({len(self.running_tasks)}/{limit})")
-                    return
-                await self._worker_cond.wait()
+        from .worker_slot_manager import get_worker_slot_manager
+        wsm = get_worker_slot_manager()
+        await wsm.acquire_slot(task_id)
+        if task_id not in self.running_tasks:
+            self.running_tasks.add(task_id)
 
     async def release_worker_slot(self, task_id: str):
-        async with self._worker_cond:
-            if task_id in self.running_tasks:
-                self.running_tasks.remove(task_id)
-                log.info(f"Task {task_id[:8]} released worker slot. ({len(self.running_tasks)} running)")
-                self._worker_cond.notify_all()
+        from .queue_operation_manager import get_queue_operation_manager
+        qom = get_queue_operation_manager()
+        await qom.safe_release_slot(task_id)
+        if task_id in self.running_tasks:
+            self.running_tasks.remove(task_id)
 
     def create_background_task(self, coro, name: str) -> asyncio.Task:
         task = asyncio.create_task(coro, name=name)

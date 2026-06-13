@@ -550,24 +550,8 @@ async def taskScheduler(task_ctx: TaskContext):
         # 4, 5, 6. ABSOLUTE GUARANTEES: Release slot, remove task, and update dashboard
         # scheduled safely as a shielded background task so it executes fully outside the cancelled context.
         async def _async_cleanup():
-            try:
-                log.info(f"taskScheduler finally: Guaranteeing release of worker slot for task {task_id[:8]}")
-                await TASK_QUEUE.release_worker_slot(task_id)
-            except Exception as slot_err:
-                log.error(f"taskScheduler finally: Failed to release worker slot: {slot_err}", exc_info=True)
-
-            try:
-                log.info(f"taskScheduler finally: Guaranteeing removal of task {task_id[:8]} from active queue")
-                await TASK_QUEUE.remove_task(task_id)
-            except Exception as remove_err:
-                log.error(f"taskScheduler finally: Failed to remove task from queue: {remove_err}", exc_info=True)
-
-            try:
-                log.info(f"taskScheduler finally: Forcing summary dashboard update")
-                from .task_dashboard import force_update_summary
-                await force_update_summary(colab_bot)
-            except Exception as dashboard_err:
-                log.warning(f"taskScheduler finally: Failed to force update dashboard: {dashboard_err}")
+            from .queue_operation_manager import coordinated_cleanup
+            await coordinated_cleanup(task_id)
 
         TASK_QUEUE.create_background_task(_async_cleanup(), name=f"shielded_cleanup_{task_id[:8]}")
 
@@ -795,12 +779,13 @@ async def _handle_normal_processing(download_path: str, task_ctx: TaskContext) -
     current_mode = _bot.Mode.mode
     is_dir = (current_mode == "dir-leech")
 
+    final_path = None
     if is_dir:
         if not ospath.exists(download_path):
             _task_error.set_error(f"Dir-leech source missing: {download_path}")
             return None
         if ospath.isdir(download_path):
-            return download_path
+            final_path = download_path
         elif ospath.isfile(download_path):
             if not ospath.exists(_paths.temp_dirleech_path):
                 makedirs(_paths.temp_dirleech_path, exist_ok=True)
@@ -809,7 +794,7 @@ async def _handle_normal_processing(download_path: str, task_ctx: TaskContext) -
                 if task_ctx.cancel_event.is_set():
                     log.warning("File copy finished but task was actively cancelled.")
                     return None
-                return _paths.temp_dirleech_path
+                final_path = _paths.temp_dirleech_path
             except Exception as copy_err:
                 log.error(f"Failed copy single file for dir-leech: {copy_err}")
                 _task_error.set_error(f"Copy Error: {copy_err}")
@@ -819,7 +804,36 @@ async def _handle_normal_processing(download_path: str, task_ctx: TaskContext) -
             return None
     else:
         log.debug("[Pipeline] Normal leech mode - no processing needed")
-        return download_path
+        final_path = download_path
+
+    # Ensure every file is size-checked and split if it exceeds 1 GB
+    if final_path:
+        from .converters import sizeChecker
+        import shutil
+        if ospath.isdir(final_path):
+            # List files inside final_path
+            files = [ospath.join(final_path, f) for f in os.listdir(final_path) if ospath.isfile(ospath.join(final_path, f))]
+            for fpath in files:
+                did_split = await sizeChecker(fpath, remove=True, task_ctx=task_ctx)
+                if did_split:
+                    # Move all parts from temp_zpath back to final_path
+                    temp_zpath = _paths.temp_zpath
+                    if ospath.exists(temp_zpath):
+                        for part in os.listdir(temp_zpath):
+                            part_path = ospath.join(temp_zpath, part)
+                            dest_path = ospath.join(final_path, part)
+                            shutil.move(part_path, dest_path)
+                        # Clean up temp_zpath
+                        shutil.rmtree(temp_zpath, ignore_errors=True)
+            return final_path
+        else:
+            # final_path is a single file
+            did_split = await sizeChecker(final_path, remove=True, task_ctx=task_ctx)
+            if did_split:
+                return _paths.temp_zpath
+            else:
+                return final_path
+    return None
 
 
 async def _stage_process(download_path: str, task_ctx: TaskContext) -> str | None:

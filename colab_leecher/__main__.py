@@ -15,6 +15,8 @@ from .utility.handler import cancelTask
 from .utility.variables import BOT, MSG, BotTimes, Paths, TRANSFER, TaskError, Aria2c
 from .utility.task_context import TaskContext, TASK_QUEUE, create_task_context, IsolatedBot
 from .utility.task_dashboard import update_summary_dashboard, force_update_summary
+from .utility.progress_manager import get_progress_manager
+from .utility.dashboard_state import get_dashboard_state
 from .utility.task_manager import taskScheduler, task_starter
 from .utility.rate_limiter import RATE_LIMITER
 from .utility.message_safety import user_error, mask_secret
@@ -1283,9 +1285,9 @@ async def run_parallel_task(client, message, task_ctx, skip_registration=False):
             log.info(f"Task {task_id_str} workspace cleanup complete")
         # ===== END CLEANUP =====
 
-        # Update dashboard
-        await TASK_QUEUE.remove_task(task_ctx.task_id)
-        await force_update_summary()
+        # Coordinated cleanup
+        from .utility.queue_operation_manager import coordinated_cleanup
+        await coordinated_cleanup(task_ctx.task_id)
 
         log.info(f"Task {task_id_str} cleanup complete")
 
@@ -2878,26 +2880,101 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         # === NEW: Handle Dashboard Pagination ===
         if query_data.startswith("dash_page:") or query_data.startswith("dash_refresh"):
             try:
-                page_num = None
-                if ":" in query_data:
-                    page_num = int(query_data.split(":")[1])
-
                 if query_data.startswith("dash_refresh"):
                     await callback_query.answer("Refreshing Dashboard... 🔄")
+                    await force_update_summary(client, move_to_bottom=False)
                 else:
                     await callback_query.answer()
-
-                # Persist page to backend BEFORE rendering so the renderer
-                # reads the authoritative value from TASK_QUEUE, not the markup.
-                if page_num is not None:
-                    await TASK_QUEUE.set_dashboard_page(page_num)
-
-                # Use move_to_bottom=False to prevent photo re-uploading and session disconnects
-                await force_update_summary(client, move_to_bottom=False)
+                    page_num = int(query_data.split(":")[1])
+                    from .utility.dashboard_state import get_dashboard_state
+                    ds = get_dashboard_state()
+                    await ds.navigate_to_page(page_num, client)
             except Exception as e:
                 log.error(f"Dashboard update error: {e}")
             return
 
+
+        # === TORRENT FILE SELECTION TOGGLE ===
+        if query_data.startswith("tfile_toggle:"):
+            file_idx = int(query_data.split(":")[1])
+            await callback_query.answer()
+
+            async with user_tasks_lock:
+                task_ctx = user_tasks.get(user_id, None)
+
+            if not task_ctx:
+                await callback_query.answer("Session expired.", show_alert=True)
+                return
+
+            selected = task_ctx.metadata.get('selected_torrent_files', set())
+            if file_idx in selected:
+                selected.discard(file_idx)
+            else:
+                selected.add(file_idx)
+            task_ctx.metadata['selected_torrent_files'] = selected
+
+            await _show_torrent_file_selection(client, chat_id, task_ctx, message.id)
+            return
+
+        # === TORRENT FILE SELECTION: SELECT ALL ===
+        if query_data == "tfile_selectall":
+            await callback_query.answer("All files selected")
+            async with user_tasks_lock:
+                task_ctx = user_tasks.get(user_id, None)
+            if not task_ctx:
+                return
+            files = task_ctx.metadata.get('torrent_files', [])
+            task_ctx.metadata['selected_torrent_files'] = set(f['idx'] for f in files)
+            await _show_torrent_file_selection(client, chat_id, task_ctx, message.id)
+            return
+
+        # === TORRENT FILE SELECTION: DESELECT ALL ===
+        if query_data == "tfile_deselectall":
+            await callback_query.answer("All files deselected")
+            async with user_tasks_lock:
+                task_ctx = user_tasks.get(user_id, None)
+            if not task_ctx:
+                return
+            task_ctx.metadata['selected_torrent_files'] = set()
+            await _show_torrent_file_selection(client, chat_id, task_ctx, message.id)
+            return
+
+        # === TORRENT FILE SELECTION: CONFIRM ===
+        if query_data == "tfile_confirm":
+            async with user_tasks_lock:
+                task_ctx = user_tasks.get(user_id, None)
+
+            if not task_ctx:
+                await callback_query.answer("Session expired.", show_alert=True)
+                return
+
+            selected = task_ctx.metadata.get('selected_torrent_files', set())
+            if not selected:
+                await callback_query.answer("Select at least one file!", show_alert=True)
+                return
+
+            files = task_ctx.metadata.get('torrent_files', [])
+            total = len(files)
+            sel_count = len(selected)
+
+            await callback_query.answer(f"Confirmed: {sel_count}/{total} files selected")
+
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Google Drive", callback_data="tdest_gdrive")],
+                [InlineKeyboardButton("Local Mirror (Colab)", callback_data="tdest_mirror")],
+                [InlineKeyboardButton("Telegram Leech", callback_data="tdest_leech")],
+                [InlineKeyboardButton("🔴 Cancel", callback_data="cancel")]
+            ])
+
+            torrent_name = task_ctx.metadata.get('torrent_name', 'Torrent')
+            await message.edit_text(
+                f"<b>📦 Torrent: <code>{torrent_name}</code></b>\n"
+                f"<b>Selected:</b> <code>{sel_count}/{total}</code> files\n\n"
+                f"<b>Please select the upload destination:</b>",
+                reply_markup=keyboard,
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
 
         # === TORRENT DESTINATION SELECTION ===
         if query_data.startswith("tdest_"):
@@ -2917,7 +2994,13 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
             log.info(f"Torrent destination choice '{choice}' for task {task_ctx.get_short_id()}")
 
-            # Update mode in task_ctx
+            selected = task_ctx.metadata.get('selected_torrent_files', set())
+            files = task_ctx.metadata.get('torrent_files', [])
+            if selected and len(selected) < len(files):
+                log.info(f"User selected {len(selected)}/{len(files)} files for torrent download")
+            elif not selected or len(selected) == len(files):
+                task_ctx.metadata['selected_torrent_files'] = None
+
             task_ctx.mode = choice
             if choice == "gdrive":
                 task_ctx.bot.Mode.mode = "gdrive"
@@ -2926,7 +3009,6 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             else:
                 task_ctx.bot.Mode.mode = "leech"
 
-            # Prepare task context compatibility objects
             _prepare_task_context(
                 task_ctx=task_ctx,
                 source_links=[task_ctx.torrent_file_path],
@@ -2937,13 +3019,11 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 archive_format=BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else '7z',
             )
 
-            # Get the user's original message (or fallback to callback query message)
             orig_msg = callback_query.message.reply_to_message
             if not orig_msg:
                 orig_msg = callback_query.message
                 orig_msg.from_user = callback_query.from_user
 
-            # Send processing message
             processing_msg = await client.send_message(
                 chat_id,
                 "<b>Processing torrent request...</b>\n\n"
@@ -2954,7 +3034,6 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             )
             task_ctx.status_msg = processing_msg
 
-            # Launch task in parallel
             async_task = TASK_QUEUE.create_background_task(
                 run_parallel_task(client, orig_msg, task_ctx),
                 name=f"task-{task_ctx.get_short_id()}"
@@ -3512,11 +3591,11 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             if task_ctx:
                 # Multi-task mode: cancel specific task
                 log.info(f"Calling cancelTask for task {task_ctx.get_short_id()}")
+                is_running = bool(task_ctx.async_task and not task_ctx.async_task.done())
                 await cancelTask("User pressed Cancel button.", task_ctx=task_ctx)
-                # Remove from queue
-                await TASK_QUEUE.remove_task(task_ctx.task_id)
-                # Update summary dashboard
-                await force_update_summary(client)
+                if not is_running:
+                    from .utility.queue_operation_manager import coordinated_cleanup
+                    await coordinated_cleanup(task_ctx.task_id)
             else:
                 setup_session = await _get_setup_session(user_id)
                 all_tasks = await TASK_QUEUE.get_all_tasks()
@@ -3530,9 +3609,11 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
                 if matched_task:
                     log.info(f"Cancelling inferred task from callback message: {matched_task.get_short_id()}")
+                    is_running = bool(matched_task.async_task and not matched_task.async_task.done())
                     await cancelTask("User pressed Cancel button.", task_ctx=matched_task)
-                    await TASK_QUEUE.remove_task(matched_task.task_id)
-                    await force_update_summary(client)
+                    if not is_running:
+                        from .utility.queue_operation_manager import coordinated_cleanup
+                        await coordinated_cleanup(matched_task.task_id)
                 elif setup_session:
                     log.info("Cancelling task during setup phase (setup session present).")
                     if message: await message.delete()
@@ -3547,9 +3628,11 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                     if len(user_active_tasks) == 1:
                         only_task = user_active_tasks[0]
                         log.info(f"Cancelling single active task for user: {only_task.get_short_id()}")
+                        is_running = bool(only_task.async_task and not only_task.async_task.done())
                         await cancelTask("User pressed Cancel button.", task_ctx=only_task)
-                        await TASK_QUEUE.remove_task(only_task.task_id)
-                        await force_update_summary(client)
+                        if not is_running:
+                            from .utility.queue_operation_manager import coordinated_cleanup
+                            await coordinated_cleanup(only_task.task_id)
                     elif len(user_active_tasks) > 1:
                         log.info("Cancel pressed with multiple active tasks; requiring explicit selection.")
                         await client.send_message(chat_id, "Multiple active tasks found. Use /cancel to select one.")
@@ -3601,11 +3684,15 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
             log.info(f"Bulk cancel requested: {len(all_tasks)} tasks")
             for task_ctx in list(all_tasks.values()):
+                is_running = bool(task_ctx.async_task and not task_ctx.async_task.done())
                 try:
                     await cancelTask("User pressed Cancel All.", task_ctx=task_ctx)
                 except Exception as cancel_err:
                     log.warning(f"Failed to cancel task {task_ctx.get_short_id()}: {cancel_err}")
-                await TASK_QUEUE.remove_task(task_ctx.task_id)
+                
+                if not is_running:
+                    from .utility.queue_operation_manager import coordinated_cleanup
+                    await coordinated_cleanup(task_ctx.task_id)
 
             await force_update_summary(client)
 
@@ -4718,9 +4805,8 @@ async def handle_text_input(client, message):
                         parse_mode=enums.ParseMode.HTML,
                     )
                 finally:
-                    await TASK_QUEUE.release_worker_slot(t_ctx.task_id)
-                    await TASK_QUEUE.remove_task(t_ctx.task_id)
-                    await force_update_summary(client)
+                    from .utility.queue_operation_manager import coordinated_cleanup
+                    await coordinated_cleanup(t_ctx.task_id)
                     log.info(f"Task {t_ctx.get_short_id()} cleanup complete")
 
             # Register task and launch it (non-blocking)
@@ -4788,25 +4874,169 @@ async def handle_document_upload(client, message):
         return
 
 
+async def _parse_torrent_files(torrent_path: str):
+    """Parse torrent file using aria2c -S and return file list with metadata."""
+    import subprocess
+    try:
+        cmd = ["aria2c", "-S", torrent_path]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        stdout_str = stdout.decode('utf-8', errors='ignore')
+
+        files = []
+        torrent_name = "Torrent_Download"
+        for line in stdout_str.splitlines():
+            line = line.strip()
+            if line.startswith("Name:"):
+                torrent_name = line.split("Name:", 1)[1].strip()
+                continue
+            parts = line.split('|')
+            if len(parts) >= 2:
+                left = parts[0].strip()
+                is_idx = False
+                idx = -1
+                try:
+                    idx = int(left)
+                    is_idx = True
+                except ValueError:
+                    pass
+
+                if is_idx:
+                    if len(parts) >= 3:
+                        size_str = parts[-1].strip()
+                        file_path = "|".join(parts[1:-1]).strip()
+                        files.append({'idx': idx, 'path': file_path, 'size_str': size_str})
+        return torrent_name, files
+    except Exception as e:
+        log.error(f"Failed to parse torrent file: {e}")
+        return None, []
+
+
+async def _show_torrent_file_selection(client, chat_id, task_ctx, status_msg_id=None):
+    """Show torrent file selection UI with checkboxes."""
+    import os
+    torrent_name = task_ctx.metadata.get('torrent_name', 'Torrent')
+    files = task_ctx.metadata.get('torrent_files', [])
+    selected = task_ctx.metadata.get('selected_torrent_files', set())
+
+    if not files:
+        return
+
+    total_size_str = "Unknown"
+    try:
+        from .utility.helper import sizeUnit
+        total_bytes = 0
+        for f in files:
+            size_str = f.get('size_str', '0')
+            try:
+                num = float(size_str.split()[0])
+                unit = size_str.split()[1] if len(size_str.split()) > 1 else 'B'
+                multiplier = {'B': 1, 'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, 'TB': 1024**4}.get(unit.upper(), 1)
+                total_bytes += num * multiplier
+            except:
+                pass
+        total_size_str = sizeUnit(total_bytes)
+    except:
+        pass
+
+    header = (
+        f"<b>📦 Torrent: <code>{torrent_name}</code></b>\n"
+        f"<b>Total files:</b> <code>{len(files)}</code> · <b>Size:</b> <code>{total_size_str}</code>\n\n"
+        f"<b>Select files to download (tap to toggle):</b>\n\n"
+    )
+
+    file_list_text = ""
+    truncated_text = False
+    for f in files:
+        idx = f['idx']
+        name = os.path.basename(f['path'])
+        check = "✅" if idx in selected else "⬜"
+        line = f"{check} <code>{idx}</code> · <code>{name[:50]}</code> ({f['size_str']})\n"
+        if len(header) + len(file_list_text) + len(line) > 3800:
+            truncated_text = True
+            break
+        file_list_text += line
+
+    text = header + file_list_text
+    if truncated_text:
+        text += "\n<i>... (list truncated, showing first files)</i>"
+
+    sel_count = len(selected)
+    total_count = len(files)
+
+    # Telegram limit: Max 100 buttons per message. We leave room for control buttons.
+    max_toggle_buttons = 90
+    buttons = []
+    row = []
+    
+    display_files = files[:max_toggle_buttons]
+    for f in display_files:
+        idx = f['idx']
+        name = os.path.basename(f['path'])
+        check = "✅" if idx in selected else "⬜"
+        short_name = name[:20] + "…" if len(name) > 20 else name
+        btn = InlineKeyboardButton(
+            f"{check} {idx}. {short_name}",
+            callback_data=f"tfile_toggle:{idx}"
+        )
+        row.append(btn)
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    if len(files) > max_toggle_buttons:
+        text += f"\n\n⚠️ <i>Only the first {max_toggle_buttons} files can be toggled individually. The remaining {len(files) - max_toggle_buttons} files will be downloaded based on bulk selection actions.</i>"
+
+    buttons.append([
+        InlineKeyboardButton(f"☑️ Select All ({total_count})", callback_data="tfile_selectall"),
+        InlineKeyboardButton("☐ Deselect All", callback_data="tfile_deselectall")
+    ])
+    buttons.append([
+        InlineKeyboardButton(f"✅ Confirm ({sel_count}/{total_count} selected)", callback_data="tfile_confirm")
+    ])
+    buttons.append([
+        InlineKeyboardButton("🔴 Cancel", callback_data="cancel")
+    ])
+
+    keyboard = InlineKeyboardMarkup(buttons)
+
+    if status_msg_id:
+        try:
+            await client.edit_message_text(
+                chat_id, status_msg_id, text,
+                reply_markup=keyboard, parse_mode=enums.ParseMode.HTML
+            )
+            return status_msg_id
+        except Exception as e:
+            log.warning(f"Failed to edit selection message: {e}")
+            pass
+
+    msg = await client.send_message(
+        chat_id, text, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML
+    )
+    return msg.id
+
+
 async def handle_torrent_file_upload(client, message):
-    """Process uploaded .torrent file and ask for destination"""
+    """Process uploaded .torrent file and show file selection UI"""
     global BOT, user_tasks
     import os
     from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
     from .utility.variables import Paths
     from .utility.task_context import create_task_context
 
-    # Create TaskContext
     user_id = _extract_user_id(message)
     task_ctx = create_task_context(
         user_id=user_id,
         chat_id=message.chat.id,
-        mode="leech" # Default mode, will be chosen by user
+        mode="leech"
     )
-    # Run pre-prepare to setup paths
     _prepare_task_context(task_ctx, [])
 
-    # Ensure torrent uploads directory exists
     torrent_upload_dir = os.path.join(Paths.WORK_PATH, "torrent_uploads")
     os.makedirs(torrent_upload_dir, exist_ok=True)
 
@@ -4825,23 +5055,23 @@ async def handle_torrent_file_upload(client, message):
     log.info(f"Downloaded .torrent file to: {torrent_path}")
     task_ctx.torrent_file_path = torrent_path
 
-    # Register in user_tasks registry
+    await status_msg.edit_text("🔍 Parsing torrent contents...")
+
+    torrent_name, files = await _parse_torrent_files(torrent_path)
+    if not files:
+        await status_msg.edit_text("❌ Could not parse torrent file or torrent is empty.")
+        return
+
+    log.info(f"Torrent '{torrent_name}' has {len(files)} files")
+    task_ctx.metadata['torrent_name'] = torrent_name
+    task_ctx.metadata['torrent_files'] = files
+    task_ctx.metadata['selected_torrent_files'] = set(f['idx'] for f in files)
+
     async with user_tasks_lock:
         user_tasks[user_id] = task_ctx
 
-    # Ask user for upload destination
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Google Drive", callback_data="tdest_gdrive")],
-        [InlineKeyboardButton("Local Mirror (Colab)", callback_data="tdest_mirror")],
-        [InlineKeyboardButton("Telegram Leech", callback_data="tdest_leech")],
-        [InlineKeyboardButton("🔴 Cancel", callback_data="cancel")]
-    ])
-    
-    await status_msg.edit_text(
-        "<b>📦 Uploaded Torrent File detected.</b>\n\n"
-        "<b>Please select the upload destination:</b>",
-        reply_markup=keyboard,
-        parse_mode=enums.ParseMode.HTML
+    await _show_torrent_file_selection(
+        client, message.chat.id, task_ctx, status_msg.id
     )
 
 
@@ -5178,7 +5408,11 @@ async def startup_handler(client, message):
         log.info("Starting background tasks...")
         TASK_QUEUE.create_background_task(send_sabnzbd_url_to_telegram(), name="sabnzbd-notifier")
         TASK_QUEUE.create_background_task(periodic_cleanup_task(), name="periodic-cleanup")
-        log.info("✅ Background tasks started (sabnzbd-notifier, periodic-cleanup)")
+        from .utility.worker_slot_manager import recover_stuck_slots
+        TASK_QUEUE.create_background_task(recover_stuck_slots(), name="recover-stuck-slots")
+        from .utility.upload_error_manager import cleanup_stuck_errors
+        TASK_QUEUE.create_background_task(cleanup_stuck_errors(), name="cleanup-stuck-errors")
+        log.info("✅ Background tasks started (sabnzbd-notifier, periodic-cleanup, recover-stuck-slots, cleanup-stuck-errors)")
     raise ContinuePropagation  # Allow other handlers to process this message
 
 # DEBUG: Log all messages

@@ -616,17 +616,21 @@ class NZBDownloader:
         except Exception as e:
             log.warning(f"Failed to update progress bar: {e}")
 
-    async def download_nzb(self, nzb_path: str) -> Tuple[bool, Optional[List[str]]]:
+    async def download_nzb(self, nzb_path: str, download_dir: str = None) -> Tuple[bool, Optional[List[str]]]:
         """
         Complete NZB download workflow
 
         Args:
             nzb_path: Path to .nzb file
+            download_dir: Optional download directory override
 
         Returns:
             Tuple of (success: bool, output_files: List[str] or None)
         """
         self.download_start_time = time.time()
+        if download_dir:
+            self.download_dir = download_dir
+            os.makedirs(self.download_dir, exist_ok=True)
         output_files = []
 
         try:

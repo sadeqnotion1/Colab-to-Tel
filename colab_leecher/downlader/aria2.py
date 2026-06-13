@@ -937,12 +937,29 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
                     curr_parent = new_folder_id
             return curr_parent
 
+        selected_indices = None
+        if task_ctx and hasattr(task_ctx, 'metadata'):
+            sel = task_ctx.metadata.get('selected_torrent_files')
+            if sel and isinstance(sel, set) and len(sel) < len(files):
+                selected_indices = sel
+                log.info(f"User selected {len(selected_indices)}/{len(files)} files for download")
+
+        filtered_files = [f for f in files if not selected_indices or f['idx'] in selected_indices]
+        if not filtered_files:
+            log.error("No files selected for download")
+            if _task_error:
+                _task_error.set_error("No files selected")
+            return False
+
+        total_files_to_download = len(filtered_files)
+        log.info(f"Will download {total_files_to_download} of {len(files)} files")
+
         status_head = (
             f"<b>🔄 Streaming Torrent »</b>\n\n"
             f"<b>📦 Torrent:</b> <code>{torrent_name}</code>\n"
         )
 
-        for idx, f_info in enumerate(files, 1):
+        for idx, f_info in enumerate(filtered_files, 1):
             if task_ctx and task_ctx.cancel_event.is_set():
                 log.warning("Torrent streaming task cancelled by user.")
                 break
@@ -951,12 +968,11 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
             rel_file_path = f_info['path']
             file_size_str = f_info['size_str']
 
-            log.info(f"[{idx}/{total_files}] Starting download of {rel_file_path} ({file_size_str})")
+            log.info(f"[{idx}/{total_files_to_download}] Starting download of {rel_file_path} ({file_size_str})")
 
-            # Update status
-            percentage = ((idx - 1) / total_files) * 100
+            percentage = ((idx - 1) / total_files_to_download) * 100
             status_text = (
-                f"📂 Downloading {idx}/{total_files}\n"
+                f"📂 Downloading {idx}/{total_files_to_download}\n"
                 f"<code>{os.path.basename(rel_file_path)}</code> ({file_size_str})"
             )
 
@@ -967,7 +983,7 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
                     percentage=percentage,
                     eta="N/A",
                     done=status_text,
-                    total_size=f"{files_processed}/{total_files} files",
+                    total_size=f"{files_processed}/{total_files_to_download} files",
                     engine="Streaming Torrent Downloader",
                     task_ctx=task_ctx
                 )
@@ -1029,9 +1045,9 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
             file_size_bytes = os.path.getsize(file_abs_path)
 
             # Update status: Uploading
-            percentage_upload = ((idx - 0.5) / total_files) * 100
+            percentage_upload = ((idx - 0.5) / total_files_to_download) * 100
             status_text = (
-                f"⬆️ Uploading {idx}/{total_files}\n"
+                f"⬆️ Uploading {idx}/{total_files_to_download}\n"
                 f"<code>{os.path.basename(rel_file_path)}</code> ({sizeUnit(file_size_bytes)})"
             )
 
@@ -1042,7 +1058,7 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
                     percentage=percentage_upload,
                     eta="N/A",
                     done=status_text,
-                    total_size=f"{files_processed}/{total_files} files",
+                    total_size=f"{files_processed}/{total_files_to_download} files",
                     engine="Streaming Torrent Downloader",
                     task_ctx=task_ctx
                 )
@@ -1117,13 +1133,13 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
                 speed="N/A",
                 percentage=100.0,
                 eta="Complete",
-                done=f"✅ Processed {files_processed}/{total_files} files ({sizeUnit(bytes_uploaded)})",
+                done=f"✅ Processed {files_processed}/{total_files_to_download} files ({sizeUnit(bytes_uploaded)})",
                 total_size=f"{files_processed} files",
                 engine="Streaming Torrent Downloader",
                 task_ctx=task_ctx
             )
 
-        return files_processed == total_files
+        return files_processed == total_files_to_download
 
     except Exception as e:
         log.error(f"Error in streaming torrent download: {e}", exc_info=True)

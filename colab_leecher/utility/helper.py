@@ -26,11 +26,10 @@ log = logging.getLogger(__name__)
 
 
 async def _edit_status_message(msg, text: str, reply_markup, parse_mode):
-    """Unified message editor — uses edit_caption if message has a photo, else edit_text."""
-    if msg.photo:
-        await msg.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
-    else:
-        await msg.edit_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=True)
+    """Unified message editor with null safety and fallback recovery."""
+    from .ui_components_unified import get_safe_message_editor
+    editor = get_safe_message_editor()
+    return await editor.safe_edit(msg, text, reply_markup, parse_mode)
 
 
 async def get_video_metadata(file_path: str) -> dict:
@@ -1570,8 +1569,8 @@ def keyboard(task_id: str = None):
         callback_data = "cancel"
         log.debug("keyboard() called with no task_id | callback_data='cancel'")
 
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Cancel", callback_data=callback_data)]])
+    from .ui_components_unified import UIComponents
+    return InlineKeyboardMarkup([[UIComponents.cancel_button(callback_data)]])
 
 
 async def message_deleter(message1, message2):
@@ -1676,230 +1675,95 @@ async def status_bar(
 
     from html import escape
 
-    # Resolve core variables at top to ensure consistency across branches
-    _status_msg = task_ctx.status_msg if task_ctx else MSG.status_msg
-    _kb_markup = keyboard(task_ctx.get_short_id()) if task_ctx else keyboard()
-
-    # Debug logging
-    task_id_str = f"[{task_ctx.get_short_id()}]" if task_ctx else "[legacy]"
-    
-    try:
-        percentage_val = float(percentage)
-        pct_str = f"{percentage_val:.2f}%"
-    except (ValueError, TypeError):
-        pct_str = f"{percentage}%"
-
-    log.info(
-        f"📊 status_bar {task_id_str} called. Pct={pct_str}, Speed={speed}")
-
-    # Unified throttling logic: ALWAYS use per-task timer if available, otherwise global
-    if not force_update:
-        if not is_task_time_over(task_ctx, 2.5):
-            log.info(f"⏱️ status_bar {task_id_str}: Throttled, skipping.")
-            return
-
-    log.info(f"✅ status_bar {task_id_str}: Timer OK, proceeding.")
-
-    # ===== PARALLEL MODE: Skip individual status updates, use dashboard instead
-    if task_ctx and not force_update:
-        from .task_context import TASK_QUEUE
-        if await TASK_QUEUE.has_task(task_ctx.task_id):
-            # Task is in parallel queue - individual status updates are disabled
-            # Update transfer stats for dashboard to read, but don't edit
-            # Telegram message
-            try:
-                # Local helper to robustly parse size string (with or without space/units) to bytes
-                def parse_any_size(val) -> int:
-                    if val is None:
-                        return 0
-                    if isinstance(val, (int, float)):
-                        return int(val)
-                    val_str = str(val).strip()
-                    if not val_str or val_str in ("N/A", "Unknown"):
-                        return 0
-                    
-                    # Try direct conversion to float/int
-                    try:
-                        return int(float(val_str))
-                    except ValueError:
-                        pass
-                    
-                    # Regex to extract the first decimal/integer number and unit
-                    match = re.search(r"(\d+\.?\d*)\s*([a-zA-Z]+)", val_str)
-                    if not match:
-                        # Fallback: maybe just digits exist?
-                        number_match = re.search(r"(\d+\.?\d*)", val_str)
-                        if number_match:
-                            try:
-                                return int(float(number_match.group(1)))
-                            except ValueError:
-                                return 0
-                        return 0
-                    
-                    num_val = float(match.group(1))
-                    unit = match.group(2).upper()
-                    
-                    # Determine multiplier
-                    multiplier = 1
-                    if 'G' in unit:
-                        multiplier = 1024**3
-                    elif 'M' in unit:
-                        multiplier = 1024**2
-                    elif 'K' in unit:
-                        multiplier = 1024
-                    elif 'T' in unit:
-                        multiplier = 1024**4
-                    elif 'P' in unit:
-                        multiplier = 1024**5
-                        
-                    return int(num_val * multiplier)
-
-                done_bytes = parse_any_size(done)
-
-                # Update appropriate bytes based on engine (Upload vs Download)
-                is_upload = any(x in engine.lower() for x in ["upload", "up", "mirror", "gdrive"])
-                
-                if is_upload:
-                    task_ctx.transfer.up_bytes = [done_bytes]
-                else:
-                    task_ctx.transfer.down_bytes = [done_bytes]
-
-                # Parse total_size string/number to bytes for dashboard display
-                total_bytes = parse_any_size(total_size)
-                task_ctx.transfer.total_size = total_bytes
-
-                # Also update speed for dashboard display (parsed as float bytes-per-second)
-                parsed_speed = 0.0
-                try:
-                    if speed and speed != "N/A":
-                        speed_str = str(speed).strip()
-                        # Extract speed value and unit (handles both space-separated and unseparated units)
-                        speed_match = re.search(r"(\d+\.?\d*)\s*([a-zA-Z/]+)", speed_str)
-                        if speed_match:
-                            speed_val = float(speed_match.group(1))
-                            unit = speed_match.group(2).replace('/s', '').upper().strip()
-                            
-                            multiplier = 1
-                            if 'G' in unit:
-                                multiplier = 1024**3
-                            elif 'M' in unit:
-                                multiplier = 1024**2
-                            elif 'K' in unit:
-                                multiplier = 1024
-                                
-                            parsed_speed = speed_val * multiplier
-                except Exception as speed_parse_err:
-                    log.warning(f"Failed to parse speed '{speed}': {speed_parse_err}")
-
-                task_ctx.transfer.last_speed = parsed_speed
-                task_ctx.transfer.last_speed_bytes = parsed_speed
-            except Exception as e:
-                # Use engine to decide which one to set to 1
-                is_upload = any(x in engine.lower() for x in ["upload", "up", "mirror", "gdrive"])
-                if is_upload:
-                    task_ctx.transfer.up_bytes = [1]
-                else:
-                    task_ctx.transfer.down_bytes = [1]
-                
-                log.warning(
-                    f"Failed to parse download size '{done}' or total size '{total_size}': {e}")
-            
-            # --- NEW: Dashboard Support for Archiving ---
-            if use_custom_text:
-                if percentage > 0:
-                    base_size = task_ctx.transfer.total_size or 1000000
-                    est_bytes = int(base_size * (percentage / 100))
-                    task_ctx.transfer.down_bytes = [est_bytes]
-                
-                if speed and speed != "N/A":
-                    parsed_speed = 0.0
-                    try:
-                         val = float(speed.split()[0])
-                         parsed_speed = val * 1024 
-                    except: pass
-                    task_ctx.transfer.last_speed = parsed_speed
-                    task_ctx.transfer.last_speed_bytes = parsed_speed
-
-            log.debug(
-                f"📉 status_bar {task_id_str}: Parallel mode - Updated stats: {done} / {total_size} ({task_ctx.transfer.down_bytes} / {task_ctx.transfer.total_size} bytes), speed: {speed}"
-            )
-
-            # Trigger dashboard update
-            from .task_dashboard import try_update_summary
-            await try_update_summary()
-    # ===== END PARALLEL MODE CHECK =====
-
-    if _status_msg and hasattr(_status_msg, 'edit_text'):
-        final_text = ""
+    # Local helper to robustly parse size string (with or without space/units) to bytes
+    def parse_any_size(val) -> int:
+        if val is None:
+            return 0
+        if isinstance(val, (int, float)):
+            return int(val)
+        val_str = str(val).strip()
+        if not val_str or val_str in ("N/A", "Unknown"):
+            return 0
+        
+        # Try direct conversion to float/int
         try:
-            if use_custom_text:
-                # Using custom text (likely from 7z archive progress)
-                log.debug("status_bar using custom text mode.")
-                # Assumes down_msg is the full pre-formatted text from the
-                # caller
-                final_text = down_msg + sysINFO()  # Append system info
-            else:
-                # Standard formatting mode
-                log.debug("status_bar using standard formatting mode.")
-                bar_length = 20  # Length of the progress bar
-
-                # Ensure percentage is treated as a number for calculation
-                try:
-                    percentage_float = float(percentage)
-                except (ValueError, TypeError):
-                    log.warning(
-                        f"status_bar received invalid percentage type: {percentage}. Defaulting to 0.")
-                    percentage_float = 0.0
-
-                # Enhanced visual bar style using centralized modern UI components
-                from .ui_components import ProgressBar
-                bar = ProgressBar.generate(percentage_float, length=bar_length, style='smooth')
-
-                eta_str = eta
-
-                # Calculate elapsed time from task_ctx if available
-                if task_ctx and task_ctx.started_at:
-                    elapsed_seconds = (
-                        datetime.now() - task_ctx.started_at).seconds
-                else:
-                    elapsed_seconds = (
-                        datetime.now() - BotTimes.task_start).seconds
-                elapsed_str = getTime(elapsed_seconds)
-
-                # Format the main body of the status message
-                text_body = (
-                    f"\n<b>┌「{bar}」 » {percentage_float:.1f}%</b>"
-                    f"\n<b>├⚡️ Speed »</b> <code>{escape(str(speed))}</code>"
-                    f"\n<b>├⚙️ Engine »</b> <code>{escape(str(engine))}</code>"
-                    f"\n<b>├⏳ ETA »</b> <code>{escape(str(eta_str))}</code>"
-                    f"\n<b>├⏱️ Elapsed »</b> <code>{escape(elapsed_str)}</code>"
-                    f"\n<b>├✅ Done »</b> <code>{escape(str(done))}</code>"
-                    f"\n<b>└📦 Total »</b> <code>{escape(str(total_size))}</code>"
-                )
-
-                # Combine the header (down_msg), body, and system info
-                final_text = down_msg + text_body + sysINFO()
-
-            # --- Edit the Telegram message ---
-            log.debug(f"Attempting to edit status message {_status_msg.id}")
-            await _edit_status_message(_status_msg, final_text, _kb_markup, enums.ParseMode.HTML)
-            log.debug("Status message updated.")
-
-        except MessageNotModified:
-            log.debug("Status message content hasn't changed, skipping edit.")
+            return int(float(val_str))
+        except ValueError:
             pass
-        except Exception as e:
-            if "Message to edit not found" not in str(
-                    e):  # Avoid logging if message was deleted
-                log.warning(f"Status bar update failed: {str(e)}")
 
-    else:
-        # Log if the status message object is missing or invalid
-        if not _status_msg:
-            log.debug(f"status_bar {task_id_str}: _status_msg is not set.")
-        elif not hasattr(_status_msg, 'edit_text'):
-            log.debug(
-                f"status_bar {task_id_str}: _status_msg object lacks 'edit_text' method.")
+        # Helper to convert number + unit to bytes
+        def convert_to_bytes(number, unit):
+            units = {
+                'B': 1,
+                'KB': 1024,
+                'MB': 1024 ** 2,
+                'GB': 1024 ** 3,
+                'TB': 1024 ** 4,
+                'PB': 1024 ** 5
+            }
+            unit = unit.upper().strip()
+            if unit in ['K', 'KILO']:
+                unit = 'KB'
+            elif unit in ['M', 'MEGA']:
+                unit = 'MB'
+            elif unit in ['G', 'GIGA']:
+                unit = 'GB'
+            elif unit in ['T', 'TERA']:
+                unit = 'TB'
+            return int(number * units.get(unit, 1))
+
+        # Pattern 1: "3.20 GB" or "3.20GB"
+        pattern1 = r'^(\d+\.?\d*)\s*([a-zA-Z]+)$'
+        match1 = re.match(pattern1, val_str)
+        if match1:
+            number = float(match1.group(1))
+            unit = match1.group(2)
+            return convert_to_bytes(number, unit)
+            
+        # Pattern 2: "3.20" (no unit)
+        pattern2 = r'^(\d+\.?\d*)$'
+        match2 = re.match(pattern2, val_str)
+        if match2:
+            return int(float(match2.group(1)))
+
+        # Pattern 3: "3GB200MB" (mixed units)
+        pattern3 = r'(\d+\.?\d*)\s*([a-zA-Z]+)'
+        total_bytes = 0
+        for match in re.finditer(pattern3, val_str):
+            number = float(match.group(1))
+            unit = match.group(2)
+            total_bytes += convert_to_bytes(number, unit)
+        if total_bytes > 0:
+            return total_bytes
+
+        # Pattern 4: Try to extract any number
+        numbers = re.findall(r'\d+\.?\d*', val_str)
+        if numbers:
+            return int(float(numbers[0]))
+
+        return 0
+
+    done_bytes = parse_any_size(done)
+    total_bytes = parse_any_size(total_size)
+    is_upload = any(x in engine.lower() for x in ["upload", "up", "mirror", "gdrive"])
+
+    # Delegate task progress to centralized ProgressManager
+    from .progress_manager import get_progress_manager
+    pm = get_progress_manager()
+    await pm.update_progress(
+        task_id=task_ctx.task_id if task_ctx else None,
+        bytes_done=done_bytes,
+        bytes_total=total_bytes,
+        speed=speed,
+        eta=eta,
+        percentage=percentage,
+        is_upload=is_upload,
+        engine=engine,
+        use_custom_text=use_custom_text,
+        custom_text=down_msg,
+        force=force_update,
+        task_ctx=task_ctx
+    )
 
 
 def multipartArchive(path: str, archive_type: str, remove_parts: bool):
@@ -2369,3 +2233,18 @@ def _extract_common_prefix(filenames: list) -> str:
     prefix = prefix.strip()
 
     return prefix
+
+
+def get_worker_slots_status() -> str:
+    """Returns a formatted status string of active worker slots for debugging/monitoring."""
+    try:
+        from .worker_slot_manager import get_worker_slot_manager
+        from .task_context import TASK_QUEUE
+        wsm = get_worker_slot_manager()
+        running = wsm.get_running_count()
+        limit = TASK_QUEUE.get_worker_limit()
+        owners = wsm.get_slot_owners()
+        return f"Workers: {running}/{limit} (Owners: {', '.join(o[:8] for o in owners)})"
+    except Exception as e:
+        return f"Workers Info Error: {e}"
+

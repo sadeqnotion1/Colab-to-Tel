@@ -67,6 +67,47 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
         if error_obj: error_obj.failed_links.append(failed_info)
         return False
 
+    # Safety net: If file size exceeds 2000 MiB limit, split it using sizeChecker inline
+    if ospath.isfile(file_path) and file_size > 2000 * 1024 * 1024:
+        log.warning(f"Safety Net: File '{actual_upload_filename}' is {helper.sizeUnit(file_size)}, exceeding 2000 MiB limit. Splitting inline...")
+        from ..utility.converters import sizeChecker
+        import shutil
+        
+        did_split = await sizeChecker(file_path, remove=True, task_ctx=task_ctx)
+        if did_split:
+            temp_zpath = task_ctx.paths.temp_zpath if task_ctx else Paths.temp_zpath
+            if ospath.exists(temp_zpath):
+                from natsort import natsorted
+                split_files = natsorted([f for f in os.listdir(temp_zpath) if ospath.isfile(ospath.join(temp_zpath, f))])
+                if split_files:
+                    log.info(f"Safety Net: Splitting succeeded. Found {len(split_files)} split files in {temp_zpath}. Uploading each part...")
+                    all_parts_success = True
+                    for sub_item_name in split_files:
+                        sub_item_path = ospath.join(temp_zpath, sub_item_name)
+                        part_uploaded = await upload_file(sub_item_path, sub_item_name, task_ctx)
+                        if not part_uploaded:
+                            all_parts_success = False
+                            log.error(f"Safety Net: Failed to upload split part: {sub_item_name}")
+                            break
+                    
+                    # Clean up split parts folder
+                    shutil.rmtree(temp_zpath, ignore_errors=True)
+                    try:
+                        os.makedirs(temp_zpath, exist_ok=True)
+                    except Exception as mkdir_err:
+                        log.warning(f"Safety Net: Could not recreate temp dir {temp_zpath}: {mkdir_err}")
+                    
+                    return all_parts_success
+                else:
+                    log.error(f"Safety Net: sizeChecker reported success, but no split parts found in {temp_zpath}.")
+                    return False
+            else:
+                log.error(f"Safety Net: sizeChecker reported success, but temp_zpath directory {temp_zpath} does not exist.")
+                return False
+        else:
+            log.error(f"Safety Net: sizeChecker failed to split '{actual_upload_filename}'.")
+            return False
+
     log.info(f"Preparing to upload {task_id_str}: {actual_upload_filename} (Display Name: {base_upload_name}) Size: {helper.sizeUnit(file_size)}")
     
     # NEW: Set total size for dashboard tracking

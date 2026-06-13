@@ -2335,7 +2335,7 @@ async def splitVideo(
     makedirs(_paths.temp_zpath, exist_ok=True)
     split_output_pattern = ospath.join(
         _paths.temp_zpath,
-        f"{just_name}.part%03d{extension}")
+        f"{filename}.%03d")
     cmd_split_args = [
         "ffmpeg",
         "-i",
@@ -2431,7 +2431,7 @@ async def splitVideo(
         # --- Check success based on return code and output files ---
         if proc.returncode == 0:
             segment_files = sorted([f for f in os.listdir(_paths.temp_zpath) if f.startswith(
-                f"{just_name}.part") and f.endswith(extension)])
+                f"{filename}.") and re.search(r'\.[0-9]{3}$', f)])
             if segment_files:
                 log.info(
                     f"FFmpeg split completed successfully for {filename}. Segments found: {len(segment_files)}")
@@ -2500,7 +2500,7 @@ async def splitVideo(
                                 os.remove(concat_file)
 
                                 segment_files = sorted([f for f in os.listdir(_paths.temp_zpath) if f.startswith(
-                                    f"{just_name}.part") and f.endswith(extension)])
+                                    f"{filename}.") and re.search(r'\.[0-9]{3}$', f)])
                                 log.info(
                                     f"✅ Successfully merged tiny segment. New segment count: {len(segment_files)}")
                             else:

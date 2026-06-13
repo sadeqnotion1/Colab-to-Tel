@@ -1,5 +1,5 @@
 #================================================
-#FILE: colab_leecher/downlader/ytdl.py
+#FILE: colab_leecher/downloader/ytdl.py
 #================================================
 import logging
 import yt_dlp

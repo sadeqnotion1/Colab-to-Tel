@@ -331,110 +331,21 @@ async def update_summary_dashboard(
         if not thumbnail_path and os.path.exists(Paths.DEFAULT_HERO):
             thumbnail_path = Paths.DEFAULT_HERO
 
-        # Check if we should use photo (only if text length permits caption limits)
-        use_photo = False
-        if thumbnail_path and os.path.exists(thumbnail_path) and len(summary_text) <= 1024:
-            use_photo = True
+        from .dashboard_state import get_dashboard_state
+        ds = get_dashboard_state()
+        await ds.atomic_message_update(
+            client=client,
+            text=summary_text,
+            reply_markup=keyboard,
+            thumbnail_path=thumbnail_path if thumbnail_path and os.path.exists(thumbnail_path) else None,
+            move_to_bottom=move_to_bottom
+        )
 
-        try:
-            if move_to_bottom and TASK_QUEUE.summary_msg:
-                try:
-                    await TASK_QUEUE.summary_msg.delete()
-                except Exception:
-                    pass
-                finally:
-                    TASK_QUEUE.summary_msg = None
+        TASK_QUEUE.last_summary_text = summary_text
+        TASK_QUEUE.last_summary_keyboard_signature = keyboard_signature
+        TASK_QUEUE.mark_summary_updated()
 
-            if TASK_QUEUE.summary_msg:
-                # If message type (photo vs text) mismatches our current need, delete and recreate
-                is_photo_msg = bool(hasattr(TASK_QUEUE.summary_msg, 'photo') and TASK_QUEUE.summary_msg.photo)
-                if is_photo_msg != use_photo:
-                    try:
-                        await TASK_QUEUE.summary_msg.delete()
-                    except Exception:
-                        pass
-                    finally:
-                        TASK_QUEUE.summary_msg = None
-
-            if TASK_QUEUE.summary_msg:
-                try:
-                    if use_photo:
-                        await TASK_QUEUE.summary_msg.edit_caption(
-                            summary_text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard
-                        )
-                    else:
-                        await TASK_QUEUE.summary_msg.edit_text(
-                            summary_text, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True, reply_markup=keyboard
-                        )
-
-                except MessageNotModified:
-                    # Telegram confirmed the content is byte-for-byte identical.
-                    # Cache the values so the pre-API equality check fires next time
-                    # and avoid counting this as a real error.
-                    log.debug("Dashboard edit skipped: content not modified (Telegram confirmed)")
-                    TASK_QUEUE.last_summary_text = summary_text
-                    TASK_QUEUE.last_summary_keyboard_signature = keyboard_signature
-                    TASK_QUEUE.mark_summary_updated()
-                    return TASK_QUEUE.summary_msg
-
-                except FloodWait as fw:
-                    # Telegram is rate-limiting us.  Record the suspension window
-                    # on the queue so *all* callers (not just this coroutine) will
-                    # back off for the required duration.
-                    wait_secs = fw.value
-                    log.warning(
-                        "FloodWait hit while updating summary dashboard — "
-                        "suspending UI edits for %ds.",
-                        wait_secs,
-                    )
-                    TASK_QUEUE._ui_suspended_until = time.monotonic() + wait_secs
-                    return TASK_QUEUE.summary_msg
-
-                except Exception as edit_err:
-                    error_msg = str(edit_err).lower()
-                    # Some errors mean the message no longer exists on Telegram's
-                    # side (deleted externally, migrated chat, etc.).  Only clear
-                    # summary_msg in that case so we recreate it on the next call.
-                    msg_gone = any(
-                        kw in error_msg
-                        for kw in ("message to edit not found", "message_id_invalid",
-                                   "channel_invalid", "chat not found")
-                    )
-                    if msg_gone:
-                        log.warning("Summary message appears deleted; will recreate. Error: %s", edit_err)
-                        TASK_QUEUE.summary_msg = None
-                    else:
-                        log.warning("Edit failed (non-critical); keeping existing summary_msg. Error: %s", edit_err)
-                    return TASK_QUEUE.summary_msg
-
-            if not TASK_QUEUE.summary_msg:
-                if use_photo:
-                    TASK_QUEUE.summary_msg = await client.send_photo(OWNER, photo=thumbnail_path, caption=summary_text, parse_mode=enums.ParseMode.HTML, reply_markup=keyboard)
-                else:
-                    TASK_QUEUE.summary_msg = await client.send_message(OWNER, text=summary_text, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True, reply_markup=keyboard)
-
-            TASK_QUEUE.last_summary_text = summary_text
-            TASK_QUEUE.last_summary_keyboard_signature = keyboard_signature
-            TASK_QUEUE.mark_summary_updated()
-
-            return TASK_QUEUE.summary_msg
-
-        except FloodWait as fw:
-            wait_secs = fw.value
-            log.warning(
-                "FloodWait hit while sending new summary dashboard — "
-                "suspending UI edits for %ds.",
-                wait_secs,
-            )
-            TASK_QUEUE._ui_suspended_until = time.monotonic() + wait_secs
-            return TASK_QUEUE.summary_msg
-
-        except Exception as e:
-            log.error("Failed to update summary dashboard: %s", e)
-            # Do NOT clear summary_msg here — only message-gone errors (handled
-            # in the inner except above) warrant that.  Clearing it on a transient
-            # network hiccup would cause an unwanted re-send on the next tick.
-            return None
+        return TASK_QUEUE.summary_msg
 
 
 async def try_update_summary(client=None):
@@ -508,3 +419,11 @@ async def force_update_summary(client=None, move_to_bottom: bool = True):
             lambda t: setattr(TASK_QUEUE, "_scheduled_update_task", None)
             if TASK_QUEUE._scheduled_update_task is t else None
         )
+
+# Subscribe to ProgressManager events
+try:
+    from .progress_manager import get_progress_manager
+    get_progress_manager().subscribe(try_update_summary)
+except Exception as e:
+    log.warning(f"Failed to subscribe dashboard to ProgressManager: {e}")
+

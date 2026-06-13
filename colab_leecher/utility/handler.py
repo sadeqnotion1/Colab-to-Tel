@@ -163,6 +163,25 @@ async def Leech(path: str, remove_source: bool, task_ctx: TaskContext = None):
             if ospath.isdir(upload_source_location):
                 log.info(
                     f"Leech: Uploading contents of directory: {upload_source_location} for original item '{current_item_name}'")
+                
+                # Safety check: Ensure all files inside the directory are split if they exceed 1 GB
+                # (except if it is temp_zpath which contains already split files)
+                if upload_source_location != _paths.temp_zpath:
+                    dir_files = [f for f in os.listdir(upload_source_location) if ospath.isfile(ospath.join(upload_source_location, f))]
+                    for f in dir_files:
+                        fpath = ospath.join(upload_source_location, f)
+                        did_split = await sizeChecker(fpath, remove_source, task_ctx)
+                        if did_split:
+                            # Move all parts from temp_zpath back to upload_source_location
+                            temp_zpath = _paths.temp_zpath
+                            if ospath.exists(temp_zpath):
+                                for part in os.listdir(temp_zpath):
+                                    part_path = ospath.join(temp_zpath, part)
+                                    dest_path = ospath.join(upload_source_location, part)
+                                    shutil.move(part_path, dest_path)
+                                # Clean up temp_zpath
+                                shutil.rmtree(temp_zpath, ignore_errors=True)
+
                 files_in_dir = [
                     f for f in natsorted(
                         os.listdir(upload_source_location)) if ospath.isfile(
@@ -265,48 +284,9 @@ async def Leech(path: str, remove_source: bool, task_ctx: TaskContext = None):
                 _task_error.text = _task_error.text or f"Error processing {current_item_name}: {str(item_err)[:100]}"
 
             if task_ctx:
-                # 1. State Management: Change task action to AWAITING_UPLOAD_DECISION
-                task_ctx.messages.current_action = AWAITING_UPLOAD_DECISION
-
-                # 2. Release worker slot
-                log.info(f"Releasing worker slot for task {task_ctx.get_short_id()} during user decision wait")
-                await TASK_QUEUE.release_worker_slot(task_ctx.task_id)
-
-                # 3. Send Pyrogram message with InlineKeyboardMarkup
-                from .ui_components import MessageTemplate
-                keyboard = MessageTemplate.get_upload_error_keyboard(task_ctx.task_id)
-                msg_text = "⚠️ Upload/Split failed. Files are saved locally. What would you like to do?"
-                try:
-                    await colab_bot.send_message(
-                        chat_id=task_ctx.chat_id,
-                        text=msg_text,
-                        reply_markup=keyboard
-                    )
-                except Exception as e:
-                    log.error(f"Failed to send upload error keyboard message: {e}")
-
-                # 4. Wait for decision (with 1 hour timeout)
-                log.info(f"Task {task_ctx.get_short_id()} paused, waiting for user decision...")
-                try:
-                    await asyncio.wait_for(task_ctx.user_decision_event.wait(), timeout=3600.0)
-                except asyncio.TimeoutError:
-                    log.warning(f"Task {task_ctx.get_short_id()} timed out waiting for user decision. Defaulting to delete/fail.")
-                    task_ctx.keep_files_decision = False
-
-                # 5. Re-acquire worker slot before resuming pipeline
-                log.info(f"Re-acquiring worker slot for task {task_ctx.get_short_id()} after user decision")
-                await TASK_QUEUE.acquire_worker_slot(task_ctx.task_id)
-
-                # 6. Post-Decision Logic
-                if task_ctx.keep_files_decision:
-                    log.info(f"User decided to keep files. Marking task as ABORTED.")
-                    task_ctx.is_aborted = True
-                    _task_error.set_error("ABORTED")
-                    raise Exception("ABORTED")
-                else:
-                    log.info(f"User decided to delete files or timeout occurred. Cleaning up workspace...")
-                    cleanup_task_artifacts(task_ctx)
-                    raise Exception(f"Upload/split failed: {item_err}")
+                from .upload_error_manager import get_upload_error_manager
+                uem = get_upload_error_manager()
+                await uem.handle_upload_error(task_ctx, item_err)
             # The loop will continue to the next item unless _task_error.state
             # causes skipping at the top
 
@@ -1141,18 +1121,14 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
                     log.warning(
                         f"Cannot send final summary to dump chat {task_id_str}, sent_msg invalid.")
 
-                if hasattr(status_msg, "photo") and status_msg.photo:
-                    await status_msg.edit_caption(caption=final_status_text, reply_markup=final_markup)
-                    log.info(
-                        f"Edited final status caption (thumbnail preserved) for owner {task_id_str}.")
-                else:
-                    await status_msg.edit_text(
-                        text=final_status_text,
-                        reply_markup=final_markup,
-                        disable_web_page_preview=True,
-                    )
-                    log.info(
-                        f"Edited final status text for owner {task_id_str}.")
+                from .helper import _edit_status_message
+                await _edit_status_message(
+                    status_msg,
+                    final_status_text,
+                    reply_markup=final_markup,
+                    parse_mode="HTML"
+                )
+                log.info(f"Edited final status for owner {task_id_str}.")
 
                 if is_leech and file_count > 0:
                     full_log_text = f"<b>Uploaded Files Log ({file_count}):</b>\n"
@@ -1265,10 +1241,10 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
         log.info(f"SendLogs complete {task_id_str}.")
 
 
-@colab_bot.on_callback_query(filters.regex(r"^err_action:(delete|keep):(.+)"))
+@colab_bot.on_callback_query(filters.regex(r"^err_action:(delete|keep|cancel):(.+)"))
 async def handle_upload_error_callback(client, callback_query):
     """
-    Handle inline buttons for keeping or deleting files on upload/split failures.
+    Handle inline buttons for keeping, deleting, or cancelling files on upload/split failures.
     """
     action = None
     task_id = None
@@ -1292,6 +1268,13 @@ async def handle_upload_error_callback(client, callback_query):
             await callback_query.answer("Action recorded: files will be kept.", show_alert=False)
             try:
                 await callback_query.edit_message_text("✅ Files kept on disk.")
+            except Exception as e:
+                log.warning(f"Could not edit message text: {e}")
+        elif action == "cancel":
+            task_ctx.keep_files_decision = "cancel"
+            await callback_query.answer("Action recorded: task cancelled.", show_alert=False)
+            try:
+                await callback_query.edit_message_text("❌ Task cancelled.")
             except Exception as e:
                 log.warning(f"Could not edit message text: {e}")
         else:

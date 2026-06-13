@@ -56,11 +56,12 @@ class CommonKeyboards:
     """Pre-built common keyboard layouts"""
 
     @staticmethod
-    def cancel(task_id: str = None, text: str = "Cancel", emoji: str = "\u274c") -> InlineKeyboardMarkup:
+    def cancel(task_id: str = None, text: str = "Cancel", emoji: str = "❌") -> InlineKeyboardMarkup:
         """Single cancel button"""
+        from .ui_components_unified import UIComponents
         callback_data = f"cancel:{task_id}" if task_id else "cancel"
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"{emoji} {text}", callback_data=callback_data)]
+            [UIComponents.cancel_button(callback_data)]
         ])
 
     @staticmethod
@@ -71,10 +72,11 @@ class CommonKeyboards:
         cancel_data: str = "cancel"
     ) -> InlineKeyboardMarkup:
         """Confirm and cancel buttons side by side"""
+        from .ui_components_unified import UIComponents
         return InlineKeyboardMarkup([
             [
-                InlineKeyboardButton(f"\u2705 {confirm_text}", callback_data=confirm_data),
-                InlineKeyboardButton(f"\u274c {cancel_text}", callback_data=cancel_data)
+                UIComponents.confirm_button(confirm_data),
+                UIComponents.cancel_button(cancel_data)
             ]
         ])
 
@@ -86,10 +88,11 @@ class CommonKeyboards:
         no_text: str = "No"
     ) -> InlineKeyboardMarkup:
         """Yes/No buttons"""
+        from .ui_components_unified import UIComponents
         return InlineKeyboardMarkup([
             [
-                InlineKeyboardButton(f"\u2705 {yes_text}", callback_data=yes_data),
-                InlineKeyboardButton(f"\u274c {no_text}", callback_data=no_data)
+                UIComponents.confirm_button(yes_data),
+                UIComponents.cancel_button(no_data)
             ]
         ])
 

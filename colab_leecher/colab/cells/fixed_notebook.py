@@ -47,6 +47,7 @@ DUMP_ID = DumpToken_Mapping[Dump_SELECTION]
 NZBCLOUD_CF_CLEARANCE = ""
 BITSO_IDENTITY_COOKIE = ""
 BITSO_PHPSESSID_COOKIE = ""
+YTDL_COOKIES = "" #@param {type: "string"}
 # @markdown ---
 
 
@@ -176,6 +177,49 @@ if valid_creds and ipython:
              os.makedirs(os.path.dirname(credentials_path), exist_ok=True)
              with open(credentials_path, 'w') as file: json.dump(credentials, file, indent=4)
              log.info(f"Credentials written to {credentials_path}")
+             
+             # Write YTDL cookies to cookies.txt if provided
+             if 'YTDL_COOKIES' in globals() and YTDL_COOKIES.strip():
+                 import re
+                 cookies_str = YTDL_COOKIES.strip()
+                 if cookies_str.lower().startswith('ytdl_cookies accepts'):
+                     cookies_str = cookies_str[len('ytdl_cookies accepts'):].strip()
+                 
+                 raw_text = cookies_str.replace('\r\n', '\n').replace('\r', '\n')
+                 pattern = r'(?<=[\s\n])(?=# Netscape)|(?<=[\s\n])(?=# http)|(?<=[\s\n])(?=# This file)|(?<=[\s\n])(?=#HttpOnly_)|(?<=[\s\n])(?=\.?[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+\s+(?:TRUE|FALSE))'
+                 parts = re.split(pattern, raw_text)
+                 
+                 formatted_lines = []
+                 for part in parts:
+                     part = part.strip()
+                     if not part:
+                         continue
+                     if part.startswith('#'):
+                         if part.startswith('#HttpOnly_'):
+                             cookie_part = part[len('#HttpOnly_'):].strip()
+                             cols = re.split(r'\s+', cookie_part)
+                             if len(cols) >= 6:
+                                 domain, sub, path, sec, exp, name = cols[:6]
+                                 val = ' '.join(cols[6:])
+                                 formatted_lines.append(f'#HttpOnly_{domain}\t{sub}\t{path}\t{sec}\t{exp}\t{name}\t{val}')
+                             else:
+                                 formatted_lines.append(part)
+                         else:
+                             formatted_lines.append(part)
+                     else:
+                         cols = re.split(r'\s+', part)
+                         if len(cols) >= 6:
+                             domain, sub, path, sec, exp, name = cols[:6]
+                             val = ' '.join(cols[6:])
+                             formatted_lines.append(f'{domain}\t{sub}\t{path}\t{sec}\t{exp}\t{name}\t{val}')
+                         else:
+                             formatted_lines.append(part)
+                             
+                 cookies_path = os.path.join(repo_path, 'cookies.txt')
+                 with open(cookies_path, 'w', encoding='utf-8') as cf:
+                     cf.write('\n'.join(formatted_lines))
+                 log.info(f"cookies.txt formatted and written to {cookies_path} ({len(formatted_lines)} lines)")
+                 
              setup_ok = True
          except IOError as e: log.error(f"Failed to write credentials file: {e}"); Working = False
 elif not ipython: log.error("Could not get IPython instance."); Working = False

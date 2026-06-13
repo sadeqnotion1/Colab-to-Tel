@@ -197,3 +197,69 @@ async def test_download_and_upload_torrent_streaming_parsing_multiline():
             display_name="video2.mp4",
             task_ctx=task_ctx
         )
+
+@pytest.mark.anyio
+async def test_download_and_upload_torrent_streaming_selective():
+    # Setup mock task context
+    task_ctx = create_task_context(user_id=123, chat_id=123, mode="leech")
+    task_ctx.paths.down_path = "/tmp/down_path"
+    task_ctx.paths.WORK_PATH = "/tmp/work_path"
+    task_ctx.paths.mirror_dir = "/tmp/mirror_dir"
+    task_ctx.bot.Mode.mode = "leech"
+    task_ctx.status_msg = MagicMock()
+    # Select only file 1
+    task_ctx.metadata['selected_torrent_files'] = {1}
+
+    # Stub aria2c -S output
+    aria2_s_output = (
+        b"File Alloc: [none]\n"
+        b"Mode: [multi]\n"
+        b"Name: Lexi Lore pack\n"
+        b"=== Files ===\n"
+        b"Idx|Path/to/file|Size\n"
+        b"1|./Lexi Lore pack/video1.mp4|1.2GiB\n"
+        b"2|./Lexi Lore pack/video2.mp4|850MiB\n"
+    )
+
+    # Subprocess execution mock (only one download call should happen, for file 1)
+    mock_processes = [
+        # First call: aria2c -S
+        MockProcess(stdout_lines=aria2_s_output.split(b'\n'), stderr_lines=[]),
+        # Second call: aria2c download file 1
+        MockProcess(stdout_lines=[b"Downloading file 1..."], stderr_lines=[]),
+    ]
+    process_iter = iter(mock_processes)
+
+    def mock_create_subprocess_exec(*args, **kwargs):
+        return next(process_iter)
+
+    # Mock filesystem operations
+    def mock_exists(path):
+        if path == "/tmp/test.torrent":
+            return True
+        if "video1.mp4" in path:
+            return True
+        return False
+
+    with patch('asyncio.create_subprocess_exec', side_effect=mock_create_subprocess_exec), \
+         patch('os.path.exists', side_effect=mock_exists), \
+         patch('os.path.isfile', return_value=True), \
+         patch('os.path.getsize', return_value=1024 * 1024), \
+         patch('os.remove'), \
+         patch('shutil.rmtree'), \
+         patch('tempfile.mkdtemp', return_value="/tmp/torrent_metadata_temp"), \
+         patch('colab_leecher.utility.helper.status_bar', new_callable=AsyncMock) as mock_status_bar, \
+         patch('colab_leecher.uploader.telegram.upload_file', new_callable=AsyncMock, return_value=True) as mock_upload:
+
+        result = await download_and_upload_torrent_streaming("/tmp/test.torrent", task_ctx)
+        
+        # Verify success
+        assert result is True
+        
+        # Verify only file 1 got uploaded (call_count should be 1)
+        assert mock_upload.call_count == 1
+        mock_upload.assert_any_call(
+            file_path=os.path.normpath("/tmp/down_path/Lexi Lore pack/video1.mp4"),
+            display_name="video1.mp4",
+            task_ctx=task_ctx
+        )

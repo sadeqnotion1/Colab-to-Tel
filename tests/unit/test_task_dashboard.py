@@ -52,6 +52,9 @@ async def reset_task_queue():
     TASK_QUEUE.last_summary_update = 0.0
     TASK_QUEUE._last_force_time = 0.0
     TASK_QUEUE._dashboard_page = 0
+    
+    from colab_leecher.utility.dashboard_state import get_dashboard_state
+    get_dashboard_state().reset()
     yield
 
 
@@ -145,3 +148,45 @@ async def test_update_dashboard_throttling_avoidance():
     # Verify that the update call was skipped/throttled early, returning None/previous state
     assert result is None
     mock_client.send_message.assert_not_called()
+
+
+from colab_leecher.utility.dashboard_state import get_dashboard_state
+
+@pytest.mark.anyio
+async def test_dashboard_state_manager_mode_switching_hysteresis():
+    ds = get_dashboard_state()
+    ds.reset()
+    
+    # 1. Starting at default mode: 'text'
+    assert ds._current_mode == 'text'
+    
+    # 2. Under 1024 but within buffer (e.g. 1000 characters) - should stay 'text'
+    mode = await ds.update_display_mode(1000)
+    assert mode == 'text'
+    
+    # 3. Comfortable below limit minus buffer (e.g. 900 characters) - should switch to 'photo'
+    mode = await ds.update_display_mode(900)
+    assert mode == 'photo'
+    
+    # 4. Under 1024 but above buffer (e.g. 1000 characters) - should stay 'photo' (hysteresis)
+    mode = await ds.update_display_mode(1000)
+    assert mode == 'photo'
+    
+    # 5. Over 1024 (hard limit) - should switch to 'text' immediately
+    mode = await ds.update_display_mode(1050)
+    assert mode == 'text'
+
+
+@pytest.mark.anyio
+async def test_dashboard_state_manager_navigation():
+    ds = get_dashboard_state()
+    ds.reset()
+    
+    mock_client = AsyncMock()
+    task_ctx = create_task_context(user_id=123, chat_id=123, mode="leech")
+    await TASK_QUEUE.add_task(task_ctx)
+    
+    with patch("colab_leecher.utility.task_dashboard.update_summary_dashboard", new_callable=AsyncMock) as mock_update:
+        await ds.navigate_to_page(1, mock_client)
+        assert TASK_QUEUE.get_dashboard_page() == 1
+        mock_update.assert_called_once()
