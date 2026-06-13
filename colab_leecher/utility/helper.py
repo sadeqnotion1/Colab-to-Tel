@@ -2268,3 +2268,12 @@ def get_worker_slots_status() -> str:
     except Exception as e:
         return f"Workers Info Error: {e}"
 
+
+def get_max_split_size_mib() -> int:
+    try:
+        from .. import colab_bot
+        is_premium = getattr(colab_bot.me, "is_premium", False) if (colab_bot and getattr(colab_bot, "me", None)) else False
+        return 3900 if is_premium else 1950
+    except Exception:
+        return 1950
+

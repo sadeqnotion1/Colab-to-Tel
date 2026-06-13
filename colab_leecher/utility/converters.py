@@ -27,7 +27,8 @@ from .helper import (
     status_bar,
     sysINFO,
     getTime,
-    clean_filename)
+    clean_filename,
+    get_max_split_size_mib)
 from .task_context import TaskContext
 from .reply_state import set_password_reply_waiting
 from .ui_components import ProgressBar
@@ -907,8 +908,9 @@ async def sizeChecker(
         log.info("sizeChecker() using global state (single-task mode)")
 
     log.info(f"sizeChecker started for: {ospath.basename(file_path)}")
-    max_size_bytes = 1000 * 1024 * 1024
-    target_video_split_mb = 1000
+    max_size_mib = get_max_split_size_mib()
+    max_size_bytes = max_size_mib * 1024 * 1024
+    target_video_split_mb = max_size_mib
 
     file_size = 0
     try:
@@ -2276,7 +2278,7 @@ async def splitVideo(
         return False
 
     # --- Calculate Segment Duration ---
-    MAX_SPLIT_SIZE_BYTES = 1000 * 1024 * 1024  # 1000 MiB (Strict < 1GB)
+    MAX_SPLIT_SIZE_BYTES = get_max_split_size_mib() * 1024 * 1024
 
     # Priority 1: If file size requires splitting, use that calculation
     if total_file_size > MAX_SPLIT_SIZE_BYTES:

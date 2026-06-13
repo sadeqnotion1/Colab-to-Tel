@@ -12,6 +12,98 @@ from ..utility.variables import BOT, Aria2c, Paths, Messages, BotTimes, TaskErro
 
 log = logging.getLogger(__name__)
 
+# Public trackers help low-seed magnets find peers
+_EXTRA_TRACKERS = ",".join([
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.tracker.cl:1337/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://open.stealth.si:80/announce",
+])
+
+def _parse_size_to_bytes(size_str: str) -> int:
+    """Convert aria2c -S size strings like '5.0GiB' / '700MiB' to bytes."""
+    import re
+    if not size_str or size_str.lower() == "unknown":
+        return 0
+    m = re.match(r"([\d.]+)\s*([KMGT]?i?B)", size_str.strip(), re.IGNORECASE)
+    if not m:
+        return 0
+    val = float(m.group(1))
+    unit = m.group(2).upper()
+    mult = {
+        "B": 1,
+        "KB": 1000, "KIB": 1024,
+        "MB": 1000 ** 2, "MIB": 1024 ** 2,
+        "GB": 1000 ** 3, "GIB": 1024 ** 3,
+        "TB": 1000 ** 4, "TIB": 1024 ** 4,
+    }.get(unit, 1)
+    return int(val * mult)
+
+async def _download_one_file(file_idx, rel_file_path, down_path, torrent_file_path,
+                             task_ctx, *, max_retries=3, stall_timeout=300):
+    """Download a single file from the torrent with retries + stall detection.
+
+    aria2c's --bt-stop-timeout aborts the transfer if speed stays at 0 B/s for
+    `stall_timeout` seconds, so a dead file can no longer hang the whole job.
+    Returns True on success.
+    """
+    for attempt in range(1, max_retries + 1):
+        cmd = [
+            "aria2c",
+            f"--select-file={file_idx}",
+            "--file-allocation=none",
+            "--seed-time=0",
+            "--summary-interval=1",
+            "--max-tries=5",
+            "--retry-wait=5",
+            f"--bt-stop-timeout={stall_timeout}",
+            "--enable-dht=true",
+            "--bt-enable-lpd=true",
+            "--bt-max-peers=200",
+            f"--bt-tracker={_EXTRA_TRACKERS}",
+            "-d", down_path,
+            torrent_file_path,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+
+        async def _log_stream(stream, name):
+            while True:
+                line_bytes = await stream.readline()
+                if not line_bytes:
+                    break
+                line = line_bytes.decode("utf-8", errors="ignore").strip()
+                if line and name == "stdout":
+                    await on_output(line, os.path.basename(rel_file_path), task_ctx)
+                await asyncio.sleep(0.05)
+
+        stdout_task = asyncio.create_task(_log_stream(proc.stdout, "stdout"))
+        stderr_task = asyncio.create_task(_log_stream(proc.stderr, "stderr"))
+        try:
+            exit_code = await proc.wait()
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.wait()
+            raise
+        finally:
+            stdout_task.cancel()
+            stderr_task.cancel()
+
+        if exit_code == 0:
+            return True
+
+        log.warning(
+            f"Download attempt {attempt}/{max_retries} for '{rel_file_path}' "
+            f"failed (exit {exit_code})."
+        )
+        if task_ctx and task_ctx.cancel_event.is_set():
+            return False
+        await asyncio.sleep(5 * attempt)
+
+    return False
+
 # get_Aria2c_Name
 def get_Aria2c_Name(link):
     # Make sure BOT is accessible
@@ -959,165 +1051,114 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
             f"<b>📦 Torrent:</b> <code>{torrent_name}</code>\n"
         )
 
+        failed_files = []                 # (path, reason) collected for the final report
+        DISK_HEADROOM = 1 * 1024 ** 3     # keep 1 GB free as a safety margin
+        down_path = _paths.down_path
+
         for idx, f_info in enumerate(filtered_files, 1):
             if task_ctx and task_ctx.cancel_event.is_set():
                 log.warning("Torrent streaming task cancelled by user.")
                 break
 
-            file_idx = f_info['idx']
-            rel_file_path = f_info['path']
-            file_size_str = f_info['size_str']
+            file_idx = f_info["idx"]
+            rel_file_path = f_info["path"]
+            file_size_str = f_info["size_str"]
+            expected_bytes = _parse_size_to_bytes(file_size_str)
 
-            log.info(f"[{idx}/{total_files_to_download}] Starting download of {rel_file_path} ({file_size_str})")
+            # --- Disk-space pre-check (room for the file + its split parts) ---
+            try:
+                free = shutil.disk_usage(down_path).free
+            except Exception:
+                free = None
+            needed = expected_bytes * 2 + DISK_HEADROOM if expected_bytes else 0
+            if free is not None and needed and free < needed:
+                reason = f"not enough disk: need ~{sizeUnit(needed)}, free {sizeUnit(free)}"
+                log.error(f"Skipping '{rel_file_path}': {reason}")
+                failed_files.append((rel_file_path, reason))
+                continue
 
-            percentage = ((idx - 1) / total_files_to_download) * 100
-            status_text = (
-                f"📂 Downloading {idx}/{total_files_to_download}\n"
-                f"<code>{os.path.basename(rel_file_path)}</code> ({file_size_str})"
-            )
+            log.info(f"[{idx}/{total_files_to_download}] Downloading {rel_file_path} ({file_size_str})")
 
             if _status_msg:
                 await status_bar(
                     down_msg=status_head,
-                    speed="N/A",
-                    percentage=percentage,
+                    speed="N/A", percentage=((idx - 1) / total_files_to_download) * 100,
                     eta="N/A",
-                    done=status_text,
+                    done=f"📂 Downloading {idx}/{total_files_to_download}\n<code>{os.path.basename(rel_file_path)}</code> ({file_size_str})",
                     total_size=f"{files_processed}/{total_files_to_download} files",
-                    engine="Streaming Torrent Downloader",
-                    task_ctx=task_ctx
+                    engine="Streaming Torrent Downloader", task_ctx=task_ctx,
                 )
 
-            # Run aria2c to download only this file
-            down_path = _paths.down_path
-            cmd = [
-                "aria2c",
-                f"--select-file={file_idx}",
-                "--file-allocation=none",
-                "--seed-time=0",
-                "--summary-interval=1",
-                "-d", down_path,
-                torrent_file_path
-            ]
-
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-
-            # Monitor progress
-            async def log_stream(stream, stream_name):
-                while True:
-                    line_bytes = await stream.readline()
-                    if not line_bytes:
-                        break
-                    line = line_bytes.decode('utf-8', errors='ignore').strip()
-                    if line and stream_name == 'stdout':
-                        # Update display name
-                        await on_output(line, os.path.basename(rel_file_path), task_ctx)
-                    await asyncio.sleep(0.05)
-
-            stdout_task = asyncio.create_task(log_stream(proc.stdout, 'stdout'))
-            stderr_task = asyncio.create_task(log_stream(proc.stderr, 'stderr'))
-
-            try:
-                exit_code = await proc.wait()
-            except asyncio.CancelledError:
-                proc.kill()
-                await proc.wait()
-                raise
-            finally:
-                stdout_task.cancel()
-                stderr_task.cancel()
-
-            if exit_code != 0:
-                log.error(f"Failed to download file {rel_file_path}, exit code {exit_code}")
+            # --- Download with retries + stall timeout ---
+            ok = await _download_one_file(file_idx, rel_file_path, down_path,
+                                          torrent_file_path, task_ctx)
+            if not ok:
+                failed_files.append((rel_file_path, "download failed/stalled"))
                 continue
 
-            # Locate downloaded file on disk
-            file_abs_path = os.path.normpath(os.path.join(down_path, rel_file_path.lstrip('./')))
-
+            file_abs_path = os.path.normpath(os.path.join(down_path, rel_file_path.lstrip("./")))
             if not os.path.exists(file_abs_path):
-                log.error(f"Downloaded file not found on disk: {file_abs_path}")
+                failed_files.append((rel_file_path, "file missing after download"))
                 continue
 
             file_size_bytes = os.path.getsize(file_abs_path)
 
-            # Update status: Uploading
-            percentage_upload = ((idx - 0.5) / total_files_to_download) * 100
-            status_text = (
-                f"⬆️ Uploading {idx}/{total_files_to_download}\n"
-                f"<code>{os.path.basename(rel_file_path)}</code> ({sizeUnit(file_size_bytes)})"
-            )
-
             if _status_msg:
                 await status_bar(
                     down_msg=status_head,
-                    speed="N/A",
-                    percentage=percentage_upload,
+                    speed="N/A", percentage=((idx - 0.5) / total_files_to_download) * 100,
                     eta="N/A",
-                    done=status_text,
+                    done=f"⬆️ Uploading {idx}/{total_files_to_download}\n<code>{os.path.basename(rel_file_path)}</code> ({sizeUnit(file_size_bytes)})",
                     total_size=f"{files_processed}/{total_files_to_download} files",
-                    engine="Streaming Torrent Downloader",
-                    task_ctx=task_ctx
+                    engine="Streaming Torrent Downloader", task_ctx=task_ctx,
                 )
 
-            # Upload based on mode
+            # --- Upload (wrapped so one failure can't crash the run) ---
             upload_success = False
-            if current_mode == "gdrive":
-                # Reconstruct folder structure on Google Drive
-                relative_dir = os.path.dirname(rel_file_path.lstrip('./'))
-                target_folder_id = await get_or_create_gdrive_folder(relative_dir, gdrive_folder_id)
-
-                log.info(f"Uploading {os.path.basename(file_abs_path)} to GDrive folder {target_folder_id}")
-                res = await upload_to_gdrive(file_abs_path, target_folder_id, task_ctx)
-                if res:
-                    upload_success = True
-                    if _messages:
-                        if not hasattr(_messages, 'uploaded_links') or _messages.uploaded_links is None:
-                            _messages.uploaded_links = []
-                        _messages.uploaded_links.append({
-                            'name': res['name'],
-                            'link': res['webViewLink'],
-                            'size': res['size']
-                        })
-            elif current_mode == "mirror":
-                # Copy to local mirror folder (or move to free disk space)
-                target_abs_path = os.path.normpath(os.path.join(_paths.mirror_dir, rel_file_path.lstrip('./')))
-                log.info(f"Mirroring file to {target_abs_path}")
-                os.makedirs(os.path.dirname(target_abs_path), exist_ok=True)
-                try:
+            try:
+                if current_mode == "gdrive":
+                    relative_dir = os.path.dirname(rel_file_path.lstrip("./"))
+                    target_folder_id = await get_or_create_gdrive_folder(relative_dir, gdrive_folder_id)
+                    res = await upload_to_gdrive(file_abs_path, target_folder_id, task_ctx)
+                    if res:
+                        upload_success = True
+                        if _messages:
+                            if not getattr(_messages, "uploaded_links", None):
+                                _messages.uploaded_links = []
+                            _messages.uploaded_links.append(
+                                {"name": res["name"], "link": res["webViewLink"], "size": res["size"]})
+                elif current_mode == "mirror":
+                    target_abs_path = os.path.normpath(os.path.join(_paths.mirror_dir, rel_file_path.lstrip("./")))
+                    os.makedirs(os.path.dirname(target_abs_path), exist_ok=True)
                     await asyncio.to_thread(shutil.move, file_abs_path, target_abs_path)
                     upload_success = True
-                except Exception as e:
-                    log.error(f"Failed to mirror file: {e}")
-            else: # Leech mode (Telegram)
-                from ..uploader.telegram import upload_file
-                log.info(f"Uploading {os.path.basename(file_abs_path)} to Telegram")
-                upload_success = await upload_file(
-                    file_path=file_abs_path,
-                    display_name=os.path.basename(file_abs_path),
-                    task_ctx=task_ctx
-                )
+                else:  # Telegram leech
+                    from ..uploader.telegram import upload_file
+                    upload_success = await upload_file(
+                        file_path=file_abs_path,
+                        display_name=os.path.basename(file_abs_path),
+                        task_ctx=task_ctx,
+                    )
+            except Exception as up_err:
+                log.error(f"Upload raised for {rel_file_path}: {up_err}", exc_info=True)
+                upload_success = False
 
             if upload_success:
                 files_processed += 1
                 bytes_uploaded += file_size_bytes
-                log.info(f"Successfully processed and uploaded file {idx}/{total_files}: {rel_file_path}")
+                log.info(f"Uploaded {idx}/{total_files_to_download}: {rel_file_path}")
             else:
-                log.error(f"Failed to upload file: {rel_file_path}")
+                failed_files.append((rel_file_path, "upload failed"))
 
-            # Delete the file immediately to free disk space
-            if os.path.exists(file_abs_path):
+            # --- Always free disk (mirror already moved the file) ---
+            if current_mode != "mirror" and os.path.exists(file_abs_path):
                 try:
                     os.remove(file_abs_path)
-                    log.info(f"Deleted temp file: {file_abs_path}")
                 except OSError as e:
                     log.warning(f"Could not delete temp file {file_abs_path}: {e}")
 
-            # Clean empty directories
-            for root, dirs, files_in_dir in os.walk(down_path, topdown=False):
+            # Prune empty dirs
+            for root, dirs, _f in os.walk(down_path, topdown=False):
                 for d in dirs:
                     d_path = os.path.join(root, d)
                     try:
@@ -1139,7 +1180,14 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
                 task_ctx=task_ctx
             )
 
-        return files_processed == total_files_to_download
+        # --- End-of-run report ---
+        if failed_files:
+            report = "\n".join(f"• {p} — {why}" for p, why in failed_files)
+            log.error(f"{len(failed_files)} file(s) did not complete:\n{report}")
+            if _messages:
+                _messages.failed_torrent_files = failed_files
+
+        return len(failed_files) == 0
 
     except Exception as e:
         log.error(f"Error in streaming torrent download: {e}", exc_info=True)

@@ -17,7 +17,7 @@ from ..downlader.manager import calDownSize, get_d_name, downloadManager
 from .helper import (
     getSize, applyCustomName, keyboard, sysINFO, is_google_drive,
     is_telegram, is_mega, is_terabox, is_torrent,
-    clean_filename, sizeUnit
+    clean_filename, sizeUnit, get_max_split_size_mib
 )
 from .message_safety import user_error
 from .ui_copy import build_task_in_progress_notice
@@ -727,8 +727,8 @@ async def _handle_archive_processing(download_path: str, action: str, task_ctx: 
     current_mode = _bot.Mode.mode
     is_dir = (current_mode == "dir-leech")
 
-    # Encapsulate the chunk size (950MB for Telegram API limits) within the process stage
-    chunk_size_bytes = 950 * 1024 * 1024
+    # Encapsulate the chunk size within the process stage
+    chunk_size_bytes = get_max_split_size_mib() * 1024 * 1024
 
     log.info(f"[Process] Archive action '{action}' started. Source: {download_path}, is_dir: {is_dir}")
 

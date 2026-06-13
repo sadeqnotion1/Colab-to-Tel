@@ -67,9 +67,10 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
         if error_obj: error_obj.failed_links.append(failed_info)
         return False
 
-    # Safety net: If file size exceeds 2000 MiB limit, split it using sizeChecker inline
-    if ospath.isfile(file_path) and file_size > 2000 * 1024 * 1024:
-        log.warning(f"Safety Net: File '{actual_upload_filename}' is {helper.sizeUnit(file_size)}, exceeding 2000 MiB limit. Splitting inline...")
+    # Safety net: If file size exceeds limit, split it using sizeChecker inline
+    max_split_size_bytes = helper.get_max_split_size_mib() * 1024 * 1024
+    if ospath.isfile(file_path) and file_size > max_split_size_bytes:
+        log.warning(f"Safety Net: File '{actual_upload_filename}' is {helper.sizeUnit(file_size)}, exceeding {helper.sizeUnit(max_split_size_bytes)} limit. Splitting inline...")
         from ..utility.converters import sizeChecker
         import shutil
         
@@ -129,6 +130,13 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
     f_type = helper.fileType(file_path)
     is_video = (f_type == "video")
     is_photo = (f_type == "photo")
+
+    # Detect if the file is a split part of a video file
+    if not is_video and helper.is_split_file(actual_upload_filename):
+        import re
+        base_name_without_split_ext = re.sub(r'\.(part\d+|[0-9]{3,}|z[0-9]{2,}|zip\.\d+)$', '', actual_upload_filename, flags=re.IGNORECASE)
+        if helper.fileType(base_name_without_split_ext) == "video":
+            is_video = True
 
     # --- Logic for Videos (Thumb & Duration) ---
     if is_video:
