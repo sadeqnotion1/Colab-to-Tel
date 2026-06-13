@@ -42,6 +42,40 @@ A powerful Telegram bot for downloading and uploading files from various sources
 
 5. Send `/start` to your bot on Telegram to begin!
 
+## Manual Colab YTDL Script (`ytdl.py`)
+
+If you want to download a video and upload it to Telegram manually using a simple script (instead of running the full bot or the old GitHub Action pipeline), you can use the [ytdl.py](ytdl.py) script directly in a Google Colab cell.
+
+### Quick Start (in a Google Colab cell)
+
+1. Install the required dependencies:
+   ```bash
+   !pip install -q yt-dlp pyrogram tgcrypto
+   ```
+
+2. Run the script with your credentials and video URL:
+   ```bash
+   !API_ID="your_api_id" API_HASH="your_api_hash" BOT_TOKEN="your_bot_token" CHAT_ID="your_chat_or_channel_id" python ytdl.py "https://youtu.be/XXXXXXXX"
+   ```
+
+Or you can import it and run it inside a Python cell:
+```python
+import os
+os.environ["API_ID"] = "your_api_id"
+os.environ["API_HASH"] = "your_api_hash"
+os.environ["BOT_TOKEN"] = "your_bot_token"
+os.environ["CHAT_ID"] = "your_chat_or_channel_id"
+
+from ytdl import download_and_upload
+download_and_upload("https://youtu.be/XXXXXXXX")
+```
+
+> [!NOTE]
+> * **API_ID** and **API_HASH**: Obtain these from [my.telegram.org](https://my.telegram.org) under API development tools.
+> * **BOT_TOKEN**: Obtain this from [@BotFather](https://t.me/BotFather) on Telegram.
+> * **CHAT_ID**: The destination chat or channel ID (e.g., `-1001234567890`) or username (e.g., `@mychannel`). The bot must be added to this chat/channel with appropriate send permissions.
+> * **Action Secrets**: Any previously configured GitHub repository Action secrets are no longer used by the codebase since the GitHub Action workflow has been removed.
+
 ## Commands
 
 ### Download Commands
