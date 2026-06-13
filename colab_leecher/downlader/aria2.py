@@ -838,30 +838,23 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
 
         files = []
         torrent_name = "Torrent_Download"
-        in_files = False
         for line in stdout_str.splitlines():
             line = line.strip()
             if line.startswith("Name:"):
                 torrent_name = line.split("Name:", 1)[1].strip()
-            elif "idx" in line and "path" in line and "size" in line:
-                in_files = True
-                continue
-            elif in_files:
-                if line.startswith("===") or not line:
-                    continue
-                parts = line.split('|')
-                if len(parts) >= 3:
-                    try:
-                        idx = int(parts[0].strip())
-                        size_str = parts[-1].strip()
-                        file_path = "|".join(parts[1:-1]).strip()
-                        files.append({
-                            'idx': idx,
-                            'path': file_path,
-                            'size_str': size_str
-                        })
-                    except ValueError:
-                        pass
+            parts = line.split('|')
+            if len(parts) >= 3:
+                try:
+                    idx = int(parts[0].strip())
+                    size_str = parts[-1].strip()
+                    file_path = "|".join(parts[1:-1]).strip()
+                    files.append({
+                        'idx': idx,
+                        'path': file_path,
+                        'size_str': size_str
+                    })
+                except ValueError:
+                    pass
 
         if not files:
             log.error("No files found in torrent.")
