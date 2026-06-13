@@ -42,6 +42,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "downloads")
+COOKIES_FILE = os.environ.get("COOKIES_FILE", "")
 
 
 def _human_size(num_bytes):
@@ -59,6 +60,10 @@ def download(url, download_dir=DOWNLOAD_DIR):
     os.makedirs(download_dir, exist_ok=True)
     outtmpl = os.path.join(download_dir, "%(title)s.%(ext)s")
 
+    cookies = COOKIES_FILE
+    if not cookies and os.path.exists("cookies.txt"):
+        cookies = "cookies.txt"
+
     ydl_opts = {
         # Best video+audio merged into a single mp4 when possible.
         "format": "bv*+ba/b",
@@ -68,6 +73,9 @@ def download(url, download_dir=DOWNLOAD_DIR):
         "quiet": False,
         "no_warnings": False,
     }
+    if cookies:
+        ydl_opts["cookiefile"] = cookies
+        print(f"[ytdl] Using cookies from: {cookies}")
 
     print(f"[ytdl] Downloading: {url}")
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
