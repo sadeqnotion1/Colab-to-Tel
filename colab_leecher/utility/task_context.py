@@ -20,6 +20,7 @@ from typing import Dict, Optional, List, Set, Deque, Any
 from pyrogram.types import Message
 from .ui_copy import build_health_summary_text
 from .transfer_state import SmartBytes, AWAITING_UPLOAD_DECISION
+from .code_quality_utils import SpeedCalculator
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ class TaskTransfer:
     start_time: float = field(default_factory=lambda: time.time())
     last_speed: float = 0.0
     last_speed_bytes: float = 0.0
+    _speed_calculator: Any = field(default_factory=SpeedCalculator, init=False, repr=False)
 
     def reset(self):
         self.down_bytes = SmartBytes(0)
@@ -86,6 +88,7 @@ class TaskTransfer:
         self.successful_downloads = []
         self.start_time = time.time()
         self.last_speed = 0.0
+        self._speed_calculator = SpeedCalculator()
 
     def get_current_bytes(self) -> int:
         down = sum(self.down_bytes) if isinstance(self.down_bytes, (list, tuple, set)) else self.down_bytes
@@ -114,11 +117,21 @@ class TaskTransfer:
         return 0.0
 
     def get_speed(self) -> float:
+        instant = self._speed_calculator.get_instant_speed()
+        if instant > 0.0 or self._speed_calculator._speed_samples:
+            return instant
         elapsed = time.time() - self.start_time
         if elapsed < 0.01:
             return 0.0
-        current_bytes = self.get_current_bytes()
-        return current_bytes / elapsed
+        return self.get_current_bytes() / elapsed
+
+    def get_average_speed(self) -> float:
+        return self._speed_calculator.get_average_speed()
+
+    def update_progress(self, bytes_done: int, bytes_total: int = None):
+        self._speed_calculator.update(bytes_done)
+        if bytes_total is not None and bytes_total > 0:
+            self.total_size = int(bytes_total)
 
 
 @dataclass
@@ -550,6 +563,7 @@ class TaskQueue:
     def __init__(self):
         self.active_tasks: Dict[str, TaskContext] = {}
         self.running_tasks: Set[str] = set()
+        self.paused: bool = False
         self.summary_msg: Optional[Message] = None
         self.last_summary_text: str = ""
         self.last_summary_keyboard_signature = ""
@@ -777,6 +791,8 @@ class TaskQueue:
 
     async def can_start_task(self, user_id: int = None) -> tuple[bool, str]:
         async with self._lock:
+            if getattr(self, 'paused', False):
+                return (False, "System queue is currently paused for cancellation.")
             total_tasks = len(self.active_tasks)
             if total_tasks >= self.MAX_TOTAL_TASKS:
                 return (False, f"System limit reached ({total_tasks}/{self.MAX_TOTAL_TASKS} tasks active). Please wait for some to complete.")

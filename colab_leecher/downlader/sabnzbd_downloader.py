@@ -26,7 +26,7 @@ from ..utility.sabnzbd_client import SABnzbdClient
 class SABnzbdDownloader:
     """NZB downloader using SABnzbd backend"""
 
-    def __init__(self, client, message, sabnzbd_config: dict):
+    def __init__(self, client, message, sabnzbd_config: dict, task_ctx=None):
         """
         Initialize SABnzbd downloader
 
@@ -34,9 +34,11 @@ class SABnzbdDownloader:
             client: Pyrogram client
             message: Telegram message
             sabnzbd_config: SABnzbd configuration dict from setup
+            task_ctx: Optional TaskContext for multi-task support
         """
         self.client = client
         self.message = message
+        self.task_ctx = task_ctx
         self.download_start_time = 0
 
         # SABnzbd client
@@ -64,7 +66,8 @@ class SABnzbdDownloader:
             eta: Estimated time remaining
         """
         try:
-            if not MSG.status_msg:
+            status_msg = self.task_ctx.status_msg if self.task_ctx else MSG.status_msg
+            if not status_msg:
                 return
 
             # Throttle updates (every 3 seconds)
@@ -93,7 +96,8 @@ class SABnzbdDownloader:
                 eta=eta if eta != "unknown" else "N/A",
                 done=status_text,
                 total_size=sizeUnit(self.total_size) if self.total_size > 0 else "Unknown",
-                engine="SABnzbd"
+                engine="SABnzbd",
+                task_ctx=self.task_ctx
             )
 
         except Exception as e:

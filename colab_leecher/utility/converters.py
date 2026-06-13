@@ -119,7 +119,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
         _bot = task_ctx.bot
         _paths = task_ctx.paths
         _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error
         _msg = task_ctx.msg
         log.info(
             f"archive() using TaskContext for task_id: {task_ctx.task_id}")
@@ -897,7 +897,7 @@ async def sizeChecker(
     if task_ctx:
         _paths = task_ctx.paths
         _bot = task_ctx.bot
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error
         log.info(
             f"sizeChecker() using TaskContext for task_id: {task_ctx.task_id}")
     else:
@@ -1056,7 +1056,7 @@ async def extract(zip_filepath, remove: bool, task_ctx: TaskContext = None):
         _bot = task_ctx.bot
         _paths = task_ctx.paths
         _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error
         _msg = task_ctx.msg
         log.info(
             f"extract() using TaskContext for task_id: {task_ctx.task_id}")
@@ -1359,7 +1359,7 @@ async def extract_zip_streaming(
     if task_ctx:
         _paths = task_ctx.paths
         _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error
         _msg = task_ctx.msg
         log.info(
             f"extract_zip_streaming() using TaskContext for task_id: {task_ctx.task_id}")
@@ -1597,7 +1597,7 @@ async def extract_rar_streaming(
     if task_ctx:
         _paths = task_ctx.paths
         _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error
         _msg = task_ctx.msg
         _bot = task_ctx.bot
         log.info(
@@ -2026,7 +2026,7 @@ async def splitArchive(
     if task_ctx:
         _paths = task_ctx.paths
         _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error
         log.info(
             f"splitArchive() using TaskContext for task_id: {task_ctx.task_id}")
     else:
@@ -2179,7 +2179,7 @@ async def splitVideo(
     if task_ctx:
         _paths = task_ctx.paths
         _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error
         log.info(
             f"splitVideo() using TaskContext for task_id: {task_ctx.task_id}")
     else:

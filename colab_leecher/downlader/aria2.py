@@ -212,7 +212,7 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
     if task_ctx:
         _paths = task_ctx.paths
         _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error
         _transfer = task_ctx.transfer
         _bot_times = task_ctx.bot_times
         log.info(f"aria2_Download() using TaskContext for task_id: {task_ctx.task_id}")

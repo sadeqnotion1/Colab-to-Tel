@@ -62,7 +62,7 @@ async def create_folder_on_gdrive(folder_name: str, parent_id: str = None, task_
         Created folder ID or None on failure
     """
     # Use task_ctx if provided
-    _task_error = task_ctx.task_error if task_ctx else TaskError
+    _task_error = task_ctx.error if task_ctx else TaskError
     task_id_str = f"[{task_ctx.get_short_id()}]" if task_ctx else "[legacy]"
 
     if not Gdrive.service:
@@ -117,7 +117,7 @@ async def upload_to_gdrive(file_path: str, parent_folder_id: str = None, task_ct
         Dict with file info {'id', 'name', 'webViewLink', 'size'} or None on failure
     """
     # Use task_ctx if provided
-    _task_error = task_ctx.task_error if task_ctx else TaskError
+    _task_error = task_ctx.error if task_ctx else TaskError
     _transfer = task_ctx.transfer if task_ctx else TRANSFER
     task_id_str = f"[{task_ctx.get_short_id()}]" if task_ctx else "[legacy]"
 
@@ -271,7 +271,7 @@ async def upload_folder_to_gdrive(folder_path: str, parent_folder_id: str = None
         Dict with folder info and uploaded files list, or None on failure
     """
     # Use task_ctx if provided
-    _task_error = task_ctx.task_error if task_ctx else TaskError
+    _task_error = task_ctx.error if task_ctx else TaskError
     task_id_str = f"[{task_ctx.get_short_id()}]" if task_ctx else "[legacy]"
 
     if not ospath.exists(folder_path) or not ospath.isdir(folder_path):
@@ -355,7 +355,7 @@ async def GDrive_Upload(path: str, cleanup: bool = False, task_ctx: TaskContext 
         _bot = task_ctx.bot
         _paths = task_ctx.paths
         _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error
         _transfer = task_ctx.transfer
         _msg = task_ctx.msg
         log.info(f"GDrive_Upload using TaskContext for task_id: {task_ctx.task_id}")

@@ -111,6 +111,8 @@ class ProgressManager:
                 if bytes_total is not None and bytes_total > 0:
                     transfer.total_size = int(bytes_total)
 
+                transfer.update_progress(transfer.get_current_bytes(), transfer.total_size)
+
                 # Parse and set speed for dashboard (float speed in bytes/sec)
                 parsed_speed = 0.0
                 if isinstance(speed, (int, float)):

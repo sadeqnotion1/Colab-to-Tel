@@ -1747,23 +1747,43 @@ async def status_bar(
     total_bytes = parse_any_size(total_size)
     is_upload = any(x in engine.lower() for x in ["upload", "up", "mirror", "gdrive"])
 
-    # Delegate task progress to centralized ProgressManager
-    from .progress_manager import get_progress_manager
-    pm = get_progress_manager()
-    await pm.update_progress(
-        task_id=task_ctx.task_id if task_ctx else None,
-        bytes_done=done_bytes,
-        bytes_total=total_bytes,
-        speed=speed,
-        eta=eta,
-        percentage=percentage,
-        is_upload=is_upload,
-        engine=engine,
-        use_custom_text=use_custom_text,
-        custom_text=down_msg,
-        force=force_update,
-        task_ctx=task_ctx
-    )
+    if task_ctx is None:
+        from .progress_manager import get_progress_manager
+        pm = get_progress_manager()
+        await pm.update_progress(
+            task_id=None,
+            bytes_done=done_bytes,
+            bytes_total=total_bytes,
+            speed=speed,
+            eta=eta,
+            percentage=percentage,
+            is_upload=is_upload,
+            engine=engine,
+            use_custom_text=use_custom_text,
+            custom_text=down_msg,
+            force=force_update,
+            task_ctx=None
+        )
+    else:
+        # Delegate task progress to UnifiedProgressSystem
+        from .unified_progress import get_unified_progress
+        up = get_unified_progress()
+        await up.update_progress(
+            task_ctx.task_id,
+            {
+                'done': done_bytes,
+                'total': total_bytes,
+                'speed': speed,
+                'eta': eta,
+                'percentage': percentage,
+                'is_upload': is_upload,
+                'engine': engine,
+                'use_custom_text': use_custom_text,
+                'custom_text': down_msg,
+                'force': force_update,
+                'task_ctx': task_ctx
+            }
+        )
 
 
 def multipartArchive(path: str, archive_type: str, remove_parts: bool):

@@ -173,7 +173,6 @@ def _build_task_paths(task_ctx: TaskContext):
         'work_path': task_ctx.work_path,
         'WORK_PATH': task_ctx.work_path,
         'temp_zpath': f"{task_ctx.work_path}/temp_zip",
-        'temp_unzip': f"{task_ctx.work_path}/temp_unzip",
         'temp_unzip_path': f"{task_ctx.work_path}/temp_unzip",
         'temp_dirleech_path': f"{task_ctx.work_path}/dir_leech_temp",
         'temp_files_dir': f"{task_ctx.work_path}/leech_temp",
@@ -3683,16 +3682,8 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             await callback_query.answer("Cancelling all tasks...", show_alert=True)
 
             log.info(f"Bulk cancel requested: {len(all_tasks)} tasks")
-            for task_ctx in list(all_tasks.values()):
-                is_running = bool(task_ctx.async_task and not task_ctx.async_task.done())
-                try:
-                    await cancelTask("User pressed Cancel All.", task_ctx=task_ctx)
-                except Exception as cancel_err:
-                    log.warning(f"Failed to cancel task {task_ctx.get_short_id()}: {cancel_err}")
-                
-                if not is_running:
-                    from .utility.queue_operation_manager import coordinated_cleanup
-                    await coordinated_cleanup(task_ctx.task_id)
+            from .utility.cancellation_coordinator import get_cancellation_coordinator
+            await get_cancellation_coordinator().cancel_all_tasks()
 
             await force_update_summary(client)
 
@@ -4457,8 +4448,10 @@ async def handle_text_input(client, message):
                     mode="leech"
                 )
 
-                nzb_filename = nzb_url.split('/')[-1]
-                if not nzb_filename.endswith('.nzb'):
+                from urllib.parse import urlparse
+                parsed = urlparse(nzb_url)
+                nzb_filename = os.path.basename(parsed.path)
+                if not nzb_filename or not nzb_filename.endswith('.nzb'):
                     nzb_filename = "download.nzb"
 
                 nzb_path = os.path.join(task_ctx.down_path, nzb_filename)
@@ -5198,7 +5191,7 @@ async def handle_nzb_file(client, message, nzb_file_path=None):
         if sabnzbd_config:
             # Use SABnzbd downloader (more reliable)
             log.info("Using SABnzbd backend for NZB download")
-            downloader = SABnzbdDownloader(client, message, sabnzbd_config)
+            downloader = SABnzbdDownloader(client, message, sabnzbd_config, task_ctx=task_ctx)
         else:
             # Fall back to custom NNTP downloader
             log.info("Using custom NNTP downloader (SABnzbd not configured)")
@@ -5406,13 +5399,12 @@ async def startup_handler(client, message):
     if not _background_tasks_started:
         _background_tasks_started = True
         log.info("Starting background tasks...")
+        # Initialize SystemCoordinator first
+        from .utility.system_coordinator import get_system_coordinator
+        await get_system_coordinator().initialize()
         TASK_QUEUE.create_background_task(send_sabnzbd_url_to_telegram(), name="sabnzbd-notifier")
         TASK_QUEUE.create_background_task(periodic_cleanup_task(), name="periodic-cleanup")
-        from .utility.worker_slot_manager import recover_stuck_slots
-        TASK_QUEUE.create_background_task(recover_stuck_slots(), name="recover-stuck-slots")
-        from .utility.upload_error_manager import cleanup_stuck_errors
-        TASK_QUEUE.create_background_task(cleanup_stuck_errors(), name="cleanup-stuck-errors")
-        log.info("✅ Background tasks started (sabnzbd-notifier, periodic-cleanup, recover-stuck-slots, cleanup-stuck-errors)")
+        log.info("✅ Background tasks started (sabnzbd-notifier, periodic-cleanup, system-coordinator)")
     raise ContinuePropagation  # Allow other handlers to process this message
 
 # DEBUG: Log all messages

@@ -14,6 +14,8 @@ import time
 import logging
 import nntplib
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+_nntp_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="nntp")
 from defusedxml import ElementTree as ET
 from typing import Dict, List, Tuple, Optional
 from pyrogram.types import Message
@@ -233,6 +235,14 @@ class NZBDownloader:
             ValueError: If provider config invalid
             nntplib.NNTPError: If connection/auth fails
         """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _nntp_executor,
+            self._connect_nntp_sync,
+            provider_config
+        )
+
+    def _connect_nntp_sync(self, provider_config: Dict = None) -> nntplib.NNTP:
         # Use provided config or default to first provider
         if provider_config is None:
             if self.provider_configs:
@@ -267,21 +277,6 @@ class NZBDownloader:
             else:
                 log.info(f"Connected to NNTP server ({provider_name}, no authentication)")
 
-            # Select a default newsgroup - some servers (like giganews) require this even for message IDs
-            # We'll select a common binary group that should exist on most servers
-            try:
-                connection.group('alt.binaries.test')
-                log.debug(f"NNTP connection ready ({provider_name}) - selected alt.binaries.test")
-            except nntplib.NNTPError as primary_group_err:
-                try:
-                    connection.group('alt.test')
-                    log.debug(f"NNTP connection ready ({provider_name}) - selected alt.test")
-                except nntplib.NNTPError as fallback_group_err:
-                    log.debug(
-                        f"NNTP connection ready ({provider_name}) - no default group "
-                        f"(primary='{primary_group_err}', fallback='{fallback_group_err}')"
-                    )
-
             return connection
 
         except nntplib.NNTPPermanentError as e:
@@ -299,7 +294,7 @@ class NZBDownloader:
             log.exception(f"Failed to connect to NNTP server: {e}")
             raise ValueError(f"Failed to connect to Usenet server: {e}")
 
-    def download_article(self, connection: nntplib.NNTP, message_id: str, segment_number: int) -> Optional[bytes]:
+    async def download_article(self, connection: nntplib.NNTP, message_id: str, segment_number: int) -> Optional[list]:
         """
         Download single article from Usenet by message ID
 
@@ -309,17 +304,24 @@ class NZBDownloader:
             segment_number: Segment number for logging
 
         Returns:
-            Raw article data (yEnc encoded) or None if article missing
+            List of raw article lines or None if article missing
         """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _nntp_executor,
+            self._download_article_sync,
+            connection,
+            message_id,
+            segment_number
+        )
+
+    def _download_article_sync(self, connection: nntplib.NNTP, message_id: str, segment_number: int) -> Optional[list]:
         try:
-            # Request article by message ID (newsgroup already selected during connection setup)
-            response, info = connection.article(message_id)
+            # Request article body by message ID
+            response, info = connection.body(message_id)
 
-            # Extract article body (skip headers)
-            article_data = b'\n'.join(info.lines)
-
-            log.debug(f"Downloaded segment {segment_number}: {len(article_data)} bytes")
-            return article_data
+            log.debug(f"Downloaded segment {segment_number}: {len(info.lines)} lines")
+            return info.lines
 
         except nntplib.NNTPTemporaryError as e:
             error_code = str(e)
@@ -336,7 +338,7 @@ class NZBDownloader:
             log.exception(f"Unexpected error downloading segment {segment_number}: {e}")
             return None
 
-    def download_article_with_fallback(self, connection: nntplib.NNTP, message_id: str, segment_number: int) -> Optional[bytes]:
+    async def download_article_with_fallback(self, connection: nntplib.NNTP, message_id: str, segment_number: int) -> Optional[list]:
         """
         Download article with smart provider fallback for missing articles.
 
@@ -354,7 +356,7 @@ class NZBDownloader:
         """
         # Try primary connection first
         primary_provider = self.connection_providers.get(id(connection), 'unknown')
-        article_data = self.download_article(connection, message_id, segment_number)
+        article_data = await self.download_article(connection, message_id, segment_number)
 
         if article_data:
             # Reset consecutive missing counter on success
@@ -385,7 +387,7 @@ class NZBDownloader:
                 log.info(f"Article {message_id} missing on {primary_provider}, trying {other_provider}...")
                 tried_providers.add(other_provider)
 
-                article_data = self.download_article(other_conn, message_id, segment_number)
+                article_data = await self.download_article(other_conn, message_id, segment_number)
                 if article_data:
                     log.info(f"✅ Found on {other_provider}!")
                     self.fallback_recoveries += 1
@@ -401,13 +403,13 @@ class NZBDownloader:
         self.missing_segments.append(segment_number)
         return None
 
-    def decode_yenc(self, article_data: bytes) -> Optional[bytes]:
+    def decode_yenc(self, article_data: list) -> Optional[bytes]:
         """
         Decode yEnc encoded article data
         Tries sabyenc first, falls back to pure Python implementation
 
         Args:
-            article_data: Raw article data with yEnc encoding
+            article_data: List of raw article lines with yEnc encoding
 
         Returns:
             Decoded binary data or None if decoding fails
@@ -419,8 +421,8 @@ class NZBDownloader:
             # Try sabyenc (fast C implementation)
             import sabyenc
 
-            # sabyenc expects list of chunks
-            decoded, filename, crc, crc_expected, crc_correct = sabyenc.decode_usenet_chunks([article_data], None)
+            # sabyenc expects list of chunks/lines
+            decoded, filename, crc, crc_expected, crc_correct = sabyenc.decode_usenet_chunks(article_data, None)
 
             if not crc_correct:
                 log.warning("yEnc CRC mismatch (data may be corrupted)")
@@ -435,18 +437,18 @@ class NZBDownloader:
             log.warning(f"sabyenc failed ({e}), falling back to pure Python")
             return self._decode_yenc_pure_python(article_data)
 
-    def _decode_yenc_pure_python(self, article_data: bytes) -> Optional[bytes]:
+    def _decode_yenc_pure_python(self, article_lines: list) -> Optional[bytes]:
         """
         Pure Python yEnc decoder (fallback when sabyenc unavailable)
 
         Args:
-            article_data: Raw article data with yEnc encoding
+            article_lines: List of raw article lines with yEnc encoding
 
         Returns:
             Decoded binary data or None if decoding fails
         """
         try:
-            lines = article_data.split(b'\n')
+            lines = article_lines
 
             # Find ybegin and yend markers
             ybegin_found = False
@@ -704,11 +706,11 @@ class NZBDownloader:
 
                 for seg_idx, segment in enumerate(segments, 1):
                     # Rotate through connection pool
-                    conn_idx = seg_idx % len(self.nntp_connections)
+                    conn_idx = (seg_idx - 1) % len(self.nntp_connections)
                     connection = self.nntp_connections[conn_idx]
 
                     # Download article with automatic provider fallback
-                    article_data = self.download_article_with_fallback(connection, segment['message_id'], segment['number'])
+                    article_data = await self.download_article_with_fallback(connection, segment['message_id'], segment['number'])
 
                     if article_data:
                         # Decode yEnc
@@ -764,9 +766,10 @@ class NZBDownloader:
 
             # Step 4: Close connections
             log.info("\nClosing NNTP connections...")
+            loop = asyncio.get_event_loop()
             for conn in self.nntp_connections:
                 try:
-                    conn.quit()
+                    await loop.run_in_executor(_nntp_executor, conn.quit)
                 except Exception as e:
                     log.debug(f"Error closing connection: {e}")
 
@@ -802,9 +805,10 @@ class NZBDownloader:
             await self.update_progress_bar(self.current_percentage, f"❌ Error: {str(e)[:50]}")
 
             # Close any open connections
+            loop = asyncio.get_event_loop()
             for conn in self.nntp_connections:
                 try:
-                    conn.quit()
+                    await loop.run_in_executor(_nntp_executor, conn.quit)
                 except Exception as close_err:
                     log.debug(f"Error closing NNTP connection: {close_err}")
 

@@ -36,6 +36,8 @@ def anyio_backend():
 def reset_progress_manager():
     from colab_leecher.utility.progress_manager import get_progress_manager
     get_progress_manager().reset()
+    from colab_leecher.utility.unified_progress import get_unified_progress
+    get_unified_progress().reset()
     yield
 
 

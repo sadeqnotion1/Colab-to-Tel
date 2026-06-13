@@ -51,24 +51,25 @@ class ProgressDispatcher:
         if self.task_ctx.is_cancelled:
             raise asyncio.CancelledError("Task cancellation requested.")
 
-        # 2. Delegate to centralized ProgressManager
-        from .progress_manager import get_progress_manager
-        pm = get_progress_manager()
+        # 2. Delegate to UnifiedProgressSystem
+        from .unified_progress import get_unified_progress
+        up = get_unified_progress()
         
         is_upload = (self.operation == "upload")
         engine_or_dest = self.destination if is_upload else self.engine
 
-        await pm.update_progress(
-            task_id=self.task_ctx.task_id,
-            bytes_done=current_bytes,
-            bytes_total=total_bytes,
-            speed="N/A",
-            eta="N/A",
-            is_upload=is_upload,
-            engine=engine_or_dest,
-            force=force,
-            task_ctx=self.task_ctx,
-            throttle_interval=self.interval
+        await up.update_progress(
+            self.task_ctx.task_id,
+            {
+                'done': current_bytes,
+                'total': total_bytes,
+                'speed': "N/A",
+                'eta': "N/A",
+                'is_upload': is_upload,
+                'engine': engine_or_dest,
+                'force': force,
+                'task_ctx': self.task_ctx
+            }
         )
 
     async def finalize(self):

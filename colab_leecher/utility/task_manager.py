@@ -150,6 +150,11 @@ async def taskScheduler(task_ctx: TaskContext):
     # Store original download path in case it's modified (e.g., for zip mode)
     original_Paths_down_path = _paths.down_path
 
+    from .system_coordinator import get_system_coordinator
+    coordinator = get_system_coordinator()
+    ctx_mgr = coordinator.guaranteed_cleanup.managed_slot(task_id)
+    ctx_mgr.__enter__()
+
     try:
         # Enclose the complete pipeline orchestration in this strict top-level try block
         _transfer.reset()  # Reset transfer statistics
@@ -554,6 +559,7 @@ async def taskScheduler(task_ctx: TaskContext):
             await coordinated_cleanup(task_id)
 
         TASK_QUEUE.create_background_task(_async_cleanup(), name=f"shielded_cleanup_{task_id[:8]}")
+        ctx_mgr.__exit__(None, None, None)
 
        # --- Pipeline Architecture Helper Functions ---
 
@@ -1087,7 +1093,7 @@ async def Do_Mirror(
     _paths = task_ctx.paths
     _transfer = task_ctx.transfer
     _messages = task_ctx.messages
-    _task_error = task_ctx.task_error
+    _task_error = task_ctx.error
     log.info(
         f"Do_Mirror using TaskContext for task_id: {task_ctx.task_id}"
     )
@@ -1313,7 +1319,7 @@ async def Do_GDrive_Upload(
     _paths = task_ctx.paths
     _transfer = task_ctx.transfer
     _messages = task_ctx.messages
-    _task_error = task_ctx.task_error
+    _task_error = task_ctx.error
     log.info(
         f"Do_GDrive_Upload using TaskContext for task_id: {task_ctx.task_id}"
     )

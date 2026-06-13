@@ -71,7 +71,7 @@ async def megadl(link: str, num: int, task_ctx=None, _recursion_depth: int = 0) 
     if task_ctx:
         _paths = task_ctx.paths
         _messages = task_ctx.messages
-        _task_error = task_ctx.task_error
+        _task_error = task_ctx.error
         _transfer = task_ctx.transfer
         _bot_times = task_ctx.bot_times
         log.info(f"megadl() using TaskContext for task_id: {task_ctx.task_id}")
