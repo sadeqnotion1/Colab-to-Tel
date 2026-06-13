@@ -27,7 +27,7 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
                 log.info(f"Retry attempt {attempt + 1}/{max_retries} for link {num}")
                 Messages.status_head += f"\n<i>⚠️ Retry attempt {attempt + 1}/{max_retries}</i>\n"
 
-            YTDL_Thread = Thread(target=YouTubeDL, name="YouTubeDL", args=(link,))
+            YTDL_Thread = Thread(target=YouTubeDL, name="YouTubeDL", args=(link, task_ctx))
             YTDL_Thread.start()
 
             while YTDL_Thread.is_alive():
@@ -185,15 +185,18 @@ def _progress_hook(d):
         log.info(f"Finished downloading: {d.get('filename', 'unknown')}")
 
 
-def YouTubeDL(url):
+def YouTubeDL(url, task_ctx=None):
     global YTDL
 
-    if not ospath.exists(Paths.thumbnail_ytdl):
-        makedirs(Paths.thumbnail_ytdl)
+    down_path = task_ctx.paths.down_path if task_ctx else Paths.down_path
+    thumbnail_ytdl = task_ctx.paths.thumbnail_ytdl if task_ctx else Paths.thumbnail_ytdl
 
-    base_template = f"{Paths.down_path}/%(extractor_key,unknown_site)s/%(uploader,unknown_uploader)s/%(upload_date>%Y-%m-%d,unknown_date)s_%(title,id)s.%(ext)s"
-    fallback_template = f"{Paths.down_path}/%(id)s.%(ext)s"
-    thumb_template = f"{Paths.thumbnail_ytdl}/%(id)s.%(ext)s"
+    if not ospath.exists(thumbnail_ytdl):
+        makedirs(thumbnail_ytdl)
+
+    base_template = f"{down_path}/%(extractor_key,unknown_site)s/%(uploader,unknown_uploader)s/%(upload_date>%Y-%m-%d,unknown_date)s_%(title,id)s.%(ext)s"
+    fallback_template = f"{down_path}/%(id)s.%(ext)s"
+    thumb_template = f"{thumbnail_ytdl}/%(id)s.%(ext)s"
 
     ydl_opts = _build_ydl_opts(base_template)
     ydl_opts["outtmpl"] = {
