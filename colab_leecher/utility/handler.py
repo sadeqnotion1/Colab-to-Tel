@@ -5,6 +5,7 @@ import shutil
 import logging
 import pathlib
 import asyncio
+import io
 from time import time
 from .. import colab_bot
 from natsort import natsorted
@@ -501,7 +502,6 @@ async def cancel_task(reason: str, task_ctx: TaskContext = None):
     """
     global colab_bot, log
     from .. import OWNER
-    import io
     from pyrogram import enums
     from pyrogram.errors import MessageNotModified
     from .task_context import TASK_QUEUE, cleanup_task_artifacts

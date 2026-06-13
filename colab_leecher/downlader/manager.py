@@ -437,7 +437,6 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
                  batch_had_failures = True
                  _task_error.state = False; _task_error.text = ""
             else:
-                 import os
                  downloaded_filename = "YTDL Download"
                  if task_ctx and "ytdl_results" in task_ctx.metadata and link in task_ctx.metadata["ytdl_results"]:
                      res = task_ctx.metadata["ytdl_results"][link]

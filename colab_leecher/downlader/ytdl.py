@@ -2,6 +2,7 @@
 #FILE: colab_leecher/downlader/ytdl.py
 #================================================
 import logging
+import os
 import yt_dlp
 from asyncio import sleep
 from threading import Thread
@@ -201,7 +202,6 @@ def _progress_hook(d):
 
 def YouTubeDL(url, task_ctx=None):
     global YTDL
-    import os
 
     down_path = task_ctx.paths.down_path if task_ctx else Paths.down_path
     thumbnail_ytdl = task_ctx.paths.thumbnail_ytdl if task_ctx else Paths.thumbnail_ytdl
