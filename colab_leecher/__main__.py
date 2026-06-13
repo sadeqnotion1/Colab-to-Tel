@@ -2828,8 +2828,8 @@ async def handle_url(client: Client, message: Message):
                     log.info("Mindvalley auto-detected, URLs stored in setup session for processing")
                     await message.reply_text(f"🎬 Detected {len(source_links)} Mindvalley M3U8 URL(s)!\n\nProcessing...")
                     # The mindvalley handler will process these URLs
-                elif current_service_type in ["direct", "instagram"]:
-                    # Direct/Instagram can go straight to leech type
+                elif current_service_type in ["direct", "instagram", "ytdl"]:
+                    # Direct/Instagram/YTDL can go straight to leech type
                     await ask_leech_type(client, message.chat.id, current_mode)
                 else:
                     # Fallback to asking for service
