@@ -2899,6 +2899,72 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             return
 
 
+        # === TORRENT DESTINATION SELECTION ===
+        if query_data.startswith("tdest_"):
+            choice = query_data.split("_")[1]
+            await callback_query.answer(f"Selected: {choice.capitalize()}")
+            try:
+                await callback_query.message.delete()
+            except:
+                pass
+
+            async with user_tasks_lock:
+                task_ctx = user_tasks.pop(user_id, None)
+
+            if not task_ctx or not hasattr(task_ctx, 'torrent_file_path'):
+                await client.send_message(chat_id, "❌ Torrent session lost. Please resend the file.")
+                return
+
+            log.info(f"Torrent destination choice '{choice}' for task {task_ctx.get_short_id()}")
+
+            # Update mode in task_ctx
+            task_ctx.mode = choice
+            if choice == "gdrive":
+                task_ctx.bot.Mode.mode = "gdrive"
+            elif choice == "mirror":
+                task_ctx.bot.Mode.mode = "mirror"
+            else:
+                task_ctx.bot.Mode.mode = "leech"
+
+            # Prepare task context compatibility objects
+            _prepare_task_context(
+                task_ctx=task_ctx,
+                source_links=[task_ctx.torrent_file_path],
+                filenames=task_ctx.filenames,
+                custom_name=BOT.Options.custom_name if hasattr(BOT.Options, 'custom_name') else '',
+                zip_pswd=BOT.Options.zip_pswd if hasattr(BOT.Options, 'zip_pswd') else '',
+                unzip_pswd=BOT.Options.unzip_pswd if hasattr(BOT.Options, 'unzip_pswd') else '',
+                archive_format=BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else '7z',
+            )
+
+            # Get the user's original message (or fallback to callback query message)
+            orig_msg = callback_query.message.reply_to_message
+            if not orig_msg:
+                orig_msg = callback_query.message
+                orig_msg.from_user = callback_query.from_user
+
+            # Send processing message
+            processing_msg = await client.send_message(
+                chat_id,
+                "<b>Processing torrent request...</b>\n\n"
+                f"<b>Task ID:</b> <code>{task_ctx.get_short_id()}</code>\n"
+                f"<b>Mode:</b> {choice.capitalize()}\n\n"
+                "<i>Please wait while we prepare your torrent download...</i>",
+                parse_mode=enums.ParseMode.HTML,
+            )
+            task_ctx.status_msg = processing_msg
+
+            # Launch task in parallel
+            async_task = TASK_QUEUE.create_background_task(
+                run_parallel_task(client, orig_msg, task_ctx),
+                name=f"task-{task_ctx.get_short_id()}"
+            )
+            task_ctx.async_task = async_task
+            _attach_task_exception_handler(async_task, task_ctx)
+
+            log.info(f"Launched parallel torrent task {task_ctx.get_short_id()}!")
+            return
+
         # === MODE PICKER HANDLER ===
         if query_data.startswith("modepick_"):
             choice = query_data.split("_")[1]
@@ -4706,7 +4772,7 @@ async def nzb_download(client, message):
 
 @colab_bot.on_message(filters.document & filters.private)
 async def handle_document_upload(client, message):
-    """Handle document uploads (currently .nzb files)"""
+    """Handle document uploads (nzb and torrent files)"""
     global BOT
 
     # Check if waiting for NZB file
@@ -4715,7 +4781,67 @@ async def handle_document_upload(client, message):
         await handle_nzb_file(client, message)
         return
 
-    # Future: Add handlers for other document types (e.g., .torrent)
+    # Check if a .torrent file was sent
+    if message.document.file_name.lower().endswith('.torrent'):
+        log.info(f"Received .torrent file upload: {message.document.file_name}")
+        await handle_torrent_file_upload(client, message)
+        return
+
+
+async def handle_torrent_file_upload(client, message):
+    """Process uploaded .torrent file and ask for destination"""
+    global BOT, user_tasks
+    import os
+    from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    from .utility.variables import Paths
+    from .utility.task_context import create_task_context
+
+    # Create TaskContext
+    user_id = _extract_user_id(message)
+    task_ctx = create_task_context(
+        user_id=user_id,
+        chat_id=message.chat.id,
+        mode="leech" # Default mode, will be chosen by user
+    )
+    # Run pre-prepare to setup paths
+    _prepare_task_context(task_ctx, [])
+
+    # Ensure task-specific download directory exists
+    os.makedirs(task_ctx.paths.down_path, exist_ok=True)
+
+    status_msg = await message.reply_text("⬇️ Downloading .torrent file...", quote=True)
+    try:
+        torrent_path = await message.download(
+            file_name=os.path.join(task_ctx.paths.down_path, message.document.file_name)
+        )
+        if not torrent_path:
+            raise Exception("Telegram download returned empty path")
+    except Exception as e:
+        log.error(f"Failed to download .torrent file: {e}")
+        await status_msg.edit_text("❌ Failed to download .torrent file from Telegram.")
+        return
+
+    log.info(f"Downloaded .torrent file to: {torrent_path}")
+    task_ctx.torrent_file_path = torrent_path
+
+    # Register in user_tasks registry
+    async with user_tasks_lock:
+        user_tasks[user_id] = task_ctx
+
+    # Ask user for upload destination
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Google Drive", callback_data="tdest_gdrive")],
+        [InlineKeyboardButton("Local Mirror (Colab)", callback_data="tdest_mirror")],
+        [InlineKeyboardButton("Telegram Leech", callback_data="tdest_leech")],
+        [InlineKeyboardButton("🔴 Cancel", callback_data="cancel")]
+    ])
+    
+    await status_msg.edit_text(
+        "<b>📦 Uploaded Torrent File detected.</b>\n\n"
+        "<b>Please select the upload destination:</b>",
+        reply_markup=keyboard,
+        parse_mode=enums.ParseMode.HTML
+    )
 
 
 async def handle_nzb_file(client, message, nzb_file_path=None):

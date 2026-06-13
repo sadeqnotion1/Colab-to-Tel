@@ -714,7 +714,11 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
 
     try:
         # Step 1: Get torrent file
-        if link.startswith("magnet:"):
+        if os.path.exists(link) and os.path.isfile(link) and link.lower().endswith(".torrent"):
+            # It's already a local torrent file
+            torrent_file_path = link
+            log.info(f"Using local torrent file: {torrent_file_path}")
+        elif link.startswith("magnet:"):
             # Update status: Fetching metadata
             log.info("Fetching torrent metadata for magnet link...")
             if _status_msg:
