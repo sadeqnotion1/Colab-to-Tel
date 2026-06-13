@@ -18,7 +18,7 @@ from .helper import fileType, getSize, getTime, keyboard, shortFileName, sizeUni
 from .message_safety import escape_html, safe_href
 from pyrogram.errors import MessageNotModified
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from pyrogram import filters
+from pyrogram import filters, enums
 from .task_context import TaskContext, TASK_QUEUE, cleanup_task_artifacts  # NEW: Import for multi-task support
 from .transfer_state import AWAITING_UPLOAD_DECISION
 
@@ -183,33 +183,34 @@ async def Leech(path: str, remove_source: bool, task_ctx: TaskContext = None):
                                 # Clean up temp_zpath
                                 shutil.rmtree(temp_zpath, ignore_errors=True)
 
-                files_in_dir = [
-                    f for f in natsorted(
-                        os.listdir(upload_source_location)) if ospath.isfile(
-                        ospath.join(
-                            upload_source_location, f))]
+                files_in_dir = []
+                for root, _, filenames in os.walk(upload_source_location):
+                    for filename in filenames:
+                        files_in_dir.append(ospath.join(root, filename))
+                files_in_dir = natsorted(files_in_dir)
 
                 if not files_in_dir:
                     log.warning(
                         f"Leech: Upload directory '{upload_source_location}' contains no files to upload for item '{current_item_name}'.")
-                    upload_success = True  # Treat empty processed dir as success for this item
+                    upload_success = False  # Mark as failed since nothing was uploaded
+                    if not _task_error.state:
+                        _task_error.state = True
+                        _task_error.text = "Leech source directory contains no files to upload."
                 else:
                     total_files_in_dir = len(files_in_dir)
                     log.info(
                         f"Leech: Found {total_files_in_dir} file(s) in '{upload_source_location}' to upload for item '{current_item_name}'.")
                     all_parts_uploaded = True
-                    for file_index, sub_item_name in enumerate(files_in_dir):
-                        sub_item_path = ospath.join(
-                            upload_source_location, sub_item_name)
-                        part_display_name = sub_item_name
+                    for file_index, sub_item_path in enumerate(files_in_dir):
+                        part_display_name = ospath.basename(sub_item_path)
                         log.info(
-                            f"Leech: Uploading file from directory: {sub_item_name} (Display: {part_display_name})")
+                            f"Leech: Uploading file from directory: {sub_item_path} (Display: {part_display_name})")
                         # Ensure upload_file is imported
                         uploaded = await upload_file(sub_item_path, part_display_name, task_ctx)
 
                         if uploaded is not True:
                             log.error(
-                                f"Leech: upload_file returned failure for sub-item: {sub_item_name} (Display: {part_display_name})")
+                                f"Leech: upload_file returned failure for sub-item: {sub_item_path} (Display: {part_display_name})")
                             all_parts_uploaded = False
                             if _task_error and not _task_error.state:
                                 _task_error.state = True
@@ -1129,7 +1130,7 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
                     status_msg,
                     final_status_text,
                     reply_markup=final_markup,
-                    parse_mode="HTML"
+                    parse_mode=enums.ParseMode.HTML
                 )
                 log.info(f"Edited final status for owner {task_id_str}.")
 

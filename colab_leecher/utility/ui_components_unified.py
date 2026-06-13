@@ -104,7 +104,7 @@ class SafeMessageEditor:
     Safely edits messages with null checks, attribute safety,
     and automatic recovery by recreation on failure.
     """
-    async def safe_edit(self, msg, text: str, reply_markup=None, parse_mode="HTML"):
+    async def safe_edit(self, msg, text: str, reply_markup=None, parse_mode="html"):
         """Safely edit a message with error handling and fallback recreation on failure."""
         if msg is None:
             return None

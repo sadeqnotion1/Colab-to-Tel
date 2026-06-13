@@ -230,7 +230,7 @@ def YouTubeDL(url, task_ctx=None):
             task_ctx.metadata["ytdl_results"] = {}
         task_ctx.metadata["ytdl_results"][url] = result
 
-    base_template = f"{down_path}/%(extractor_key,unknown_site)s/%(uploader,unknown_uploader)s/%(upload_date>%Y-%m-%d,unknown_date)s_%(title,id)s.%(ext)s"
+    base_template = f"{down_path}/%(upload_date>%Y-%m-%d,unknown_date)s_%(title,id)s.%(ext)s"
     fallback_template = f"{down_path}/%(id)s.%(ext)s"
     thumb_template = f"{thumbnail_ytdl}/%(id)s.%(ext)s"
 
