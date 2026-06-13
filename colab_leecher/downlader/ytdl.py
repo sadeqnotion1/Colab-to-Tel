@@ -120,13 +120,13 @@ except ImportError:
 
 def _build_ydl_opts(output_template):
     opts = {
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo*+bestaudio/best",
         "merge_output_format": "mp4",
         "outtmpl": output_template,
 
         "extractor_args": {
             "tiktok": {"webpage_download": True},
-            "youtube": {"player_client": ["web", "tv"]},
+            "youtube": {"player_client": ["tv", "ios", "mweb", "web_safari", "web"]},
         },
         "remote_components": "ejs:github",
 
