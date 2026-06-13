@@ -6,7 +6,7 @@ import urllib.parse
 import subprocess
 import asyncio 
 from datetime import datetime
-from ..utility.helper import sizeUnit, status_bar, clean_filename, apply_dot_style, getTime, is_google_drive, is_mega, getSize # Import getTime if used by status_bar
+from ..utility.helper import sizeUnit, status_bar, clean_filename, apply_dot_style, getTime, is_google_drive, is_mega, getSize, is_torrent # Import getTime if used by status_bar
 from ..utility.message_safety import escape_html
 from ..utility.variables import BOT, Aria2c, Paths, Messages, BotTimes, TaskError, TRANSFER # Import TaskError & TRANSFER
 
@@ -677,4 +677,416 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
 
     return success
 # ----- END OF FINAL FINAL REVISED FUNCTION -----
+
+
+async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> bool:
+    """
+    Downloads torrent/magnet files one by one, uploads them, and deletes them.
+    Saves disk space on Google Colab.
+    """
+    import os
+    import shutil
+    import asyncio
+    import logging
+    import tempfile
+    from ..utility.helper import status_bar, sizeUnit, getTime, clean_filename
+    from ..utility.variables import Paths
+
+    log = logging.getLogger(__name__)
+
+    if task_ctx:
+        _paths = task_ctx.paths
+        _messages = task_ctx.messages
+        _task_error = task_ctx.error
+        _transfer = task_ctx.transfer
+        _status_msg = task_ctx.status_msg
+    else:
+        from ..utility.variables import Paths, Messages, TaskError, TRANSFER, MSG
+        _paths = Paths
+        _messages = Messages
+        _task_error = TaskError
+        _transfer = TRANSFER
+        _status_msg = MSG.status_msg
+
+    # Create temporary directory for torrent metadata
+    temp_dir = tempfile.mkdtemp(prefix="torrent_metadata_", dir=_paths.WORK_PATH)
+    torrent_file_path = None
+
+    try:
+        # Step 1: Get torrent file
+        if link.startswith("magnet:"):
+            # Update status: Fetching metadata
+            log.info("Fetching torrent metadata for magnet link...")
+            if _status_msg:
+                await status_bar(
+                    down_msg="<b>🧲 Streaming Torrent »</b>\n\n<b>Link:</b> <code>Magnet</code>\n",
+                    speed="N/A",
+                    percentage=0,
+                    eta="N/A",
+                    done="Fetching torrent metadata...",
+                    total_size="N/A",
+                    engine="Aria2c 🧨",
+                    task_ctx=task_ctx
+                )
+
+            # Command to download metadata only
+            cmd = [
+                "aria2c",
+                "--bt-metadata-only=true",
+                "--bt-save-metadata=true",
+                "--file-allocation=none",
+                "--seed-time=0",
+                "-d", temp_dir,
+                link
+            ]
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            # Monitor progress of metadata fetching (optional, but keep it active)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=300) # 5 minutes max
+            except asyncio.TimeoutError:
+                log.error("Fetching torrent metadata timed out.")
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+                if _task_error:
+                    _task_error.set_error("Metadata fetch timed out")
+                return False
+
+            if proc.returncode != 0:
+                log.error(f"Aria2 failed to fetch metadata, exit code {proc.returncode}")
+                if _task_error:
+                    _task_error.set_error(f"Failed to fetch metadata (code {proc.returncode})")
+                return False
+
+            # Find .torrent file
+            torrent_files = [f for f in os.listdir(temp_dir) if f.endswith(".torrent")]
+            if not torrent_files:
+                log.error("No .torrent file found after metadata download.")
+                if _task_error:
+                    _task_error.set_error("Metadata downloaded but .torrent file not found")
+                return False
+
+            torrent_file_path = os.path.join(temp_dir, torrent_files[0])
+            log.info(f"Successfully fetched torrent metadata: {torrent_file_path}")
+
+        else:
+            # It's a torrent file URL. Download it.
+            log.info(f"Downloading torrent file from URL: {link[:100]}...")
+            if _status_msg:
+                await status_bar(
+                    down_msg="<b>🧲 Streaming Torrent »</b>\n\n<b>Link:</b> <code>URL</code>\n",
+                    speed="N/A",
+                    percentage=0,
+                    eta="N/A",
+                    done="Downloading torrent file...",
+                    total_size="N/A",
+                    engine="Aria2c 🧨",
+                    task_ctx=task_ctx
+                )
+
+            # Download using aiohttp or simple request to temp_dir
+            import aiohttp
+            torrent_file_path = os.path.join(temp_dir, "temp.torrent")
+            async with aiohttp.ClientSession() as session:
+                async with session.get(link, timeout=60) as resp:
+                    if resp.status != 200:
+                        log.error(f"Failed to download torrent file, status {resp.status}")
+                        if _task_error:
+                            _task_error.set_error(f"Failed to download torrent file (HTTP {resp.status})")
+                        return False
+                    with open(torrent_file_path, "wb") as f:
+                        f.write(await resp.read())
+            log.info("Successfully downloaded torrent file.")
+
+        # Step 2: Parse torrent content using aria2c -S
+        cmd = ["aria2c", "-S", torrent_file_path]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        stdout_str = stdout.decode('utf-8', errors='ignore')
+
+        files = []
+        torrent_name = "Torrent_Download"
+        in_files = False
+        for line in stdout_str.splitlines():
+            line = line.strip()
+            if line.startswith("Name:"):
+                torrent_name = line.split("Name:", 1)[1].strip()
+            elif "idx" in line and "path" in line and "size" in line:
+                in_files = True
+                continue
+            elif in_files:
+                if line.startswith("===") or not line:
+                    continue
+                parts = line.split('|')
+                if len(parts) >= 3:
+                    try:
+                        idx = int(parts[0].strip())
+                        size_str = parts[-1].strip()
+                        file_path = "|".join(parts[1:-1]).strip()
+                        files.append({
+                            'idx': idx,
+                            'path': file_path,
+                            'size_str': size_str
+                        })
+                    except ValueError:
+                        pass
+
+        if not files:
+            log.error("No files found in torrent.")
+            if _task_error:
+                _task_error.set_error("No files found in torrent")
+            return False
+
+        log.info(f"Torrent '{torrent_name}' contains {len(files)} files.")
+        if _messages:
+            _messages.download_name = torrent_name
+
+        # Step 3: Loop and download/upload file-by-file
+        total_files = len(files)
+        files_processed = 0
+        bytes_uploaded = 0
+
+        # Initialize GDrive folder if in gdrive mode
+        gdrive_folder_id = None
+        gdrive_dir_cache = {}
+        current_mode = task_ctx.bot.Mode.mode if (task_ctx and hasattr(task_ctx, 'bot')) else "leech"
+
+        if current_mode == "gdrive":
+            # Create a base folder for this torrent on Google Drive
+            custom_folder_name = task_ctx.bot.Options.custom_name if (task_ctx and getattr(task_ctx.bot.Options, 'custom_name', None)) else torrent_name
+            from ..uploader.gdrive import create_folder_on_gdrive, upload_to_gdrive
+            gdrive_folder_id = await create_folder_on_gdrive(custom_folder_name, parent_id=None, task_ctx=task_ctx)
+            if not gdrive_folder_id:
+                log.error("Failed to create root Google Drive folder.")
+                if _task_error:
+                    _task_error.set_error("GDrive folder creation failed")
+                return False
+
+        async def get_or_create_gdrive_folder(relative_dir_path, root_folder_id):
+            if not relative_dir_path:
+                return root_folder_id
+            parts = [p for p in relative_dir_path.split('/') if p and p != '.']
+            # Reconstruct path and create folders hierarchically
+            curr_parent = root_folder_id
+            curr_path = ""
+            for part in parts:
+                curr_path = f"{curr_path}/{part}" if curr_path else part
+                if curr_path in gdrive_dir_cache:
+                    curr_parent = gdrive_dir_cache[curr_path]
+                else:
+                    new_folder_id = await create_folder_on_gdrive(part, curr_parent, task_ctx)
+                    gdrive_dir_cache[curr_path] = new_folder_id
+                    curr_parent = new_folder_id
+            return curr_parent
+
+        status_head = (
+            f"<b>🔄 Streaming Torrent »</b>\n\n"
+            f"<b>📦 Torrent:</b> <code>{torrent_name}</code>\n"
+        )
+
+        for idx, f_info in enumerate(files, 1):
+            if task_ctx and task_ctx.cancel_event.is_set():
+                log.warning("Torrent streaming task cancelled by user.")
+                break
+
+            file_idx = f_info['idx']
+            rel_file_path = f_info['path']
+            file_size_str = f_info['size_str']
+
+            log.info(f"[{idx}/{total_files}] Starting download of {rel_file_path} ({file_size_str})")
+
+            # Update status
+            percentage = ((idx - 1) / total_files) * 100
+            status_text = (
+                f"📂 Downloading {idx}/{total_files}\n"
+                f"<code>{os.path.basename(rel_file_path)}</code> ({file_size_str})"
+            )
+
+            if _status_msg:
+                await status_bar(
+                    down_msg=status_head,
+                    speed="N/A",
+                    percentage=percentage,
+                    eta="N/A",
+                    done=status_text,
+                    total_size=f"{files_processed}/{total_files} files",
+                    engine="Streaming Torrent Downloader",
+                    task_ctx=task_ctx
+                )
+
+            # Run aria2c to download only this file
+            down_path = _paths.down_path
+            cmd = [
+                "aria2c",
+                f"--select-file={file_idx}",
+                "--file-allocation=none",
+                "--seed-time=0",
+                "--summary-interval=1",
+                "-d", down_path,
+                torrent_file_path
+            ]
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            # Monitor progress
+            async def log_stream(stream, stream_name):
+                while True:
+                    line_bytes = await stream.readline()
+                    if not line_bytes:
+                        break
+                    line = line_bytes.decode('utf-8', errors='ignore').strip()
+                    if line and stream_name == 'stdout':
+                        # Update display name
+                        await on_output(line, os.path.basename(rel_file_path), task_ctx)
+                    await asyncio.sleep(0.05)
+
+            stdout_task = asyncio.create_task(log_stream(proc.stdout, 'stdout'))
+            stderr_task = asyncio.create_task(log_stream(proc.stderr, 'stderr'))
+
+            try:
+                exit_code = await proc.wait()
+            except asyncio.CancelledError:
+                proc.kill()
+                await proc.wait()
+                raise
+            finally:
+                stdout_task.cancel()
+                stderr_task.cancel()
+
+            if exit_code != 0:
+                log.error(f"Failed to download file {rel_file_path}, exit code {exit_code}")
+                continue
+
+            # Locate downloaded file on disk
+            file_abs_path = os.path.normpath(os.path.join(down_path, rel_file_path.lstrip('./')))
+
+            if not os.path.exists(file_abs_path):
+                log.error(f"Downloaded file not found on disk: {file_abs_path}")
+                continue
+
+            file_size_bytes = os.path.getsize(file_abs_path)
+
+            # Update status: Uploading
+            percentage_upload = ((idx - 0.5) / total_files) * 100
+            status_text = (
+                f"⬆️ Uploading {idx}/{total_files}\n"
+                f"<code>{os.path.basename(rel_file_path)}</code> ({sizeUnit(file_size_bytes)})"
+            )
+
+            if _status_msg:
+                await status_bar(
+                    down_msg=status_head,
+                    speed="N/A",
+                    percentage=percentage_upload,
+                    eta="N/A",
+                    done=status_text,
+                    total_size=f"{files_processed}/{total_files} files",
+                    engine="Streaming Torrent Downloader",
+                    task_ctx=task_ctx
+                )
+
+            # Upload based on mode
+            upload_success = False
+            if current_mode == "gdrive":
+                # Reconstruct folder structure on Google Drive
+                relative_dir = os.path.dirname(rel_file_path.lstrip('./'))
+                target_folder_id = await get_or_create_gdrive_folder(relative_dir, gdrive_folder_id)
+
+                log.info(f"Uploading {os.path.basename(file_abs_path)} to GDrive folder {target_folder_id}")
+                res = await upload_to_gdrive(file_abs_path, target_folder_id, task_ctx)
+                if res:
+                    upload_success = True
+                    if _messages:
+                        if not hasattr(_messages, 'uploaded_links') or _messages.uploaded_links is None:
+                            _messages.uploaded_links = []
+                        _messages.uploaded_links.append({
+                            'name': res['name'],
+                            'link': res['webViewLink'],
+                            'size': res['size']
+                        })
+            elif current_mode == "mirror":
+                # Copy to local mirror folder (or move to free disk space)
+                target_abs_path = os.path.normpath(os.path.join(_paths.mirror_dir, rel_file_path.lstrip('./')))
+                log.info(f"Mirroring file to {target_abs_path}")
+                os.makedirs(os.path.dirname(target_abs_path), exist_ok=True)
+                try:
+                    await asyncio.to_thread(shutil.move, file_abs_path, target_abs_path)
+                    upload_success = True
+                except Exception as e:
+                    log.error(f"Failed to mirror file: {e}")
+            else: # Leech mode (Telegram)
+                from ..uploader.telegram import upload_file
+                log.info(f"Uploading {os.path.basename(file_abs_path)} to Telegram")
+                upload_success = await upload_file(
+                    file_path=file_abs_path,
+                    display_name=os.path.basename(file_abs_path),
+                    task_ctx=task_ctx
+                )
+
+            if upload_success:
+                files_processed += 1
+                bytes_uploaded += file_size_bytes
+                log.info(f"Successfully processed and uploaded file {idx}/{total_files}: {rel_file_path}")
+            else:
+                log.error(f"Failed to upload file: {rel_file_path}")
+
+            # Delete the file immediately to free disk space
+            if os.path.exists(file_abs_path):
+                try:
+                    os.remove(file_abs_path)
+                    log.info(f"Deleted temp file: {file_abs_path}")
+                except OSError as e:
+                    log.warning(f"Could not delete temp file {file_abs_path}: {e}")
+
+            # Clean empty directories
+            for root, dirs, files_in_dir in os.walk(down_path, topdown=False):
+                for d in dirs:
+                    d_path = os.path.join(root, d)
+                    try:
+                        if not os.listdir(d_path):
+                            os.rmdir(d_path)
+                    except Exception:
+                        pass
+
+        # Final update
+        if _status_msg:
+            await status_bar(
+                down_msg=status_head,
+                speed="N/A",
+                percentage=100.0,
+                eta="Complete",
+                done=f"✅ Processed {files_processed}/{total_files} files ({sizeUnit(bytes_uploaded)})",
+                total_size=f"{files_processed} files",
+                engine="Streaming Torrent Downloader",
+                task_ctx=task_ctx
+            )
+
+        return files_processed == total_files
+
+    except Exception as e:
+        log.error(f"Error in streaming torrent download: {e}", exc_info=True)
+        if _task_error:
+            _task_error.set_error(f"Streaming torrent error: {str(e)[:100]}")
+        return False
+
+    finally:
+        # Clean up temp torrent directory
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
 

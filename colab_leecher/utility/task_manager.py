@@ -963,6 +963,16 @@ async def Do_Leech(
                 raise Exception(_task_error.text)
         else:
             source_links = list(source)
+            if len(source_links) == 1 and is_torrent(source_links[0]):
+                log.info("Single torrent/magnet link detected in Do_Leech. Using streaming torrent downloader.")
+                from ..downlader.aria2 import download_and_upload_torrent_streaming
+                success = await download_and_upload_torrent_streaming(source_links[0], task_ctx)
+                if not success:
+                    overall_success = False
+                    if not _task_error.state:
+                        _task_error.set_error("Streaming torrent download failed")
+                return
+
             batch_size = getattr(task_ctx.bot.Options, 'batch_size', 1)
             total_links = len(source_links)
 
@@ -1084,6 +1094,15 @@ async def Do_Mirror(
             return
 
     original_down_path = _paths.down_path
+
+    if not is_ytdl and len(source) == 1 and is_torrent(source[0]):
+        log.info("Single torrent/magnet link detected in Do_Mirror. Using streaming torrent downloader.")
+        from ..downlader.aria2 import download_and_upload_torrent_streaming
+        success = await download_and_upload_torrent_streaming(source[0], task_ctx)
+        if not success:
+            if not _task_error.state:
+                _task_error.set_error("Streaming torrent download failed")
+        return
     download_completed = False
     # --- Initialize cleanup variables ---
     cleanup_temp = False
@@ -1302,6 +1321,19 @@ async def Do_GDrive_Upload(
             log.error("Do_GDrive_Upload: Google Drive service not available")
             _task_error.state = True
             _task_error.text = "Google Drive authentication failed. Token.pickle not found or invalid."
+            return
+
+        if not is_dir and len(source) == 1 and is_torrent(source[0]):
+            log.info("Single torrent/magnet link detected in Do_GDrive_Upload. Using streaming torrent downloader.")
+            from ..downlader.aria2 import download_and_upload_torrent_streaming
+            success = await download_and_upload_torrent_streaming(source[0], task_ctx)
+            if not success:
+                overall_success = False
+                if not _task_error.state:
+                    _task_error.set_error("Streaming torrent download failed")
+            else:
+                log.info("Do_GDrive_Upload completed successfully. Calling SendLogs...")
+                await SendLogs(True, task_ctx)
             return
 
         log.info("Do_GDrive_Upload: Google Drive service initialized successfully")
