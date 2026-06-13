@@ -2959,7 +2959,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
             await callback_query.answer(f"Confirmed: {sel_count}/{total} files selected")
 
-            keyboard = InlineKeyboardMarkup([
+            torrent_dest_keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("Google Drive", callback_data="tdest_gdrive")],
                 [InlineKeyboardButton("Local Mirror (Colab)", callback_data="tdest_mirror")],
                 [InlineKeyboardButton("Telegram Leech", callback_data="tdest_leech")],
@@ -2971,7 +2971,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 f"<b>📦 Torrent: <code>{torrent_name}</code></b>\n"
                 f"<b>Selected:</b> <code>{sel_count}/{total}</code> files\n\n"
                 f"<b>Please select the upload destination:</b>",
-                reply_markup=keyboard,
+                reply_markup=torrent_dest_keyboard,
                 parse_mode=enums.ParseMode.HTML
             )
             return
