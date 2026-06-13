@@ -4806,13 +4806,14 @@ async def handle_torrent_file_upload(client, message):
     # Run pre-prepare to setup paths
     _prepare_task_context(task_ctx, [])
 
-    # Ensure task-specific download directory exists
-    os.makedirs(task_ctx.paths.down_path, exist_ok=True)
+    # Ensure torrent uploads directory exists
+    torrent_upload_dir = os.path.join(Paths.WORK_PATH, "torrent_uploads")
+    os.makedirs(torrent_upload_dir, exist_ok=True)
 
     status_msg = await message.reply_text("⬇️ Downloading .torrent file...", quote=True)
     try:
         torrent_path = await message.download(
-            file_name=os.path.join(task_ctx.paths.down_path, message.document.file_name)
+            file_name=os.path.join(torrent_upload_dir, message.document.file_name)
         )
         if not torrent_path:
             raise Exception("Telegram download returned empty path")

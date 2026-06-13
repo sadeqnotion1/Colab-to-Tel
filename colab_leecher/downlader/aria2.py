@@ -1109,4 +1109,11 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
         # Clean up temp torrent directory
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
+        # Clean up local torrent file if it was from torrent_uploads
+        if torrent_file_path and "torrent_uploads" in torrent_file_path and os.path.exists(torrent_file_path):
+            try:
+                os.remove(torrent_file_path)
+                log.info(f"Cleaned up uploaded torrent file: {torrent_file_path}")
+            except Exception as clean_err:
+                log.warning(f"Could not clean up uploaded torrent file: {clean_err}")
 
