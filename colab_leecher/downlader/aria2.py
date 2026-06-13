@@ -844,23 +844,47 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
 
         files = []
         torrent_name = "Torrent_Download"
+        current_file = None
         for line in stdout_str.splitlines():
             line = line.strip()
             if line.startswith("Name:"):
                 torrent_name = line.split("Name:", 1)[1].strip()
+                continue
             parts = line.split('|')
-            if len(parts) >= 3:
+            if len(parts) >= 2:
+                left = parts[0].strip()
+                is_idx = False
+                idx = -1
                 try:
-                    idx = int(parts[0].strip())
-                    size_str = parts[-1].strip()
-                    file_path = "|".join(parts[1:-1]).strip()
-                    files.append({
-                        'idx': idx,
-                        'path': file_path,
-                        'size_str': size_str
-                    })
+                    idx = int(left)
+                    is_idx = True
                 except ValueError:
                     pass
+
+                if is_idx:
+                    if len(parts) >= 3:
+                        size_str = parts[-1].strip()
+                        file_path = "|".join(parts[1:-1]).strip()
+                        files.append({
+                            'idx': idx,
+                            'path': file_path,
+                            'size_str': size_str
+                        })
+                        current_file = None
+                    else:
+                        file_path = parts[1].strip()
+                        current_file = {
+                            'idx': idx,
+                            'path': file_path,
+                            'size_str': 'Unknown'
+                        }
+                elif left == "" and current_file is not None:
+                    size_str = parts[1].strip()
+                    if " " in size_str:
+                        size_str = size_str.split(" ")[0].strip()
+                    current_file['size_str'] = size_str
+                    files.append(current_file)
+                    current_file = None
 
         if not files:
             stderr_str = stderr.decode('utf-8', errors='ignore')
