@@ -746,9 +746,22 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
                 stderr=asyncio.subprocess.PIPE
             )
 
-            # Monitor progress of metadata fetching (optional, but keep it active)
+            # Monitor progress of metadata fetching
+            async def log_metadata_stream(stream, name):
+                while True:
+                    line_bytes = await stream.readline()
+                    if not line_bytes:
+                        break
+                    line = line_bytes.decode('utf-8', errors='ignore').strip()
+                    if line:
+                        log.info(f"[Metadata {name}] {line}")
+                    await asyncio.sleep(0.1)
+
+            stdout_task = asyncio.create_task(log_metadata_stream(proc.stdout, "stdout"))
+            stderr_task = asyncio.create_task(log_metadata_stream(proc.stderr, "stderr"))
+
             try:
-                await asyncio.wait_for(proc.wait(), timeout=300) # 5 minutes max
+                exit_code = await asyncio.wait_for(proc.wait(), timeout=300) # 5 minutes max
             except asyncio.TimeoutError:
                 log.error("Fetching torrent metadata timed out.")
                 try:
@@ -759,6 +772,9 @@ async def download_and_upload_torrent_streaming(link: str, task_ctx=None) -> boo
                 if _task_error:
                     _task_error.set_error("Metadata fetch timed out")
                 return False
+            finally:
+                stdout_task.cancel()
+                stderr_task.cancel()
 
             if proc.returncode != 0:
                 log.error(f"Aria2 failed to fetch metadata, exit code {proc.returncode}")
