@@ -11,6 +11,14 @@ from pyrogram.errors import MessageNotModified, RPCError
 from colab_leecher.utility.handler import cancelTask
 from colab_leecher.utility.variables import YTDL, MSG, Messages, Paths
 from colab_leecher.utility.helper import getTime, keyboard, sizeUnit, status_bar, sysINFO
+# Interactive cookie-recovery flow. needs_cookies() / site_from_url() are
+# defined in cookie_recovery and re-exported here so they remain available in
+# the ytdl namespace (per the original design).
+from colab_leecher.utility.cookie_recovery import (
+    needs_cookies,
+    site_from_url,
+    attempt_cookie_recovery,
+)
 
 log = logging.getLogger(__name__)
 
@@ -18,15 +26,20 @@ log = logging.getLogger(__name__)
 async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
     global Messages, YTDL
 
-    for attempt in range(max_retries):
+    # Tracks whether we already ran the interactive cookie-recovery flow for
+    # this link so we never prompt the owner more than once per link.
+    cookie_retry_used = False
+    attempt = 0
+
+    while attempt < max_retries:
         try:
             name = await get_YT_Name(link, task_ctx)
             from ..utility.message_safety import escape_html
-            Messages.status_head = f"<b>📥 DOWNLOADING FROM » </b><i>🔗Link {str(num).zfill(2)}</i>\n\n<code>{escape_html(name)}</code>\n"
+            Messages.status_head = f"<b>\U0001f4e5 DOWNLOADING FROM \u00bb </b><i>\U0001f517Link {str(num).zfill(2)}</i>\n\n<code>{escape_html(name)}</code>\n"
 
             if attempt > 0:
                 log.info(f"Retry attempt {attempt + 1}/{max_retries} for link {num}")
-                Messages.status_head += f"\n<i>⚠️ Retry attempt {attempt + 1}/{max_retries}</i>\n"
+                Messages.status_head += f"\n<i>\u26a0\ufe0f Retry attempt {attempt + 1}/{max_retries}</i>\n"
 
             YTDL_Thread = Thread(target=YouTubeDL, name="YouTubeDL", args=(link, task_ctx))
             YTDL_Thread.start()
@@ -50,7 +63,7 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
                             eta=YTDL.eta,
                             done=YTDL.done,
                             total_size=YTDL.left,
-                            engine="Xr-YtDL 🏮",
+                            engine="Xr-YtDL \U0001f3ee",
                         )
                     except (MessageNotModified, RPCError, AttributeError, TypeError, ValueError):
                         log.debug("Skipping YTDL status_bar update")
@@ -70,9 +83,39 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
             err_str = str(e)
             hint = ""
             lower_err = err_str.lower()
-            if any(term in lower_err for term in ["sign in to confirm", "confirm you're not a bot", "format is not available", "403", "forbidden", "player response", "bot"]):
+            if needs_cookies(err_str):
                 hint = " [HINT: YouTube is blocking this request. Please supply a fresh cookies.txt file and/or update yt-dlp]"
             final_err = f"{err_str}{hint}"
+
+            # ---- Interactive cookie recovery (before giving up) ----
+            # When the failure looks cookie/auth related, ask the task owner for
+            # a fresh Netscape cookies.txt, merge it, and retry the SAME link
+            # once more. _build_ydl_opts() re-reads cookies.txt on the retry.
+            if needs_cookies(err_str) and not cookie_retry_used and task_ctx is not None:
+                cookie_retry_used = True
+                log.warning(f"Cookie/auth error for link {num}; requesting cookies from owner.")
+                if task_ctx:
+                    task_ctx.error.state = False
+                    task_ctx.error.text = ""
+                try:
+                    got_cookies = await attempt_cookie_recovery(link, task_ctx)
+                except Exception as recovery_err:
+                    log.error(f"Cookie recovery raised: {recovery_err}")
+                    got_cookies = False
+
+                if got_cookies:
+                    log.info(f"Fresh cookies received for link {num}; retrying the same link.")
+                    # Retry WITHOUT consuming the normal retry budget.
+                    continue
+                else:
+                    site = site_from_url(link) or "the requested site"
+                    final_err = f"Cookies required but not provided for {site}"
+                    log.error(final_err)
+                    if task_ctx:
+                        task_ctx.error.state = True
+                        task_ctx.error.text = final_err
+                    break
+            # ---- End interactive cookie recovery ----
 
             if attempt < max_retries - 1:
                 log.warning(f"Download failed (attempt {attempt + 1}/{max_retries}): {final_err}")
@@ -80,6 +123,7 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
                     task_ctx.error.state = False
                     task_ctx.error.text = ""
                 await sleep(5)
+                attempt += 1
             else:
                 log.error(f"Download failed after {max_retries} attempts: {final_err}")
                 if task_ctx:
@@ -93,7 +137,7 @@ class MyLogger:
         global YTDL
         if "item" in str(msg):
             msgs = msg.split(" ")
-            YTDL.header = f"\n⏳ __Getting Video Information {msgs[-3]} of {msgs[-1]}__"
+            YTDL.header = f"\n\u23f3 __Getting Video Information {msgs[-3]} of {msgs[-1]}__"
 
     @staticmethod
     def warning(msg):
@@ -121,7 +165,7 @@ except ImportError:
 def _build_ydl_opts(output_template):
     import shutil
     if shutil.which("deno") is None:
-        log.warning("⚠️ WARNING: 'deno' executable was not found on PATH! The 'ejs:github' solver requires Deno to run. Downloads may fail with 'DRM protected' or format errors.")
+        log.warning("\u26a0\ufe0f WARNING: 'deno' executable was not found on PATH! The 'ejs:github' solver requires Deno to run. Downloads may fail with 'DRM protected' or format errors.")
 
     opts = {
         "format": "bestvideo+bestaudio/best",
@@ -250,7 +294,7 @@ def YouTubeDL(url, task_ctx=None):
     with ydl:
         try:
             info_dict = ydl.extract_info(url, download=False)
-            YTDL.header = "⌛ __Please WAIT a bit...__"
+            YTDL.header = "\u231b __Please WAIT a bit...__"
 
             if info_dict and info_dict.get("_type") == "playlist":
                 playlist_name = info_dict.get("title", "playlist")
@@ -380,7 +424,7 @@ def YouTubeDL(url, task_ctx=None):
             err_str = str(e)
             hint = ""
             lower_err = err_str.lower()
-            if any(term in lower_err for term in ["sign in to confirm", "confirm you're not a bot", "format is not available", "403", "forbidden", "player response", "bot"]):
+            if needs_cookies(err_str):
                 hint = " [HINT: YouTube is blocking this request. Please supply a fresh cookies.txt file and/or update yt-dlp]"
             result["error"] = f"{err_str}{hint}"
 

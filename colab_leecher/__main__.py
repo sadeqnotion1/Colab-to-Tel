@@ -7,11 +7,12 @@ import re # Import regex module
 import aiohttp # Import aiohttp
 import random # Import random for thumbnail selection
 import aiofiles # Import aiofiles for async file writing
-from pyrogram import enums, filters, Client, ContinuePropagation
+from pyrogram import enums, filters, Client, ContinuePropagation, StopPropagation
 from datetime import datetime
 from asyncio import sleep, get_event_loop
 from colab_leecher import credentials, ConfigError, DUMP_ID, OWNER, colab_bot, ensure_runtime_config  # Absolute import
 from .utility.handler import cancelTask
+from .utility.cookie_recovery import handle_cookie_reply, has_pending_cookie_request
 from .utility.variables import BOT, MSG, BotTimes, Paths, TRANSFER, TaskError, Aria2c
 from .utility.task_context import TaskContext, TASK_QUEUE, create_task_context, IsolatedBot
 from .utility.task_dashboard import update_summary_dashboard, force_update_summary
@@ -4406,6 +4407,24 @@ async def resolve_and_parse_input_to_tasks(text, depth=0, max_depth=3):
     await flush_direct_lines()
     
     return tasks
+
+
+@colab_bot.on_message((filters.text | filters.document) & filters.private, group=-2)
+async def cookie_reply_handler(client, message):
+    user = message.from_user
+    user_id = user.id if user else None
+
+    # Not a pending cookie reply -> let the normal handlers process it.
+    if user_id is None or not await has_pending_cookie_request(user_id):
+        raise ContinuePropagation
+
+    handled = await handle_cookie_reply(client, message)
+    if not handled:
+        raise ContinuePropagation
+
+    # Cookie message handled (and deleted if it held secrets). Stop here so the
+    # pasted cookie text is never re-interpreted as a URL by other handlers.
+    raise StopPropagation
 
 
 # Handler for Mindvalley URLs and NZB URLs (when user sends URLs after commands)

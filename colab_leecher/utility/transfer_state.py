@@ -1,5 +1,8 @@
 # Correct content for: colab_leecher/utility/transfer_state.py
 
+import asyncio
+
+
 class SmartBytes(list):
     """
     A list subclass that behaves like a list for downloader operations 
@@ -82,3 +85,14 @@ class Transfer:
 
 AWAITING_UPLOAD_DECISION = "AWAITING_UPLOAD_DECISION"
 
+
+# ----------------------------------------------------------------------------
+# Interactive cookie-recovery registry.
+#
+# Maps user_id -> cookie_recovery.CookieWaiter (holds an asyncio.Future, the
+# requested domain/site, task_id, prompt message id, and the target cookies
+# path). All reads/writes MUST be guarded by AWAITING_COOKIES_LOCK so parallel
+# tasks do not collide.
+# ----------------------------------------------------------------------------
+AWAITING_COOKIES = {}
+AWAITING_COOKIES_LOCK = asyncio.Lock()
