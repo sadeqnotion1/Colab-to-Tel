@@ -114,8 +114,17 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
     # NEW: Set total size for dashboard tracking
     # We NO LONGER mutate or reset `up_bytes` to 0 here. It acts as a continuous cumulative integer.
     if transfer_obj:
+        from ..utility.code_quality_utils import SpeedCalculator
         transfer_obj.total_size = os.path.getsize(file_path)
-        transfer_obj.up_bytes = SmartBytes(0)
+        transfer_obj.previous_bytes = 0
+        if isinstance(transfer_obj.up_bytes, SmartBytes):
+            transfer_obj.up_bytes = SmartBytes(0)
+        else:
+            transfer_obj.up_bytes = [0]
+        try:
+            transfer_obj._speed_calculator = SpeedCalculator()  # clears stale download samples
+        except Exception:
+            pass
 
     # --- Thumbnail, duration, dimension, caption logic ---
     thumb_path = None # Initialize to None, will be set later
@@ -295,6 +304,15 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
                     transfer_obj.up_bytes += delta
                 except Exception:
                     transfer_obj.up_bytes = delta
+
+            # >>> ADD: feed the data the parallel dashboard actually reads <<<
+            try:
+                transfer_obj.update_progress(
+                    int(current_int),
+                    int(total) if total else transfer_obj.total_size,
+                )
+            except Exception:
+                pass
             
         if now - last_progress_time > 2.5: 
             last_progress_time = now

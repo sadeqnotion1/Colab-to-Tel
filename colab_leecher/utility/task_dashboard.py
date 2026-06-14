@@ -190,7 +190,10 @@ async def update_summary_dashboard(
             d_bytes = sum(task_ctx.transfer.down_bytes) if isinstance(task_ctx.transfer.down_bytes, list) else task_ctx.transfer.down_bytes
 
             if u_bytes > 0:
-                speed = SizeFormatter.format_speed(task_ctx.transfer.get_speed())
+                _spd = task_ctx.transfer.last_speed
+                if not _spd or _spd <= 0:
+                    _spd = task_ctx.transfer.get_speed()
+                speed = SizeFormatter.format_speed(max(0.0, _spd))
                 uploaded = _format_bytes(task_ctx.transfer.up_bytes)
                 ts = task_ctx.transfer.total_size
                 if ts <= 0 or ts < u_bytes:
