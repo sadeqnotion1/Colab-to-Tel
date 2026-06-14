@@ -95,7 +95,7 @@ async def test_safe_message_editor_text_success():
     
     assert res == msg
     msg.edit_text.assert_called_once_with(
-        text="New Text", reply_markup=None, parse_mode="HTML", disable_web_page_preview=True
+        text="New Text", reply_markup=None, parse_mode="html", disable_web_page_preview=True
     )
 
 
@@ -110,7 +110,7 @@ async def test_safe_message_editor_photo_success():
     
     assert res == msg
     msg.edit_caption.assert_called_once_with(
-        caption="New Caption", reply_markup=None, parse_mode="HTML"
+        caption="New Caption", reply_markup=None, parse_mode="html"
     )
 
 
@@ -134,7 +134,7 @@ async def test_safe_message_editor_recovery_text():
         mock_bot.send_message.assert_called_once_with(
             chat_id=78910,
             text="Recovered text",
-            parse_mode="HTML",
+            parse_mode="html",
             reply_markup=None
         )
         assert res == new_msg
@@ -162,7 +162,7 @@ async def test_safe_message_editor_recovery_photo():
             chat_id=78910,
             photo="photo_file_id_123",
             caption="Recovered photo caption",
-            parse_mode="HTML",
+            parse_mode="html",
             reply_markup=None
         )
         assert res == new_msg

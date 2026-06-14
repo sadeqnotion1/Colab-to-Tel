@@ -446,16 +446,14 @@ class SizeFormatter:
     @staticmethod
     def format_bytes(bytes_size: int, precision: int = 2) -> str:
         """Format bytes into human readable size"""
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-            if bytes_size < 1024.0:
-                return f"{bytes_size:.{precision}f} {unit}"
-            bytes_size /= 1024.0
-        return f"{bytes_size:.{precision}f} PB"
+        from colab_leecher.utility.formatting import format_bytes as _fmt_bytes
+        return _fmt_bytes(bytes_size, precision)
 
     @staticmethod
     def format_speed(bytes_per_second: float) -> str:
         """Format speed (bytes/second)"""
-        return f"{SizeFormatter.format_bytes(bytes_per_second)}/s"
+        from colab_leecher.utility.formatting import format_speed as _fmt_speed
+        return _fmt_speed(bytes_per_second)
 
 
 # Module-level alias (kept for any existing imports)

@@ -13,15 +13,13 @@ import time
 
 def format_size(bytes_size):
     """Convert bytes to human-readable format"""
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if bytes_size < 1024.0:
-            return f"{bytes_size:.2f} {unit}"
-        bytes_size /= 1024.0
-    return f"{bytes_size:.2f} PB"
+    from colab_leecher.utility.formatting import format_bytes
+    return format_bytes(bytes_size)
 
 def format_speed(bytes_per_sec):
     """Convert bytes/sec to human-readable format"""
-    return format_size(bytes_per_sec) + "/s"
+    from colab_leecher.utility.formatting import format_speed
+    return format_speed(bytes_per_sec)
 
 def download_file(url, output_path=None, chunk_size=1024*1024):
     """

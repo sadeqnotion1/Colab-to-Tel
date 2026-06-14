@@ -22,6 +22,8 @@ from .helper import getTime
 from .variables import Paths, BOT
 from .ui_components import SizeFormatter, ProgressBar, TimeFormatter
 from .ui_copy import build_cancel_task_button_label, summarize_task_name
+from .enhanced_status import StatusDisplay
+from .formatting import format_bytes, format_speed
 
 BOT_DEBUG = os.getenv("BOT_DEBUG", "0") == "1"
 
@@ -189,104 +191,120 @@ async def update_summary_dashboard(
             u_bytes = sum(task_ctx.transfer.up_bytes) if isinstance(task_ctx.transfer.up_bytes, list) else task_ctx.transfer.up_bytes
             d_bytes = sum(task_ctx.transfer.down_bytes) if isinstance(task_ctx.transfer.down_bytes, list) else task_ctx.transfer.down_bytes
 
+            is_proc = False
+            current_action = getattr(task_ctx.messages, "current_action", "").lower()
+            if current_action in ["archiving", "extracting", "splitting"]:
+                is_proc = True
+
             if u_bytes > 0:
-                _spd = task_ctx.transfer.last_speed
-                if not _spd or _spd <= 0:
-                    _spd = task_ctx.transfer.get_speed()
-                speed = SizeFormatter.format_speed(max(0.0, _spd))
-                uploaded = _format_bytes(task_ctx.transfer.up_bytes)
+                emoji = "📤"
+                verb = "UPLOADING TO TELEGRAM"
+                speed_bps = task_ctx.transfer.get_speed()
+                dot = StatusDisplay.speed_emoji(speed_bps)
+                
                 ts = task_ctx.transfer.total_size
                 if ts <= 0 or ts < u_bytes:
-                    total = "Unknown"
+                    total_str = "Unknown"
                     percentage = 0.0
                 else:
-                    total = _format_bytes(ts)
+                    total_str = format_bytes(ts)
                     percentage = min(100.0, (u_bytes / ts) * 100)
                 
-                bar = _progress_bar(percentage, 15)
+                bar = ProgressBar.generate(percentage, length=16, style="gradient")
+                eta_seconds = task_ctx.transfer.get_eta()
+                eta_str = StatusDisplay.smart_eta(eta_seconds, u_bytes)
+                
                 summary_text = header + (
                     "<pre>"
-                    f"┌──── UPLOADING TO TG 📤 ────┐\n"
-                    f"  File     : {escape(filename)}\n"
-                    f"  ID       : {escape(short_id)}\n"
-                    f"  {bar} {percentage:.1f}%\n"
-                    f"  Speed    : {escape(speed)}\n"
-                    f"  Status   : Uploading\n"
-                    f"  Uploaded : {uploaded} / {total}\n"
-                    "└────────────────────────────┘"
+                    f"╭─── {emoji} {verb} ───╮\n"
+                    f" 📄 {escape(filename)}\n"
+                    f" 🆔 {escape(short_id)}\n"
+                    f" {bar} {percentage:.1f}%\n"
+                    f" {dot} Speed : {escape(format_speed(speed_bps))}\n"
+                    f" 📦 Done  : {format_bytes(u_bytes)} / {total_str}\n"
+                    f" ⏳ ETA   : {eta_str}\n"
+                    "╰────────────────────────────────╯"
                     "</pre>"
                 )
 
             elif d_bytes > 0:
-                is_proc = False
-                status_label = "Downloading ⬇️"
-                
-                # Check the strict model state first
-                current_action = getattr(task_ctx.messages, "current_action", "").lower()
-                if current_action == "archiving":
-                    status_label = "Archiving 🗜️"
-                    is_proc = True
-                elif current_action == "extracting":
-                    status_label = "Extracting 📦"
-                    is_proc = True
-                elif current_action == "splitting":
-                    status_label = "Splitting ✂️"
-                    is_proc = True
-                
                 if is_proc:
+                    if current_action == "archiving":
+                        emoji = "🗜️"
+                        verb = "ARCHIVING FILE"
+                        status_label = "Archiving 🗜️"
+                    elif current_action == "extracting":
+                        emoji = "📦"
+                        verb = "EXTRACTING FILE"
+                        status_label = "Extracting 📦"
+                    else: # splitting
+                        emoji = "✂️"
+                        verb = "SPLITTING FILE"
+                        status_label = "Splitting ✂️"
+                    
                     percentage = task_ctx.transfer.get_percentage()
                     if percentage == 0.0 and task_ctx.messages.total_files > 0:
                         percentage = (task_ctx.messages.files_processed / task_ctx.messages.total_files) * 100
                     
-                    bar = _progress_bar(percentage, 15)
+                    bar = ProgressBar.generate(percentage, length=16, style="gradient")
                     elapsed = getTime(task_ctx.get_elapsed_time())
+                    
                     summary_text = header + (
                         "<pre>"
-                        f"┌──── PROCESSING FILE 🗜️ ────┐\n"
-                        f"  File     : {escape(filename)}\n"
-                        f"  ID       : {escape(short_id)}\n"
-                        f"  {bar} {percentage:.1f}%\n"
-                        f"  Status   : {status_label}\n"
-                        f"  Elapsed  : {elapsed}\n"
-                        f"  Files    : {task_ctx.messages.files_processed} / {task_ctx.messages.total_files}\n"
-                        "└────────────────────────────┘"
+                        f"╭─── {emoji} {verb} ───╮\n"
+                        f" 📄 {escape(filename)}\n"
+                        f" 🆔 {escape(short_id)}\n"
+                        f" {bar} {percentage:.1f}%\n"
+                        f" ⚙️ Status : {status_label}\n"
+                        f" 📁 Files  : {task_ctx.messages.files_processed} / {task_ctx.messages.total_files}\n"
+                        f" ⏱️ Elapsed: {elapsed}\n"
+                        "╰────────────────────────────────╯"
                         "</pre>"
                     )
                 else:
-                    speed = SizeFormatter.format_speed(task_ctx.transfer.get_speed())
-                    downloaded = _format_bytes(task_ctx.transfer.down_bytes)
+                    emoji = "📥"
+                    verb = "DOWNLOADING FILE"
+                    speed_bps = task_ctx.transfer.get_speed()
+                    dot = StatusDisplay.speed_emoji(speed_bps)
+                    
                     ts = task_ctx.transfer.total_size
                     if ts <= 0 or ts < d_bytes:
-                        total = "Unknown"
+                        total_str = "Unknown"
                         percentage = task_ctx.transfer.get_percentage()
                     else:
-                        total = _format_bytes(ts)
+                        total_str = format_bytes(ts)
                         percentage = task_ctx.transfer.get_percentage()
-                    eta = task_ctx.transfer.get_eta()
-                    eta_str = TimeFormatter.format_eta(eta) if eta > 0 else "?"
                     
-                    bar = _progress_bar(percentage, 15)
+                    bar = ProgressBar.generate(percentage, length=16, style="gradient")
+                    eta_seconds = task_ctx.transfer.get_eta()
+                    eta_str = StatusDisplay.smart_eta(eta_seconds, d_bytes)
+                    
                     summary_text = header + (
                         "<pre>"
-                        f"┌─── DOWNLOADING FILE 📥 ───┐\n"
-                        f"  File     : {escape(filename)}\n"
-                        f"  ID       : {escape(short_id)}\n"
-                        f"  {bar} {percentage:.1f}%\n"
-                        f"  Speed    : {escape(speed)}\n"
-                        f"  Status   : {status_label}\n"
-                        f"  ETA      : {eta_str}\n"
-                        f"  Done     : {downloaded} / {total}\n"
-                        "└────────────────────────────┘"
+                        f"╭─── {emoji} {verb} ───╮\n"
+                        f" 📄 {escape(filename)}\n"
+                        f" 🆔 {escape(short_id)}\n"
+                        f" {bar} {percentage:.1f}%\n"
+                        f" {dot} Speed : {escape(format_speed(speed_bps))}\n"
+                        f" 📦 Done  : {format_bytes(d_bytes)} / {total_str}\n"
+                        f" ⏳ ETA   : {eta_str}\n"
+                        "╰────────────────────────────────╯"
                         "</pre>"
                     )
             else:
+                emoji = "⏳"
+                verb = "INITIALIZING"
+                bar = ProgressBar.generate(0.0, length=16, style="gradient")
                 summary_text = header + (
                     "<pre>"
-                    f"┌────── INITIALIZING ⏳ ─────┐\n"
-                    f"  File     : {escape(filename)}\n"
-                    f"  ID       : {escape(short_id)}\n"
-                    f"  Status   : Initializing... ⏳\n"
-                    "└────────────────────────────┘"
+                    f"╭─── {emoji} {verb} ───╮\n"
+                    f" 📄 {escape(filename)}\n"
+                    f" 🆔 {escape(short_id)}\n"
+                    f" {bar} 0.0%\n"
+                    f" ⚙️ Status : Initializing...\n"
+                    f" 📦 Done  : N/A\n"
+                    f" ⏳ ETA   : Calculating...\n"
+                    "╰────────────────────────────────╯"
                     "</pre>"
                 )
 

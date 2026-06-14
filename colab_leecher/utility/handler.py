@@ -1058,11 +1058,13 @@ async def SendLogs(is_leech: bool, task_ctx: TaskContext):
 
     log.info(f"SendLogs {task_id_str}: Preparing final summary...")
     try:
-        total_uploaded_size = (
+        session_uploaded = getattr(transfer_obj, "session_uploaded_bytes", 0)
+        fallback_uploaded = (
             sum(transfer_obj.up_bytes)
             if isinstance(transfer_obj.up_bytes, list)
             else transfer_obj.up_bytes
         )
+        total_uploaded_size = session_uploaded or fallback_uploaded
         file_count = len(transfer_obj.sent_file)
         usage_link = (
             "\n\n<a href='https://colab.research.google.com/drive/12hdEqaidRZ8krqj7rpnyDzg1dkKmvdvp'>"

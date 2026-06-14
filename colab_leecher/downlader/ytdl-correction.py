@@ -27,6 +27,7 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
                 log.info(f"Retry attempt {attempt + 1}/{max_retries} for link {num}")
                 Messages.status_head += f"\n<i>⚠️ Retry attempt {attempt + 1}/{max_retries}</i>\n"
 
+            YTDL.task_ctx = task_ctx
             YTDL_Thread = Thread(target=YouTubeDL, name="YouTubeDL", args=(link,))
             YTDL_Thread.start()
 
@@ -71,6 +72,9 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
             log.error(f"Unexpected error in YTDL_Status: {e}", exc_info=True)
             await cancelTask(f"YouTube download error: {str(e)[:100]}", task_ctx)
             break
+        finally:
+            if hasattr(YTDL, "task_ctx"):
+                YTDL.task_ctx = None
 
 
 class MyLogger:
@@ -180,6 +184,17 @@ def _progress_hook(d):
         YTDL.eta = getTime(eta) if eta else "N/A"
         YTDL.done = sizeUnit(dl_bytes) if dl_bytes else "N/A"
         YTDL.left = sizeUnit(total_bytes) if total_bytes else "N/A"
+
+        # >>> ADD: feed the unified pipeline with RAW bytes <<<
+        task_ctx = getattr(YTDL, "task_ctx", None)
+        if task_ctx is not None:
+            try:
+                task_ctx.transfer.update_progress(
+                    int(dl_bytes),
+                    int(total_bytes) if total_bytes else None,
+                )
+            except Exception:
+                pass
 
     elif d["status"] == "finished":
         log.info(f"Finished downloading: {d.get('filename', 'unknown')}")

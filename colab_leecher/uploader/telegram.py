@@ -491,5 +491,10 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
                         transfer_obj.up_bytes += missed_bytes
         except Exception as report_err:
             log.error(f"Error reporting uploaded bytes {task_id_str} for {actual_upload_filename}: {report_err}")
+        try:
+            if transfer_obj:
+                transfer_obj.session_uploaded_bytes += int(file_size)
+        except Exception:
+            pass
         return True
 # --- End Replacement Function ---

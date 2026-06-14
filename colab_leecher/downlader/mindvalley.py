@@ -340,15 +340,17 @@ class MindvalleyDownloader:
                             # Pattern: "5.2 MB/s" or "5.2MB/s" or "5.2 MiB/s"
                             speed_match = re.search(r'(\d+\.?\d+)\s*(KB|MB|GB|KiB|MiB|GiB)/s', output, re.IGNORECASE)
                             if speed_match:
-                                speed_value = speed_match.group(1)
+                                speed_value = float(speed_match.group(1))
                                 speed_unit = speed_match.group(2).upper()
-                                # Normalize to MB/s
-                                if "GIB" in speed_unit or "GB" in speed_unit:
-                                    speed_str = f"{float(speed_value) * 1024:.1f} MB/s"
-                                elif "MIB" in speed_unit or "MB" in speed_unit:
-                                    speed_str = f"{speed_value} MB/s"
-                                elif "KIB" in speed_unit or "KB" in speed_unit:
-                                    speed_str = f"{float(speed_value) / 1024:.2f} MB/s"
+                                multiplier = 1
+                                if "G" in speed_unit:
+                                    multiplier = 1024 * 1024 * 1024
+                                elif "M" in speed_unit:
+                                    multiplier = 1024 * 1024
+                                elif "K" in speed_unit:
+                                    multiplier = 1024
+                                from colab_leecher.utility.formatting import format_speed
+                                speed_str = format_speed(speed_value * multiplier)
 
                             # NEW: Try to extract segment info (e.g., "150/300" or "Seg 150/300")
                             segments_done = None
@@ -466,17 +468,17 @@ class MindvalleyDownloader:
                             speed_str = None
                             speed_match = re.search(r'at\s+(\d+\.?\d+)\s*(B|KiB|MiB|GiB)/s', output)
                             if speed_match:
-                                speed_value = speed_match.group(1)
+                                speed_value = float(speed_match.group(1))
                                 speed_unit = speed_match.group(2)
-                                # Convert to MB/s for consistency
+                                multiplier = 1
                                 if speed_unit == "GiB":
-                                    speed_str = f"{float(speed_value) * 1024:.1f} MB/s"
+                                    multiplier = 1024 * 1024 * 1024
                                 elif speed_unit == "MiB":
-                                    speed_str = f"{speed_value} MB/s"
+                                    multiplier = 1024 * 1024
                                 elif speed_unit == "KiB":
-                                    speed_str = f"{float(speed_value) / 1024:.2f} MB/s"
-                                else:  # B
-                                    speed_str = f"{float(speed_value) / (1024*1024):.2f} MB/s"
+                                    multiplier = 1024
+                                from colab_leecher.utility.formatting import format_speed
+                                speed_str = format_speed(speed_value * multiplier)
 
                             # NEW: Try to extract fragment/segment info (e.g., "frag 45/120")
                             segments_done = None

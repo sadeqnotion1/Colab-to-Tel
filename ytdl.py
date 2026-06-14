@@ -46,11 +46,8 @@ COOKIES_FILE = os.environ.get("COOKIES_FILE", "")
 
 
 def _human_size(num_bytes):
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if abs(num_bytes) < 1024.0:
-            return f"{num_bytes:3.1f} {unit}"
-        num_bytes /= 1024.0
-    return f"{num_bytes:.1f} PB"
+    from colab_leecher.utility.formatting import format_bytes
+    return format_bytes(num_bytes)
 
 
 def download(url, download_dir=DOWNLOAD_DIR):

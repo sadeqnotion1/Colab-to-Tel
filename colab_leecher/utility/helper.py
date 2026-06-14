@@ -1073,23 +1073,8 @@ def getTime(seconds):
 
 
 def sizeUnit(size):
-    """Formats bytes into a human-readable size string (KiB, MiB, GiB, etc.)."""
-    try:
-        size = float(size)
-    except (ValueError, TypeError):
-        return "N/A"  # Handle invalid input
-
-    if size <= 0:
-        return "0 B"
-
-    units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
-    # Calculate the power of 1024
-    power = math.floor(math.log(size, 1024)) if size > 0 else 0
-    # Ensure the unit index stays within the bounds of the list
-    unit_index = min(power, len(units) - 1)
-
-    # Calculate the value in the chosen unit and format
-    return f"{size / (1024**unit_index):.2f} {units[unit_index]}"
+    from colab_leecher.utility.formatting import format_bytes as _fmt_bytes
+    return _fmt_bytes(size)
 
 
 def parse_size_string(size_str):

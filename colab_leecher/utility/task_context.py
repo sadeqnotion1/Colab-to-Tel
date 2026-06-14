@@ -68,6 +68,7 @@ class TaskTransfer:
     """Per-task transfer statistics"""
     down_bytes: Any = field(default_factory=lambda: SmartBytes(0))
     up_bytes: Any = field(default_factory=lambda: SmartBytes(0))
+    session_uploaded_bytes: int = 0
     total_size: int = 0
     total_down_size: int = 0
     sent_file: List = field(default_factory=list)
@@ -81,6 +82,7 @@ class TaskTransfer:
     def reset(self):
         self.down_bytes = SmartBytes(0)
         self.up_bytes = SmartBytes(0)
+        self.session_uploaded_bytes = 0
         self.total_size = 0
         self.total_down_size = 0
         self.sent_file = []

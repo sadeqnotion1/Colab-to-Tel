@@ -57,10 +57,10 @@ def test_download_status():
     
     assert "test_file.mkv" in msg
     assert "45.5%" in msg
-    assert "5.00 MB/s" in msg
+    assert "5.00 MiB/s" in msg
     assert "30s" in msg
-    assert "50.00 MB" in msg
-    assert "100.00 MB" in msg
+    assert "50.00 MiB" in msg
+    assert "100.00 MiB" in msg
 
 def test_upload_status():
     # Call class method directly
@@ -77,7 +77,7 @@ def test_upload_status():
     
     assert "upload_test.mp4" in msg
     assert "90.0%" in msg
-    assert "2.00 MB/s" in msg
+    assert "2.00 MiB/s" in msg
     assert "9s" in msg
 
 def test_processing_status():
