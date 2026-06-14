@@ -967,8 +967,23 @@ async def sizeChecker(
             if _bot.Options.is_split:
                 log.info(
                     f"File '{filename}' is MP4/MKV > limit. Splitting video.")
-                # Pass task_ctx
                 await splitVideo(file_path, target_video_split_mb, remove, task_ctx)
+
+                # Verify the video split actually produced parts. If not (e.g. ffmpeg
+                # failed), fall back to raw archive-style byte splitting like a normal leech.
+                produced = [
+                    f for f in os.listdir(_paths.temp_zpath)
+                    if f.startswith(f"{filename}.") and re.search(r'\.[0-9]{3}$', f)
+                ]
+                if (not produced) or _task_error.state:
+                    log.warning(
+                        f"Video split produced no parts for '{filename}'. "
+                        f"Falling back to archive-style byte split (~{sizeUnit(max_size_bytes)} parts)."
+                    )
+                    _task_error.state = False
+                    _task_error.text = ""
+                    if ospath.exists(file_path):
+                        await splitArchive(file_path, max_size_bytes, task_ctx)
                 processing_done = True
             else:
                 # Archive MP4/MKV if splitting is off
@@ -2347,26 +2362,16 @@ async def splitVideo(
         _paths.temp_zpath,
         f"{filename}.%03d")
     cmd_split_args = [
-        "ffmpeg",
-        "-i",
-        file_path,
-        "-c",
-        "copy",
-        "-map",
-        "0:v",
-        "-map",
-        "0:a?",
-        "-copyts",
-        "-segment_time",
-        str(final_segment_duration),
-        "-f",
-        "segment",
-        "-reset_timestamps",
-        "1",
-        "-segment_start_number",
-        "1",
-        "-movflags",
-        "+faststart",
+        "ffmpeg", "-hide_banner", "-y",
+        "-i", file_path,
+        "-c", "copy",
+        "-map", "0:v:0", "-map", "0:a?",
+        "-f", "segment",
+        "-segment_time", str(final_segment_duration),
+        "-segment_format", "mp4",
+        "-segment_format_options", "movflags=+faststart",
+        "-reset_timestamps", "1",
+        "-segment_start_number", "1",
         split_output_pattern,
     ]
 
