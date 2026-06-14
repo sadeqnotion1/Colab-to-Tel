@@ -72,30 +72,30 @@ class SpeedCalculator:
         now = time.time()
         elapsed_total = now - self._start_time
         elapsed_interval = now - self._last_update_time
-        
+
         if elapsed_interval > 0:
-            # Calculate instantaneous speed
             bytes_delta = current_bytes - self._last_bytes
-            self._instant_speed = bytes_delta / elapsed_interval
-            
-            # Keep sample for smoothing
+            # Counter went backwards => new file/part or download→upload switch.
+            # Rebase instead of emitting a negative sample.
+            if bytes_delta < 0:
+                bytes_delta = 0
+                self._start_time = now
+                self._speed_samples.clear()
+            self._instant_speed = max(0.0, bytes_delta / elapsed_interval)
             self._speed_samples.append(self._instant_speed)
-            if len(self._speed_samples) > 10:  # Keep last 10 samples
+            if len(self._speed_samples) > 10:
                 self._speed_samples.pop(0)
-        
-        # Calculate average speed
+
         if elapsed_total > 0:
-            self._average_speed = current_bytes / elapsed_total
-        
-        # Update for next interval
+            self._average_speed = max(0.0, current_bytes) / elapsed_total
+
         self._last_update_time = now
         self._last_bytes = current_bytes
-    
+
     def get_instant_speed(self):
-        """Get current speed (smoothed)"""
         if not self._speed_samples:
             return 0.0
-        return sum(self._speed_samples) / len(self._speed_samples)
+        return max(0.0, sum(self._speed_samples) / len(self._speed_samples))
     
     def get_average_speed(self):
         """Get average speed since start"""

@@ -119,11 +119,11 @@ class TaskTransfer:
     def get_speed(self) -> float:
         instant = self._speed_calculator.get_instant_speed()
         if instant > 0.0 or self._speed_calculator._speed_samples:
-            return instant
+            return max(0.0, instant)
         elapsed = time.time() - self.start_time
         if elapsed < 0.01:
             return 0.0
-        return self.get_current_bytes() / elapsed
+        return max(0.0, self.get_current_bytes() / elapsed)
 
     def get_average_speed(self) -> float:
         return self._speed_calculator.get_average_speed()

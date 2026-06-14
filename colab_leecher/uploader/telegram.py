@@ -114,7 +114,8 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
     # NEW: Set total size for dashboard tracking
     # We NO LONGER mutate or reset `up_bytes` to 0 here. It acts as a continuous cumulative integer.
     if transfer_obj:
-        transfer_obj.total_size = file_size
+        transfer_obj.total_size = os.path.getsize(file_path)
+        transfer_obj.up_bytes = SmartBytes(0)
 
     # --- Thumbnail, duration, dimension, caption logic ---
     thumb_path = None # Initialize to None, will be set later
