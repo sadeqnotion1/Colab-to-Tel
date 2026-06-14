@@ -1679,22 +1679,22 @@ async def status_bar(
         # Helper to convert number + unit to bytes
         def convert_to_bytes(number, unit):
             units = {
-                'B': 1,
-                'KB': 1024,
-                'MB': 1024 ** 2,
-                'GB': 1024 ** 3,
-                'TB': 1024 ** 4,
-                'PB': 1024 ** 5
+                'B':   1,
+                'KB':  1000,      'KIB': 1024,
+                'MB':  1000**2,   'MIB': 1024**2,
+                'GB':  1000**3,   'GIB': 1024**3,
+                'TB':  1000**4,   'TIB': 1024**4,
+                'PB':  1000**5,   'PIB': 1024**5,
             }
             unit = unit.upper().strip()
-            if unit in ['K', 'KILO']:
-                unit = 'KB'
-            elif unit in ['M', 'MEGA']:
-                unit = 'MB'
-            elif unit in ['G', 'GIGA']:
-                unit = 'GB'
-            elif unit in ['T', 'TERA']:
-                unit = 'TB'
+            # Normalize bare/spelled-out aliases to IEC (aria2 / our sizeUnit use binary)
+            aliases = {
+                'K': 'KIB', 'KILO': 'KIB',
+                'M': 'MIB', 'MEGA': 'MIB',
+                'G': 'GIB', 'GIGA': 'GIB',
+                'T': 'TIB', 'TERA': 'TIB',
+            }
+            unit = aliases.get(unit, unit)
             return int(number * units.get(unit, 1))
 
         # Pattern 1: "3.20 GB" or "3.20GB"

@@ -2945,6 +2945,48 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             await _show_torrent_file_selection(client, chat_id, task_ctx, message.id)
             return
 
+        # === TORRENT FILE SELECTION: PAGE NAV ===
+        if query_data.startswith("tfile_page:"):
+            try:
+                new_page = int(query_data.split(":", 1)[1])
+            except (ValueError, IndexError):
+                new_page = 0
+            async with user_tasks_lock:
+                task_ctx = user_tasks.get(user_id, None)
+            if not task_ctx:
+                await callback_query.answer("Session expired.", show_alert=True)
+                return
+            task_ctx.metadata['tfile_page'] = new_page
+            await callback_query.answer()
+            await _show_torrent_file_selection(client, chat_id, task_ctx, message.id)
+            return
+
+        # Harmless no-op for the page indicator button
+        if query_data == "tfile_page_info":
+            await callback_query.answer()
+            return
+
+        # === TORRENT FILE SELECTION: PAGE SELECT/CLEAR ===
+        if query_data in ("tfile_pageall", "tfile_pagenone"):
+            async with user_tasks_lock:
+                task_ctx = user_tasks.get(user_id, None)
+            if not task_ctx:
+                await callback_query.answer("Session expired.", show_alert=True)
+                return
+            files = task_ctx.metadata.get('torrent_files', [])
+            selected = task_ctx.metadata.get('selected_torrent_files', set())
+            PAGE_SIZE = 10
+            page = int(task_ctx.metadata.get('tfile_page', 0) or 0)
+            page_ids = {f['idx'] for f in files[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]}
+            if query_data == "tfile_pageall":
+                selected |= page_ids
+            else:
+                selected -= page_ids
+            task_ctx.metadata['selected_torrent_files'] = selected
+            await callback_query.answer("Page updated")
+            await _show_torrent_file_selection(client, chat_id, task_ctx, message.id)
+            return
+
         # === TORRENT FILE SELECTION: CONFIRM ===
         if query_data == "tfile_confirm":
             async with user_tasks_lock:
@@ -5004,49 +5046,64 @@ async def _show_torrent_file_selection(client, chat_id, task_ctx, status_msg_id=
         f"<b>Select files to download (tap to toggle):</b>\n\n"
     )
 
+    # === Pagination config ===
+    PAGE_SIZE = 10                       # files per page (1 toggle per row)
+    total_count = len(files)
+    sel_count = len(selected)
+    total_pages = max(1, (total_count + PAGE_SIZE - 1) // PAGE_SIZE)
+
+    # Current page lives in task metadata; clamp so it is always valid.
+    page = int(task_ctx.metadata.get('tfile_page', 0) or 0)
+    page = max(0, min(page, total_pages - 1))
+    task_ctx.metadata['tfile_page'] = page
+
+    start = page * PAGE_SIZE
+    end = min(start + PAGE_SIZE, total_count)
+    page_files = files[start:end]
+
+    # --- File list text: only this page's files, so no truncation is needed ---
     file_list_text = ""
-    truncated_text = False
-    for f in files:
+    for f in page_files:
         idx = f['idx']
         name = os.path.basename(f['path'])
         check = "✅" if idx in selected else "⬜"
-        line = f"{check} <code>{idx}</code> · <code>{name[:50]}</code> ({f['size_str']})\n"
-        if len(header) + len(file_list_text) + len(line) > 3800:
-            truncated_text = True
-            break
-        file_list_text += line
+        file_list_text += (
+            f"{check} <code>{idx}</code> · <code>{name[:50]}</code> ({f['size_str']})\n"
+        )
 
     text = header + file_list_text
-    if truncated_text:
-        text += "\n<i>... (list truncated, showing first files)</i>"
+    text += (
+        f"\n<b>Page {page + 1}/{total_pages}</b> · "
+        f"<b>Selected:</b> <code>{sel_count}/{total_count}</code>"
+    )
 
-    sel_count = len(selected)
-    total_count = len(files)
-
-    # Telegram limit: Max 100 buttons per message. We leave room for control buttons.
-    max_toggle_buttons = 90
+    # --- Toggle buttons for THIS page only (1 per row keeps long names readable) ---
     buttons = []
-    row = []
-    
-    display_files = files[:max_toggle_buttons]
-    for f in display_files:
+    for f in page_files:
         idx = f['idx']
         name = os.path.basename(f['path'])
         check = "✅" if idx in selected else "⬜"
-        short_name = name[:20] + "…" if len(name) > 20 else name
-        btn = InlineKeyboardButton(
+        short_name = name[:28] + "…" if len(name) > 28 else name
+        buttons.append([InlineKeyboardButton(
             f"{check} {idx}. {short_name}",
             callback_data=f"tfile_toggle:{idx}"
-        )
-        row.append(btn)
-        if len(row) == 2:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
+        )])
 
-    if len(files) > max_toggle_buttons:
-        text += f"\n\n⚠️ <i>Only the first {max_toggle_buttons} files can be toggled individually. The remaining {len(files) - max_toggle_buttons} files will be downloaded based on bulk selection actions.</i>"
+    # --- Navigation row (only when there is more than one page) ---
+    if total_pages > 1:
+        prev_page = (page - 1) % total_pages
+        next_page = (page + 1) % total_pages
+        buttons.append([
+            InlineKeyboardButton("⏮ First", callback_data="tfile_page:0"),
+            InlineKeyboardButton("⬅️ Prev", callback_data=f"tfile_page:{prev_page}"),
+            InlineKeyboardButton(f"· {page + 1}/{total_pages} ·", callback_data="tfile_page_info"),
+            InlineKeyboardButton("Next ➡️", callback_data=f"tfile_page:{next_page}"),
+            InlineKeyboardButton("Last ⏭", callback_data=f"tfile_page:{total_pages - 1}"),
+        ])
+        buttons.append([
+            InlineKeyboardButton("☑️ This page", callback_data="tfile_pageall"),
+            InlineKeyboardButton("☐ This page",  callback_data="tfile_pagenone"),
+        ])
 
     buttons.append([
         InlineKeyboardButton(f"☑️ Select All ({total_count})", callback_data="tfile_selectall"),
@@ -5123,6 +5180,7 @@ async def handle_torrent_file_upload(client, message):
     task_ctx.metadata['torrent_name'] = torrent_name
     task_ctx.metadata['torrent_files'] = files
     task_ctx.metadata['selected_torrent_files'] = set(f['idx'] for f in files)
+    task_ctx.metadata['tfile_page'] = 0
 
     async with user_tasks_lock:
         user_tasks[user_id] = task_ctx

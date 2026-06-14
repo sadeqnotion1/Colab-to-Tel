@@ -178,7 +178,7 @@ async def test_parse_any_size_via_status_bar():
         # Test Case 1: Decimals & Spacing
         await status_bar(
             down_msg="Downloading", speed=1024, percentage=50.0, eta=10,
-            done="3.20 GB", total_size="10.00 GB", engine="aria2", task_ctx=None
+            done="3.20 GiB", total_size="10.00 GiB", engine="aria2", task_ctx=None
         )
         mock_pm.update_progress.assert_called_once()
         args, kwargs = mock_pm.update_progress.call_args
@@ -189,7 +189,7 @@ async def test_parse_any_size_via_status_bar():
         # Test Case 2: No space & mixed case
         await status_bar(
             down_msg="Downloading", speed=1024, percentage=50.0, eta=10,
-            done="250mb", total_size="1.5GB", engine="aria2", task_ctx=None
+            done="250mib", total_size="1.5GiB", engine="aria2", task_ctx=None
         )
         args, kwargs = mock_pm.update_progress.call_args
         assert kwargs["bytes_done"] == int(250 * 1024**2)
@@ -199,7 +199,7 @@ async def test_parse_any_size_via_status_bar():
         # Test Case 3: Mixed units
         await status_bar(
             down_msg="Downloading", speed=1024, percentage=50.0, eta=10,
-            done="3GB200MB", total_size="4GB500MB", engine="aria2", task_ctx=None
+            done="3GiB200MiB", total_size="4GiB500MiB", engine="aria2", task_ctx=None
         )
         args, kwargs = mock_pm.update_progress.call_args
         assert kwargs["bytes_done"] == int(3 * 1024**3 + 200 * 1024**2)

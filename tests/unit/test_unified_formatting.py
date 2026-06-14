@@ -53,3 +53,23 @@ def test_session_uploaded_bytes_field():
     
     transfer.reset()
     assert transfer.session_uploaded_bytes == 0
+
+def test_aria2_size_parsing():
+    from colab_leecher.downlader.aria2 import _parse_size_to_bytes
+    # IEC units
+    assert _parse_size_to_bytes("16MiB") == 16 * 1024**2
+    assert _parse_size_to_bytes("5GiB") == 5 * 1024**3
+    assert _parse_size_to_bytes("700KiB") == 700 * 1024
+    assert _parse_size_to_bytes("1.5GiB") == int(1.5 * 1024**3)
+    
+    # SI units
+    assert _parse_size_to_bytes("16MB") == 16 * 1000**2
+    assert _parse_size_to_bytes("5GB") == 5 * 1000**3
+    
+    # Optional spacing
+    assert _parse_size_to_bytes("16 MiB") == 16 * 1024**2
+    assert _parse_size_to_bytes(" 5.5 GiB ") == int(5.5 * 1024**3)
+    
+    # Edge cases
+    assert _parse_size_to_bytes("unknown") == 0
+    assert _parse_size_to_bytes(None) == 0

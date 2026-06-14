@@ -26,7 +26,7 @@ def _parse_size_to_bytes(size_str: str) -> int:
     import re
     if not size_str or size_str.lower() == "unknown":
         return 0
-    m = re.match(r"([\d.]+)\s*([KMGT]?i?B)", size_str.strip(), re.IGNORECASE)
+    m = re.match(r"([\d.]+)\s*([KMGTP]?i?B)", size_str.strip(), re.IGNORECASE)
     if not m:
         return 0
     val = float(m.group(1))
@@ -37,6 +37,7 @@ def _parse_size_to_bytes(size_str: str) -> int:
         "MB": 1000 ** 2, "MIB": 1024 ** 2,
         "GB": 1000 ** 3, "GIB": 1024 ** 3,
         "TB": 1000 ** 4, "TIB": 1024 ** 4,
+        "PB": 1000 ** 5, "PIB": 1024 ** 5,
     }.get(unit, 1)
     return int(val * mult)
 
@@ -171,11 +172,12 @@ async def on_output(output: str, current_filename: str, task_ctx=None):
         # --- FIXED Primary Regex Pattern ---
         pattern = re.compile(
             r"\[#[a-f0-9]+\s+" # Start with [# followed by hex ID and spaces
-            r"(?P<downloaded>[\d\.]+[KMG]?i?B)/(?P<total>[\d\.]+[KMG]?i?B)" # Downloaded/Total
-            r"\((?P<percent>[\d\.]+)%\)\s*" # Percentage
-            r"CN:\d+\s+DL:(?P<speed>[\d\.]+[KMG]?i?B(?:/s)?)" # Speed with optional /s
+            r"(?P<downloaded>[\d\.]+\s*[KMGTP]?i?B)/(?P<total>[\d\.]+\s*[KMGTP]?i?B)" # Downloaded/Total
+            r"\((?P<percent>[\d\.]+)%\).*?" # Percentage
+            r"DL:(?P<speed>[\d\.]+\s*[KMGTP]?i?B(?:/s)?)" # Speed with optional /s
             r"(?:\s+ETA:(?P<eta>[^\]]+))?" # Optional ETA
-            r"\]" # Closing bracket
+            r"\]", # Closing bracket
+            re.IGNORECASE
         )
         match = pattern.search(output)
         # --- END FIXED Regex ---
@@ -242,25 +244,17 @@ async def on_output(output: str, current_filename: str, task_ctx=None):
     if percentage is not None and downloaded_bytes and total_size and eta:
         _messages.status_head = f"<b>Downloading</b>\n\n<b>Name:</b> <code>{escape_html(current_filename)}</code>\n"
 
+        done_bytes = _parse_size_to_bytes(str(downloaded_bytes))
+        total_bytes = _parse_size_to_bytes(str(total_size))
+
         # Manual speed calculation only if regex somehow failed to capture speed
         if speed_string is None or speed_string == "N/A":
             log.debug("Calculating speed manually (fallback or regex failed speed group).")
-            # ... (manual speed calc logic remains same) ...
             try:
-                down_match = re.match(r"([\d\.]+)([KMG]?B)", downloaded_bytes)
-                if down_match:
-                     down_value = float(down_match.group(1))
-                     down_unit = down_match.group(2)
-                     multiplier = 1
-                     if "G" in down_unit: multiplier = 1024**3
-                     elif "M" in down_unit: multiplier = 1024**2
-                     elif "K" in down_unit: multiplier = 1024
-                     downloaded_numeric = down_value * multiplier
-                     elapsed_time_seconds = (datetime.now() - _bot_times.task_start).total_seconds()
-                     elapsed_time_seconds = max(1, elapsed_time_seconds)
-                     current_speed = downloaded_numeric / elapsed_time_seconds
-                     speed_string = f"{sizeUnit(current_speed)}/s"
-                else: speed_string = "N/A"
+                elapsed_time_seconds = (datetime.now() - _bot_times.task_start).total_seconds()
+                elapsed_time_seconds = max(1, elapsed_time_seconds)
+                current_speed = done_bytes / elapsed_time_seconds
+                speed_string = f"{sizeUnit(current_speed)}/s"
             except Exception as speed_calc_err:
                 log.error(f"Error calculating speed manually: {speed_calc_err}")
                 speed_string = "N/A"
@@ -271,7 +265,7 @@ async def on_output(output: str, current_filename: str, task_ctx=None):
             clean_eta = eta.removesuffix(']') # Ensure trailing ']' is removed
             await status_bar(
                 _messages.status_head, speed_string, int(percentage), clean_eta,
-                downloaded_bytes, total_size, engine="Aria2c 🧨",
+                done_bytes, total_bytes, engine="Aria2c 🧨",
                 task_ctx=task_ctx  # Pass task_ctx for per-task progress tracking
             )
             # Update parallel dashboard if task is in queue
