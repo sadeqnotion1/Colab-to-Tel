@@ -931,6 +931,14 @@ async def sizeChecker(
         ext_lower = extension.lower()
         processing_done = False
 
+        base = re.sub(r'\.(part\d+|[0-9]{3,}|z[0-9]{2,}|zip\.\d+)$', '', filename)
+        base_ext = ospath.splitext(base)[1].lower()
+        if ext_lower == ".001" and base_ext in ['.mp4', '.mkv']:
+            log.info(f"Oversized video segment '{filename}' → re-splitting as video, not archive.")
+            if _bot.Options.is_split:
+                await splitVideo(file_path, get_max_split_size_mib(), remove, task_ctx)
+                return True
+
         archive_exts = {
             ".zip",
             ".rar",
@@ -2282,7 +2290,7 @@ async def splitVideo(
 
     # Priority 1: If file size requires splitting, use that calculation
     if total_file_size > MAX_SPLIT_SIZE_BYTES:
-        min_parts_required = math.ceil(total_file_size / MAX_SPLIT_SIZE_BYTES)
+        min_parts_required = math.ceil(total_file_size / (MAX_SPLIT_SIZE_BYTES * 0.90))
         final_segment_duration = math.floor(
             duration_total_seconds / min_parts_required)
         log.info(
@@ -2515,6 +2523,27 @@ async def splitVideo(
                                 f"Error during merge: {merge_err}. Keeping original segments.")
                             if ospath.exists(concat_file):
                                 os.remove(concat_file)
+
+                # --- Verify each part and recursively re-split overflow ---
+                LIMIT = get_max_split_size_mib() * 1024 * 1024
+                for part in list(segment_files):
+                    part_path = ospath.join(_paths.temp_zpath, part)
+                    if ospath.exists(part_path) and getSize(part_path) > LIMIT:
+                        log.warning(
+                            f"Segment {part} ({sizeUnit(getSize(part_path))}) exceeds limit "
+                            f"({sizeUnit(LIMIT)}) — re-splitting as video."
+                        )
+                        ok = await splitVideo(part_path, max(1, target_segment_size_mb // 2), True, task_ctx)
+                        if not ok:
+                            # Last resort: byte-split (uploads as document, but guarantees it fits)
+                            log.warning(f"Re-split of {part} failed; falling back to byte-split.")
+                            await splitArchive(part_path, LIMIT, task_ctx)
+
+                # Refresh the list after any re-splits
+                segment_files = sorted(
+                    f for f in os.listdir(_paths.temp_zpath)
+                    if f.startswith(f"{filename}.") and re.search(r'\.[0-9]{3}$', f)
+                )
 
                 ffmpeg_success = True
                 total_parts_size = getSize(_paths.temp_zpath)
