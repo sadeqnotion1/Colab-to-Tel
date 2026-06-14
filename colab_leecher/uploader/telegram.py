@@ -111,8 +111,7 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
 
     log.info(f"Preparing to upload {task_id_str}: {actual_upload_filename} (Display Name: {base_upload_name}) Size: {helper.sizeUnit(file_size)}")
     
-    # NEW: Set total size for dashboard tracking
-    # We NO LONGER mutate or reset `up_bytes` to 0 here. It acts as a continuous cumulative integer.
+    # Set total size and reset per-file stats for dashboard tracking
     if transfer_obj:
         from ..utility.code_quality_utils import SpeedCalculator
         transfer_obj.total_size = os.path.getsize(file_path)
@@ -320,7 +319,7 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
                 speed_string, eta_seconds, percentage = helper.speedETA(upload_start_time, current_int, total)
                 
                 if transfer_obj:
-                    raw_speed = current_int / (now - upload_start_time) if (now - upload_start_time) > 0 else 0.0
+                    raw_speed = transfer_obj.get_speed()
                     transfer_obj.last_speed = raw_speed
                     transfer_obj.last_speed_bytes = raw_speed
                 
