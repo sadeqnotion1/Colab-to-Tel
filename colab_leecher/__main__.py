@@ -4893,43 +4893,76 @@ async def handle_document_upload(client, message):
 
 
 async def _parse_torrent_files(torrent_path: str):
-    """Parse torrent file using aria2c -S and return file list with metadata."""
-    import subprocess
+    """Parse a .torrent with `aria2c -S` and return (torrent_name, files).
+
+    aria2c prints each file across TWO lines:
+        idx|path/length
+        ===+=========================================
+          1|./[HappyFappy]Lexi Lore pack/scene1.mp4
+           |5.0GiB (5,368,709,120)
+        ---+-----------------------------------------
+    The OLD code expected `idx|path|size` on ONE line (`len(parts) >= 3`),
+    so `files` stayed empty -> "Could not parse torrent file or torrent is
+    empty." We now pair each `idx|path` line with the following `|size` line.
+    """
+    import asyncio
+    import os
+    import re
+
     try:
-        cmd = ["aria2c", "-S", torrent_path]
         proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            "aria2c", "-S", torrent_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
-        stdout_str = stdout.decode('utf-8', errors='ignore')
-
-        files = []
-        torrent_name = "Torrent_Download"
-        for line in stdout_str.splitlines():
-            line = line.strip()
-            if line.startswith("Name:"):
-                torrent_name = line.split("Name:", 1)[1].strip()
-                continue
-            parts = line.split('|')
-            if len(parts) >= 2:
-                left = parts[0].strip()
-                is_idx = False
-                idx = -1
-                try:
-                    idx = int(left)
-                    is_idx = True
-                except ValueError:
-                    pass
-
-                if is_idx:
-                    if len(parts) >= 3:
-                        size_str = parts[-1].strip()
-                        file_path = "|".join(parts[1:-1]).strip()
-                        files.append({'idx': idx, 'path': file_path, 'size_str': size_str})
-        return torrent_name, files
-    except Exception as e:
-        log.error(f"Failed to parse torrent file: {e}")
+    except FileNotFoundError:
+        log.error("aria2c not found in PATH; cannot parse .torrent file.")
         return None, []
+    except Exception as e:
+        log.error(f"Failed to run aria2c on torrent: {e}")
+        return None, []
+
+    out = stdout.decode("utf-8", errors="ignore")
+    err = stderr.decode("utf-8", errors="ignore").strip()
+    if err:
+        log.debug(f"aria2c -S stderr: {err[:500]}")
+
+    idx_re = re.compile(r"^\s*(\d+)\|(.*)$")   # "  1|./folder/file.mp4"
+    size_re = re.compile(r"^\s*\|(.+)$")        # "   |5.0GiB (5,368,709,120)"
+
+    files = []
+    pending = None  # {'idx', 'path'} awaiting its size line
+
+    for raw in out.splitlines():
+        line = raw.rstrip()
+
+        m_idx = idx_re.match(line)
+        if m_idx:
+            if pending is not None:                       # no size line seen
+                files.append({**pending, "size_str": "Unknown"})
+            pending = {"idx": int(m_idx.group(1)),
+                       "path": m_idx.group(2).strip()}
+            continue
+
+        m_size = size_re.match(line)
+        if m_size and pending is not None:
+            # "5.0GiB (5,368,709,120)" -> "5.0GiB"
+            size_str = m_size.group(1).strip().split(" (")[0].strip()
+            files.append({**pending, "size_str": size_str or "Unknown"})
+            pending = None
+
+    if pending is not None:
+        files.append({**pending, "size_str": "Unknown"})
+
+    # Derive a display name from the common top-level folder when present.
+    torrent_name = "Torrent_Download"
+    if files:
+        first = files[0]["path"].lstrip("./")
+        torrent_name = first.split("/", 1)[0] if "/" in first else \
+            os.path.splitext(os.path.basename(torrent_path))[0]
+
+    return torrent_name, files
 
 
 async def _show_torrent_file_selection(client, chat_id, task_ctx, status_msg_id=None):
@@ -4951,7 +4984,13 @@ async def _show_torrent_file_selection(client, chat_id, task_ctx, status_msg_id=
             try:
                 num = float(size_str.split()[0])
                 unit = size_str.split()[1] if len(size_str.split()) > 1 else 'B'
-                multiplier = {'B': 1, 'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, 'TB': 1024**4}.get(unit.upper(), 1)
+                multiplier = {
+                    'B': 1,
+                    'KB': 1000, 'KIB': 1024,
+                    'MB': 1000**2, 'MIB': 1024**2,
+                    'GB': 1000**3, 'GIB': 1024**3,
+                    'TB': 1000**4, 'TIB': 1024**4,
+                }.get(unit.upper(), 1)
                 total_bytes += num * multiplier
             except:
                 pass
