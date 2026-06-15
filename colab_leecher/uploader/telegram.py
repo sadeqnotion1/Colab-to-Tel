@@ -21,12 +21,14 @@ from .. import colab_bot, OWNER, DUMP_ID
 log = logging.getLogger(__name__)
 
 
-RETRYABLE_EXCEPTIONS = (
-    FloodWait,
-    SlowmodeWait,
-    TimeoutError,            
-    socket.timeout,          
-    aiohttp.ClientError,     
+RETRYABLE_EXCEPTIONS = tuple(
+    x for x in (
+        FloodWait,
+        SlowmodeWait,
+        TimeoutError,            
+        socket.timeout,          
+        aiohttp.ClientError,     
+    ) if isinstance(x, type) and issubclass(x, BaseException)
 )
 
 
@@ -207,6 +209,13 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
             # Use converted path if successful
             log.debug(f"Conversion successful/verified, using: {converted_path}")
             thumb_path = converted_path
+            # If convertIMG converted the SOURCE file (photo case), upload the converted file instead
+            if initial_thumb_path == file_path:
+                file_path = converted_path
+                actual_upload_filename = ospath.basename(file_path)
+                file_size = helper.getSize(file_path)
+                if transfer_obj:
+                    transfer_obj.total_size = file_size
         elif ospath.exists(initial_thumb_path):
             # If conversion failed but the original exists, use default as fallback
             log.warning(f"Thumbnail conversion failed for {initial_thumb_path}, using default.")
@@ -407,6 +416,14 @@ async def upload_file(file_path: str, display_name: str, task_ctx: TaskContext =
                     )
                     log.debug(f"send_document call returned for {actual_upload_filename}. Message received: {bool(sent_message)}")
             except Exception as upload_api_err:
+                # Check for deterministic/non-retryable errors
+                non_retryable = (ValueError, TypeError, FileNotFoundError, PermissionError, 
+                                 IsADirectoryError, AttributeError, NameError)
+                import binascii
+                if isinstance(upload_api_err, non_retryable) or isinstance(upload_api_err, binascii.Error):
+                    log.error(f"Deterministic upload error occurred: {upload_api_err}", exc_info=True)
+                    raise upload_api_err
+                
                 log.warning(f"Pyrogram session abort or upload error occurred: {upload_api_err}", exc_info=True)
                 raise TimeoutError(f"Pyrogram upload session error: {str(upload_api_err)}")
 

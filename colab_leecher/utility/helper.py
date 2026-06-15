@@ -1267,7 +1267,7 @@ def is_task_time_over(task_ctx, interval: float = 2.5) -> bool:
 # --- Thumbnail Management ---
 
 
-def convertIMG(image_path):
+def convertIMG(image_path, delete_original=False):
     """Converts an image to JPEG format if it isn't already."""
     if not image_path or not ospath.exists(image_path):
         return None
@@ -1279,13 +1279,17 @@ def convertIMG(image_path):
             if image.format == "JPEG":
                 if image_path != output_path:
                     try:
-                        # Rename to ensure .jpg extension
-                        os.rename(image_path, output_path)
+                        # Rename/Copy to ensure .jpg extension
+                        if delete_original:
+                            os.rename(image_path, output_path)
+                        else:
+                            import shutil
+                            shutil.copy2(image_path, output_path)
                         return output_path
                     except OSError as e:
                         log.warning(
-                            f"Could not rename {image_path} to {output_path}: {e}")
-                        return image_path  # Return original if rename fails
+                            f"Could not rename/copy {image_path} to {output_path}: {e}")
+                        return image_path  # Return original if rename/copy fails
                 else:
                     return image_path  # Already JPEG with correct extension
 
@@ -1307,8 +1311,8 @@ def convertIMG(image_path):
 
             rgb_im.save(output_path, "JPEG", quality=95)
 
-            # Remove original file if conversion created a new one
-            if image_path != output_path:
+            # Remove original file if conversion created a new one and delete is requested
+            if delete_original and image_path != output_path:
                 try:
                     os.remove(image_path)
                 except OSError:

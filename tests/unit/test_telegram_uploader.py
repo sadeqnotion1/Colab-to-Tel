@@ -11,11 +11,26 @@ class MockModule(MagicMock):
     def __path__(self):
         return []
 
+class MockException(Exception):
+    pass
+
+class MockFloodWait(MockException):
+    def __init__(self, value=0):
+        self.value = value
+
+class MockSlowmodeWait(MockException):
+    def __init__(self, value=0):
+        self.value = value
+
+errors_mock = MockModule()
+errors_mock.FloodWait = MockFloodWait
+errors_mock.SlowmodeWait = MockSlowmodeWait
+
 sys.modules['pyrogram'] = MockModule()
 sys.modules['pyrogram.client'] = MockModule()
 sys.modules['pyrogram.types'] = MockModule()
 sys.modules['pyrogram.enums'] = MockModule()
-sys.modules['pyrogram.errors'] = MockModule()
+sys.modules['pyrogram.errors'] = errors_mock
 sys.modules['pyrogram.filters'] = MockModule()
 sys.modules['curl_cffi'] = MockModule()
 sys.modules['curl_cffi.requests'] = MockModule()
@@ -88,3 +103,130 @@ async def test_upload_file_safety_net():
              "large_file.mp4.002",
              task_ctx
          )
+
+
+def test_convertIMG_non_destructive(tmp_path):
+    from colab_leecher.utility.helper import convertIMG
+    from PIL import Image
+
+    # Create a dummy PNG file
+    png_path = tmp_path / "test_image.png"
+    img = Image.new("RGB", (100, 100), color="red")
+    img.save(png_path, "PNG")
+
+    assert png_path.exists()
+
+    # Call convertIMG with delete_original=False (default)
+    jpg_path = convertIMG(str(png_path), delete_original=False)
+
+    # Verify both PNG and JPEG exist
+    assert png_path.exists()
+    assert os.path.exists(jpg_path)
+    assert jpg_path.endswith(".jpg")
+
+    # Clean up jpg file
+    os.remove(jpg_path)
+
+
+def test_convertIMG_destructive(tmp_path):
+    from colab_leecher.utility.helper import convertIMG
+    from PIL import Image
+
+    # Create a dummy PNG file
+    png_path = tmp_path / "test_image.png"
+    img = Image.new("RGB", (100, 100), color="blue")
+    img.save(png_path, "PNG")
+
+    assert png_path.exists()
+
+    # Call convertIMG with delete_original=True
+    jpg_path = convertIMG(str(png_path), delete_original=True)
+
+    # Verify PNG is deleted and JPEG exists
+    assert not png_path.exists()
+    assert os.path.exists(jpg_path)
+    assert jpg_path.endswith(".jpg")
+
+    # Clean up jpg file
+    os.remove(jpg_path)
+
+
+@pytest.mark.anyio
+async def test_upload_file_photo_path_update(tmp_path):
+    from PIL import Image
+    import colab_leecher.uploader.telegram as telegram_mod
+
+    # Setup mock task context
+    task_ctx = create_task_context(user_id=123, chat_id=123, mode="leech")
+    task_ctx.paths.down_path = str(tmp_path)
+
+    # Create a dummy png file
+    png_path = tmp_path / "photo.png"
+    img = Image.new("RGB", (100, 100), color="green")
+    img.save(png_path, "PNG")
+
+    # Mock bot options/settings
+    from colab_leecher.utility.variables import BOT
+    BOT.Setting.thumbnail = False  # Ensure no custom thumb is used
+    BOT.Options.stream_upload = False  # Upload as photo if send_photo matches
+
+    # Mock colab_bot send methods
+    mock_bot = AsyncMock()
+    mock_message = MagicMock()
+    mock_message.id = 456
+    mock_bot.send_photo.return_value = mock_message
+
+    original_bot = telegram_mod.colab_bot
+    original_owner = getattr(telegram_mod, 'OWNER', None)
+    telegram_mod.colab_bot = mock_bot
+    telegram_mod.OWNER = 12345
+    try:
+        # Call upload_file
+        result = await upload_file(str(png_path), "photo.png", task_ctx)
+
+        assert result is True
+
+        # Verify send_photo was called with photo.jpg instead of photo.png
+        expected_jpg_path = os.path.normpath(str(tmp_path / "photo.jpg"))
+        mock_bot.send_photo.assert_called_once()
+        called_args, called_kwargs = mock_bot.send_photo.call_args
+        assert os.path.normpath(called_kwargs['photo']) == expected_jpg_path
+    finally:
+        telegram_mod.colab_bot = original_bot
+        telegram_mod.OWNER = original_owner
+
+
+@pytest.mark.anyio
+async def test_upload_file_non_retryable_exception(tmp_path):
+    import colab_leecher.uploader.telegram as telegram_mod
+
+    task_ctx = create_task_context(user_id=123, chat_id=123, mode="leech")
+    task_ctx.paths.down_path = str(tmp_path)
+
+    # Create a dummy file
+    dummy_path = tmp_path / "dummy.txt"
+    dummy_path.write_text("hello world")
+
+    # Mock colab_bot
+    mock_bot = AsyncMock()
+    mock_bot.send_document.side_effect = ValueError("Failed to decode base64")
+
+    original_bot = telegram_mod.colab_bot
+    original_owner = getattr(telegram_mod, 'OWNER', None)
+    telegram_mod.colab_bot = mock_bot
+    telegram_mod.OWNER = 12345
+    try:
+        # When we call upload_file, it should fail immediately and return False
+        # (retry_count should not increment to max_retries).
+        with patch('asyncio.sleep') as mock_sleep:
+            result = await upload_file(str(dummy_path), "dummy.txt", task_ctx)
+
+            assert result is False
+            # Since it is deterministic, it should not call asyncio.sleep (which is called during retry waits)
+            mock_sleep.assert_not_called()
+            # send_document should be called exactly once
+            mock_bot.send_document.assert_called_once()
+    finally:
+        telegram_mod.colab_bot = original_bot
+        telegram_mod.OWNER = original_owner
+
