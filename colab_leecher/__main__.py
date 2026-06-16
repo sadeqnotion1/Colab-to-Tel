@@ -94,8 +94,7 @@ async def _send_generic_error(client: Client, chat_id: int, action: str) -> None
 
 source_waiting_prompts = {}
 source_waiting_lock = asyncio.Lock()
-setup_sessions = {}
-setup_sessions_lock = asyncio.Lock()
+from .utility.variables import _get_setup_session, _update_setup_session, _clear_setup_session
 mindvalley_waiting_users = set()
 mindvalley_waiting_lock = asyncio.Lock()
 nzb_waiting_users = set()
@@ -115,56 +114,8 @@ extract_waiting_prompts = {}
 extract_waiting_lock = asyncio.Lock()
 
 
-def _clone_setup_session(state: dict | None) -> dict | None:
-    """Return a defensive copy of per-user setup session state."""
-    if not state:
-        return None
-    return {
-        "mode": state.get("mode"),
-        "source_links": list(state.get("source_links", [])),
-        "service_type": state.get("service_type"),
-        "filenames": list(state.get("filenames", [])),
-        "custom_name": state.get("custom_name", ""),
-        "zip_pswd": state.get("zip_pswd", ""),
-        "unzip_pswd": state.get("unzip_pswd", ""),
-        "archive_format": state.get("archive_format", "7z"),
-    }
+# Per-user setup sessions are now imported from .utility.variables to prevent circular namespace collision.
 
-
-async def _get_setup_session(user_id: int) -> dict | None:
-    """Fetch per-user setup session state."""
-    async with setup_sessions_lock:
-        return _clone_setup_session(setup_sessions.get(user_id))
-
-
-async def _update_setup_session(user_id: int, **updates) -> dict:
-    """Create/update per-user setup session state."""
-    async with setup_sessions_lock:
-        current = setup_sessions.get(user_id, {})
-        merged = {
-            "mode": current.get("mode"),
-            "source_links": list(current.get("source_links", [])),
-            "service_type": current.get("service_type"),
-            "filenames": list(current.get("filenames", [])),
-            "custom_name": current.get("custom_name", ""),
-            "zip_pswd": current.get("zip_pswd", ""),
-            "unzip_pswd": current.get("unzip_pswd", ""),
-            "archive_format": current.get("archive_format", "7z"),
-        }
-        for key, value in updates.items():
-            if key in {"source_links", "filenames"}:
-                merged[key] = list(value or [])
-            else:
-                merged[key] = value
-        setup_sessions[user_id] = merged
-        return _clone_setup_session(merged) or {}
-
-
-async def _clear_setup_session(user_id: int) -> dict | None:
-    """Clear per-user setup session state."""
-    async with setup_sessions_lock:
-        state = setup_sessions.pop(user_id, None)
-    return _clone_setup_session(state)
 
 
 def _build_task_paths(task_ctx: TaskContext):

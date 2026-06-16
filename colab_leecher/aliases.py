@@ -18,7 +18,7 @@ import logging
 from pyrogram import filters
 
 from . import colab_bot
-from .utility.variables import BOT
+from .utility.variables import BOT, _update_setup_session
 from .utility.task_manager import task_starter
 from .utility.helper import sizeUnit
 from .utility.ui_copy import (
@@ -44,7 +44,6 @@ async def mirror_cmd(client, message):
     prompt_msg = await task_starter(message, text)
     if prompt_msg:
         try:
-            from .__main__ import _update_setup_session
             await _update_setup_session(message.from_user.id, mode="mirror")
         except Exception as e:
             log.error(f"Failed to update setup session for mirror: {e}")
@@ -60,7 +59,6 @@ async def leech_cmd(client, message):
     prompt_msg = await task_starter(message, text)
     if prompt_msg:
         try:
-            from .__main__ import _update_setup_session
             await _update_setup_session(message.from_user.id, mode="leech")
         except Exception as e:
             log.error(f"Failed to update setup session for leech: {e}")
@@ -76,7 +74,6 @@ async def ytdl_cmd(client, message):
     prompt_msg = await task_starter(message, text)
     if prompt_msg:
         try:
-            from .__main__ import _update_setup_session
             await _update_setup_session(message.from_user.id, mode="leech", service_type="ytdl")
         except Exception as e:
             log.error(f"Failed to update setup session for ytdl: {e}")
@@ -102,7 +99,6 @@ async def instagram_cmd(client, message):
         prompt_msg = await task_starter(message, text)
         if prompt_msg:
             try:
-                from .__main__ import _update_setup_session
                 await _update_setup_session(message.from_user.id, mode="leech", service_type="direct")
             except Exception as e:
                 log.error(f"Failed to update setup session for instagram: {e}")
@@ -130,7 +126,6 @@ async def nzbcloud_cmd(client, message):
         prompt_msg = await task_starter(message, text)
         if prompt_msg:
             try:
-                from .__main__ import _update_setup_session
                 await _update_setup_session(message.from_user.id, mode="leech", service_type="nzbcloud")
                 log.info("  ✓ Setup session initialized for NZBcloud")
             except Exception as e:
