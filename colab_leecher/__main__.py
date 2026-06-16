@@ -3792,6 +3792,18 @@ async def set_clearance(client, message):
         log.info("Cloudflare clearance cookie set dynamically.")
     await sleep(15); await message_deleter(message, msg)
 
+@colab_bot.on_message(filters.command(["setuseragent", "useragent"]) & filters.private)
+async def set_user_agent(client, message):
+    global BOT; log.info("Received /setuseragent command.")
+    if len(message.command) < 2:
+        msg = await message.reply_text("Send\n/setuseragent <code>Your Browser User Agent</code>", quote=True, parse_mode=enums.ParseMode.HTML)
+    else:
+        ua_val = message.text.split(None, 1)[1].strip()
+        BOT.Setting.nzb_user_agent = ua_val
+        msg = await message.reply_text("✅ NZBCloud User-Agent Set successfully!")
+        log.info("User-Agent set dynamically.")
+    await sleep(15); await message_deleter(message, msg)
+
 # Helper function to perform extraction
 async def _perform_extraction(archive_path, file_filter=None, task_ctx=None):
     """

@@ -423,13 +423,14 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
         log.info(f"🔍 NZBCloud link detected. Cookie configured: {bool(cf_clearance)}")
         if cf_clearance:
             log.info(f"🍪 Adding Cloudflare cookie to Aria2c for NZBCloud download (length: {len(cf_clearance)})")
+            user_agent = getattr(BOT.Setting, 'nzb_user_agent', '') or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
             command.extend([
                 "--header", f"Cookie: cf_clearance={cf_clearance}",
                 "--header", "Referer: https://app.nzbcloud.com/",
                 "--header", "Sec-Fetch-Dest: video",
                 "--header", "Sec-Fetch-Mode: no-cors",
                 "--header", "Sec-Fetch-Site: same-site",
-                "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+                "--user-agent", user_agent
             ])
             log.debug(f"📋 Aria2c command has {len(command)} arguments including {sum(1 for x in command if x == '--header')} headers")
         else:
@@ -675,7 +676,8 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
                         headers['Sec-Fetch-Dest'] = 'video'
                         headers['Sec-Fetch-Mode'] = 'no-cors'
                         headers['Sec-Fetch-Site'] = 'same-site'
-                        headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+                        user_agent = getattr(BOT.Setting, 'nzb_user_agent', '') or 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
+                        headers['User-Agent'] = user_agent
                         log.info(f"🍪 Using Cloudflare cookie for NZBCloud download")
 
                 async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:

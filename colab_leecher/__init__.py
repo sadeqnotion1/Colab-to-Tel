@@ -107,6 +107,7 @@ def _read_credentials(path: str) -> tuple[dict[str, Any], str | None]:
 
 def _apply_optional_settings(source: dict[str, Any]) -> None:
     BOT.Setting.nzb_cf_clearance = source.get("NZBCLOUD_CF_CLEARANCE", "")
+    BOT.Setting.nzb_user_agent = source.get("NZBCLOUD_USER_AGENT", "")
     BOT.Setting.bitso_identity_cookie = source.get("BITSO_IDENTITY_COOKIE", "")
     BOT.Setting.bitso_phpsessid_cookie = source.get("BITSO_PHPSESSID_COOKIE", "")
     BOT.Setting.instagram_username = source.get("INSTAGRAM_USERNAME", "")

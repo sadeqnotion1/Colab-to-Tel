@@ -51,6 +51,7 @@ class BOT:
         thumbnail = False
         concurrency = "Parallel"
         nzb_cf_clearance = ""
+        nzb_user_agent = ""
         bitso_identity_cookie = ""
         bitso_phpsessid_cookie = ""
         # Instagram Authentication
