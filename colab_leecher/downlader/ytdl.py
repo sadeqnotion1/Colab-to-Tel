@@ -2,6 +2,7 @@
 #FILE: colab_leecher/downlader/ytdl.py
 #================================================
 import logging
+import asyncio
 import os
 import yt_dlp
 from asyncio import sleep
@@ -141,11 +142,11 @@ class MyLogger:
 
     @staticmethod
     def warning(msg):
-        pass
+        log.warning(f"[yt-dlp] {msg}")
 
     @staticmethod
     def error(msg):
-        pass
+        log.error(f"[yt-dlp] {msg}")
 
 
 class SilentLogger:
@@ -234,8 +235,10 @@ def _progress_hook(d):
 
         if total_bytes:
             percent = round((dl_bytes * 100 / total_bytes), 2)
+        elif d.get("fragment_count"):
+            percent = round(d.get("fragment_index", 0) * 100 / d["fragment_count"], 2)
         else:
-            percent = d.get("downloaded_percent", 0)
+            percent = 0
 
         YTDL.header = ""
         YTDL.speed = sizeUnit(speed) if speed else "N/A"
@@ -429,7 +432,7 @@ def YouTubeDL(url, task_ctx=None):
             result["error"] = f"{err_str}{hint}"
 
 
-async def get_YT_Name(link, task_ctx=None):
+def _get_YT_Name_sync(link, task_ctx=None):
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -456,3 +459,7 @@ async def get_YT_Name(link, task_ctx=None):
         except Exception as e:
             log.warning(f"get_YT_Name metadata extraction failed: {e}")
             raise e
+
+
+async def get_YT_Name(link, task_ctx=None):
+    return await asyncio.to_thread(_get_YT_Name_sync, link, task_ctx)
