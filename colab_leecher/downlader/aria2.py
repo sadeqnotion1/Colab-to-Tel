@@ -281,6 +281,191 @@ async def on_output(output: str, current_filename: str, task_ctx=None):
              log.error(f"No valid progress info received for ~270s. Assuming dead link for: {current_filename}")
 
 # ----- END OF FUNCTION -----
+
+async def curl_cffi_Download(
+    link: str,
+    num: int,
+    pre_determined_name: str = None,
+    task_ctx = None,
+    headers: dict = None,
+    cookies: dict = None
+) -> bool:
+    global BotTimes, Messages, TaskError, TRANSFER, Aria2c, Paths, log
+    from curl_cffi.requests import AsyncSession
+    import time
+    from ..utility.helper import speedETA, sizeUnit, getTime, status_bar, clean_filename
+
+    # Multi-task support: Use task_ctx if provided, otherwise fallback to globals
+    if task_ctx:
+        _paths = task_ctx.paths
+        _messages = task_ctx.messages
+        _task_error = task_ctx.error
+        _transfer = task_ctx.transfer
+        _bot_times = task_ctx.bot_times
+        log.info(f"curl_cffi_Download() using TaskContext for task_id: {task_ctx.task_id}")
+    else:
+        _paths = Paths
+        _messages = Messages
+        _task_error = TaskError
+        _transfer = TRANSFER
+        _bot_times = BotTimes
+        log.info("curl_cffi_Download() using global state")
+
+    # URL sanitization
+    link = link.strip().replace('\n', '').replace('\r', '').replace('\t', '')
+
+    url_derived_name = None
+    try:
+        parsed_url = urllib.parse.urlparse(link)
+        url_path_name = os.path.basename(urllib.parse.unquote(parsed_url.path))
+        if url_path_name:
+            url_derived_name = url_path_name
+    except Exception as url_parse_err:
+        log.warning(f"curl_cffi: Could not derive filename: {url_parse_err}")
+
+    raw_name = url_derived_name or pre_determined_name or f"curl_cffi_download_{num}"
+    expected_filename = clean_filename(raw_name) or f"curl_cffi_download_{num}_cleaned"
+    file_path = os.path.join(_paths.down_path, expected_filename)
+    display_name_for_status = expected_filename
+
+    log.info(f"Starting curl_cffi download for link index {num} (Expecting: '{expected_filename}')")
+    download_start_time = time.time()
+    _messages.status_head = f"<b>Downloading</b> <i>Link {str(num).zfill(2)}</i>\n\n<b>Name:</b> <code>{escape_html(display_name_for_status)}</code>\n"
+
+    try:
+        os.makedirs(_paths.down_path, exist_ok=True)
+    except OSError as mkdir_err:
+        log.error(f"curl_cffi: Cannot create download dir: {mkdir_err}")
+        return False
+
+    # Headers and cookies preparation
+    custom_headers = {
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+    }
+    
+    if headers:
+        for k, v in headers.items():
+            if k.lower() == 'cookie':
+                continue
+            custom_headers[k] = v
+
+    if "Referer" not in custom_headers:
+        try:
+            parsed_ref = urllib.parse.urlparse(link)
+            custom_headers["Referer"] = f"{parsed_ref.scheme}://{parsed_ref.netloc}/"
+        except Exception:
+            custom_headers["Referer"] = link
+
+    # NZBcloud integration
+    if 'nzbcloud.com' in link.lower():
+        from .. import BOT
+        cf_clearance = BOT.Setting.nzb_cf_clearance
+        custom_headers['Referer'] = 'https://app.nzbcloud.com/'
+        custom_headers['Sec-Fetch-Dest'] = 'video'
+        custom_headers['Sec-Fetch-Mode'] = 'no-cors'
+        custom_headers['Sec-Fetch-Site'] = 'same-site'
+        user_agent = getattr(BOT.Setting, 'nzb_user_agent', '') or 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
+        custom_headers['User-Agent'] = user_agent
+        if cf_clearance:
+            custom_headers['Cookie'] = f'cf_clearance={cf_clearance}'
+            log.info("🍪 curl_cffi: Using Cloudflare cf_clearance cookie")
+
+    success = False
+    error_reason = "curl_cffi Unknown Failure"
+    file_size = 0
+
+    try:
+        async with AsyncSession(impersonate="chrome") as session:
+            async with session.get(link, headers=custom_headers, stream=True, follow_redirects=True) as response:
+                if response.status_code >= 400:
+                    error_reason = f"HTTP Error {response.status_code}"
+                    log.error(f"curl_cffi download response status: {response.status_code}")
+                    return False
+                
+                total_size = 0
+                content_length = response.headers.get('content-length') or response.headers.get('Content-Length')
+                if content_length:
+                    try:
+                        total_size = int(content_length)
+                    except ValueError:
+                        pass
+
+                log.info(f"🚀 curl_cffi download started: {expected_filename} | Total size: {sizeUnit(total_size)}")
+
+                downloaded_size = 0
+                last_update_call = 0
+
+                with open(file_path, "wb") as f:
+                    async for chunk in response.aiter_content(chunk_size=1024*1024):
+                        if (_task_error and _task_error.state) or (task_ctx and task_ctx.cancel_event.is_set()):
+                            log.warning(f"curl_cffi download cancelled for {expected_filename}")
+                            f.close()
+                            if os.path.exists(file_path):
+                                try: os.remove(file_path)
+                                except OSError: pass
+                            error_reason = "Cancelled by User/Error"
+                            return False
+
+                        if chunk:
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                            now = time.time()
+
+                            if now - last_update_call > 2:
+                                last_update_call = now
+                                if total_size > 0:
+                                    speed_string, eta, percentage = speedETA(download_start_time, downloaded_size, total_size)
+                                    log.info(f"📥 curl_cffi progress: {sizeUnit(downloaded_size)}/{sizeUnit(total_size)} ({percentage:.1f}%) | {speed_string} | ETA: {getTime(eta)}")
+                                    await status_bar(_messages.status_head, speed_string, int(percentage), getTime(eta),
+                                                   downloaded_size, total_size, "curl_cffi 🌐", task_ctx=task_ctx)
+                                else:
+                                    speed = downloaded_size / (now - download_start_time) if (now - download_start_time) > 0 else 0
+                                    speed_string = f"{sizeUnit(speed)}/s"
+                                    log.info(f"📥 curl_cffi progress: {sizeUnit(downloaded_size)} / Unknown | {speed_string}")
+                                    await status_bar(_messages.status_head, speed_string, 0, "N/A",
+                                                   downloaded_size, 0, "curl_cffi 🌐", task_ctx=task_ctx)
+                                
+                                if task_ctx:
+                                    from ..utility.task_dashboard import try_update_summary
+                                    await try_update_summary()
+                
+                # Sniff stub HTML page
+                _STUB_THRESHOLD = 10 * 1024
+                if downloaded_size < _STUB_THRESHOLD and downloaded_size > 0:
+                    try:
+                        with open(file_path, 'rb') as _sf:
+                            _head = _sf.read(512)
+                        _ht = _head.decode('utf-8', errors='replace').strip().lower()
+                        _is_html = (
+                            _ht.startswith('<!doctype') or _ht.startswith('<html') or
+                            '<html' in _ht[:200] or '<head' in _ht[:200] or
+                            _ht.startswith('<?xml')
+                        )
+                        if _is_html:
+                            log.error(f"curl_cffi: Server returned HTML error page ({downloaded_size} B) instead of file.")
+                            try: os.remove(file_path)
+                            except OSError: pass
+                            return False
+                    except Exception as sniff_err:
+                        log.warning(f"curl_cffi: Could not sniff downloaded content: {sniff_err}")
+
+                log.info(f"curl_cffi download complete: {expected_filename} ({sizeUnit(downloaded_size)})")
+                success = True
+                file_size = downloaded_size
+
+    except Exception as err:
+        log.error(f"curl_cffi download failed for link index {num}: {err}", exc_info=True)
+        success = False
+        if os.path.exists(file_path):
+            try: os.remove(file_path)
+            except OSError: pass
+
+    return success
+
+
 async def aria2_Download(link: str, num: int, pre_determined_name: str = None, task_ctx = None, headers: dict = None, cookies: dict = None) -> bool:
     # Ensure necessary globals are accessible
     global BotTimes, Messages, TaskError, TRANSFER, Aria2c, Paths, log, clean_filename, apply_dot_style, on_output, is_google_drive, is_mega # Removed unnecessary urlparse, urllib, os here as they are imported
@@ -607,6 +792,28 @@ async def aria2_Download(link: str, num: int, pre_determined_name: str = None, t
                     await asyncio.sleep(_wait)
                     continue  # next attempt
                 else:
+                    # Fallback to curl_cffi for NZBCloud downloads if aria2c fails
+                    if 'nzbcloud.com' in link.lower():
+                        log.warning(f"Aria2c failed with code {exit_code} for NZBCloud URL. Falling back to curl_cffi_Download...")
+                        if os.path.exists(final_filepath_on_disk):
+                            try: os.remove(final_filepath_on_disk)
+                            except OSError: pass
+                        
+                        success = await curl_cffi_Download(
+                            link=link,
+                            num=num,
+                            pre_determined_name=pre_determined_name,
+                            task_ctx=task_ctx,
+                            headers=headers,
+                            cookies=cookies
+                        )
+                        if success:
+                            if os.path.exists(final_filepath_on_disk):
+                                file_size = os.path.getsize(final_filepath_on_disk)
+                        else:
+                            error_reason = "curl_cffi fallback download failed"
+                        break
+
                     log.error(f"Aria2c download failed for link index {num}. Reason: {error_reason}")
                     success = False
                     # Cleanup
