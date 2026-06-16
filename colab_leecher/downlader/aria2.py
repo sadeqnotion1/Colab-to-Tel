@@ -379,82 +379,82 @@ async def curl_cffi_Download(
 
     try:
         async with AsyncSession(impersonate="chrome") as session:
-            async with session.get(link, headers=custom_headers, stream=True, follow_redirects=True) as response:
-                if response.status_code >= 400:
-                    error_reason = f"HTTP Error {response.status_code}"
-                    log.error(f"curl_cffi download response status: {response.status_code}")
-                    return False
-                
-                total_size = 0
-                content_length = response.headers.get('content-length') or response.headers.get('Content-Length')
-                if content_length:
-                    try:
-                        total_size = int(content_length)
-                    except ValueError:
-                        pass
+            response = await session.get(link, headers=custom_headers, stream=True, allow_redirects=True)
+            if response.status_code >= 400:
+                error_reason = f"HTTP Error {response.status_code}"
+                log.error(f"curl_cffi download response status: {response.status_code}")
+                return False
+            
+            total_size = 0
+            content_length = response.headers.get('content-length') or response.headers.get('Content-Length')
+            if content_length:
+                try:
+                    total_size = int(content_length)
+                except ValueError:
+                    pass
 
-                log.info(f"🚀 curl_cffi download started: {expected_filename} | Total size: {sizeUnit(total_size)}")
+            log.info(f"🚀 curl_cffi download started: {expected_filename} | Total size: {sizeUnit(total_size)}")
 
-                downloaded_size = 0
-                last_update_call = 0
+            downloaded_size = 0
+            last_update_call = 0
 
-                with open(file_path, "wb") as f:
-                    async for chunk in response.aiter_content(chunk_size=1024*1024):
-                        if (_task_error and _task_error.state) or (task_ctx and task_ctx.cancel_event.is_set()):
-                            log.warning(f"curl_cffi download cancelled for {expected_filename}")
-                            f.close()
-                            if os.path.exists(file_path):
-                                try: os.remove(file_path)
-                                except OSError: pass
-                            error_reason = "Cancelled by User/Error"
-                            return False
-
-                        if chunk:
-                            f.write(chunk)
-                            downloaded_size += len(chunk)
-                            now = time.time()
-
-                            if now - last_update_call > 2:
-                                last_update_call = now
-                                if total_size > 0:
-                                    speed_string, eta, percentage = speedETA(download_start_time, downloaded_size, total_size)
-                                    log.info(f"📥 curl_cffi progress: {sizeUnit(downloaded_size)}/{sizeUnit(total_size)} ({percentage:.1f}%) | {speed_string} | ETA: {getTime(eta)}")
-                                    await status_bar(_messages.status_head, speed_string, int(percentage), getTime(eta),
-                                                   downloaded_size, total_size, "curl_cffi 🌐", task_ctx=task_ctx)
-                                else:
-                                    speed = downloaded_size / (now - download_start_time) if (now - download_start_time) > 0 else 0
-                                    speed_string = f"{sizeUnit(speed)}/s"
-                                    log.info(f"📥 curl_cffi progress: {sizeUnit(downloaded_size)} / Unknown | {speed_string}")
-                                    await status_bar(_messages.status_head, speed_string, 0, "N/A",
-                                                   downloaded_size, 0, "curl_cffi 🌐", task_ctx=task_ctx)
-                                
-                                if task_ctx:
-                                    from ..utility.task_dashboard import try_update_summary
-                                    await try_update_summary()
-                
-                # Sniff stub HTML page
-                _STUB_THRESHOLD = 10 * 1024
-                if downloaded_size < _STUB_THRESHOLD and downloaded_size > 0:
-                    try:
-                        with open(file_path, 'rb') as _sf:
-                            _head = _sf.read(512)
-                        _ht = _head.decode('utf-8', errors='replace').strip().lower()
-                        _is_html = (
-                            _ht.startswith('<!doctype') or _ht.startswith('<html') or
-                            '<html' in _ht[:200] or '<head' in _ht[:200] or
-                            _ht.startswith('<?xml')
-                        )
-                        if _is_html:
-                            log.error(f"curl_cffi: Server returned HTML error page ({downloaded_size} B) instead of file.")
+            with open(file_path, "wb") as f:
+                async for chunk in response.aiter_content(chunk_size=1024*1024):
+                    if (_task_error and _task_error.state) or (task_ctx and task_ctx.cancel_event.is_set()):
+                        log.warning(f"curl_cffi download cancelled for {expected_filename}")
+                        f.close()
+                        if os.path.exists(file_path):
                             try: os.remove(file_path)
                             except OSError: pass
-                            return False
-                    except Exception as sniff_err:
-                        log.warning(f"curl_cffi: Could not sniff downloaded content: {sniff_err}")
+                        error_reason = "Cancelled by User/Error"
+                        return False
 
-                log.info(f"curl_cffi download complete: {expected_filename} ({sizeUnit(downloaded_size)})")
-                success = True
-                file_size = downloaded_size
+                    if chunk:
+                        f.write(chunk)
+                        downloaded_size += len(chunk)
+                        now = time.time()
+
+                        if now - last_update_call > 2:
+                            last_update_call = now
+                            if total_size > 0:
+                                speed_string, eta, percentage = speedETA(download_start_time, downloaded_size, total_size)
+                                log.info(f"📥 curl_cffi progress: {sizeUnit(downloaded_size)}/{sizeUnit(total_size)} ({percentage:.1f}%) | {speed_string} | ETA: {getTime(eta)}")
+                                await status_bar(_messages.status_head, speed_string, int(percentage), getTime(eta),
+                                               downloaded_size, total_size, "curl_cffi 🌐", task_ctx=task_ctx)
+                            else:
+                                speed = downloaded_size / (now - download_start_time) if (now - download_start_time) > 0 else 0
+                                speed_string = f"{sizeUnit(speed)}/s"
+                                log.info(f"📥 curl_cffi progress: {sizeUnit(downloaded_size)} / Unknown | {speed_string}")
+                                await status_bar(_messages.status_head, speed_string, 0, "N/A",
+                                               downloaded_size, 0, "curl_cffi 🌐", task_ctx=task_ctx)
+                            
+                            if task_ctx:
+                                from ..utility.task_dashboard import try_update_summary
+                                await try_update_summary()
+            
+            # Sniff stub HTML page
+            _STUB_THRESHOLD = 10 * 1024
+            if downloaded_size < _STUB_THRESHOLD and downloaded_size > 0:
+                try:
+                    with open(file_path, 'rb') as _sf:
+                        _head = _sf.read(512)
+                    _ht = _head.decode('utf-8', errors='replace').strip().lower()
+                    _is_html = (
+                        _ht.startswith('<!doctype') or _ht.startswith('<html') or
+                        '<html' in _ht[:200] or '<head' in _ht[:200] or
+                        _ht.startswith('<?xml')
+                    )
+                    if _is_html:
+                        log.error(f"curl_cffi: Server returned HTML error page ({downloaded_size} B) instead of file.")
+                        try: os.remove(file_path)
+                        except OSError: pass
+                        return False
+                except Exception as sniff_err:
+                    log.warning(f"curl_cffi: Could not sniff downloaded content: {sniff_err}")
+
+            log.info(f"curl_cffi download complete: {expected_filename} ({sizeUnit(downloaded_size)})")
+            success = True
+            file_size = downloaded_size
 
     except Exception as err:
         log.error(f"curl_cffi download failed for link index {num}: {err}", exc_info=True)
