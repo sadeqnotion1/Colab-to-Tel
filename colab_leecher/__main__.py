@@ -3776,6 +3776,22 @@ async def archive_type(client, message):
             msg = await message.reply_text("Invalid format! Use <code>zip</code>, <code>rar</code>, or <code>7z</code>", quote=True, parse_mode=enums.ParseMode.HTML)
     await sleep(15); await message_deleter(message, msg)
 
+@colab_bot.on_message(filters.command(["setclearance", "clearance"]) & filters.private)
+async def set_clearance(client, message):
+    global BOT; log.info("Received /setclearance command.")
+    if len(message.command) != 2:
+        msg = await message.reply_text("Send\n/setclearance <code>cf_clearance_cookie_value</code>", quote=True, parse_mode=enums.ParseMode.HTML)
+    else:
+        cookie_val = message.command[1].strip()
+        if cookie_val.startswith("cf_clearance="):
+            cookie_val = cookie_val.split("=", 1)[1]
+        if cookie_val.endswith(";"):
+            cookie_val = cookie_val[:-1]
+        BOT.Setting.nzb_cf_clearance = cookie_val
+        msg = await message.reply_text("✅ NZBCloud Cloudflare Clearance Cookie Set successfully!")
+        log.info("Cloudflare clearance cookie set dynamically.")
+    await sleep(15); await message_deleter(message, msg)
+
 # Helper function to perform extraction
 async def _perform_extraction(archive_path, file_filter=None, task_ctx=None):
     """
