@@ -41,7 +41,13 @@ async def mirror_cmd(client, message):
     BOT.Mode.ytdl = False
     BOT.Options.service_type = None
     text = build_link_prompt("♻️ Mirror Task » Send link(s)")
-    await task_starter(message, text)
+    prompt_msg = await task_starter(message, text)
+    if prompt_msg:
+        try:
+            from .__main__ import _update_setup_session
+            await _update_setup_session(message.from_user.id, mode="mirror")
+        except Exception as e:
+            log.error(f"Failed to update setup session for mirror: {e}")
 
 
 @colab_bot.on_message(filters.command(["leech", "l"]) & filters.private)
@@ -51,7 +57,13 @@ async def leech_cmd(client, message):
     BOT.Mode.ytdl = False
     BOT.Options.service_type = None
     text = build_link_prompt("⚡ Leech Task » Send link(s)")
-    await task_starter(message, text)
+    prompt_msg = await task_starter(message, text)
+    if prompt_msg:
+        try:
+            from .__main__ import _update_setup_session
+            await _update_setup_session(message.from_user.id, mode="leech")
+        except Exception as e:
+            log.error(f"Failed to update setup session for leech: {e}")
 
 
 @colab_bot.on_message(filters.command(["ytdl", "y"]) & filters.private)
@@ -61,7 +73,13 @@ async def ytdl_cmd(client, message):
     BOT.Mode.ytdl = True
     BOT.Options.service_type = "ytdl"
     text = build_ytdl_prompt()
-    await task_starter(message, text)
+    prompt_msg = await task_starter(message, text)
+    if prompt_msg:
+        try:
+            from .__main__ import _update_setup_session
+            await _update_setup_session(message.from_user.id, mode="leech", service_type="ytdl")
+        except Exception as e:
+            log.error(f"Failed to update setup session for ytdl: {e}")
 
 
 @colab_bot.on_message(filters.command(["ig", "instagram"]) & filters.private)
@@ -81,7 +99,13 @@ async def instagram_cmd(client, message):
         text = build_instagram_prompt()
 
         log.info("  - Calling task_starter()")
-        await task_starter(message, text)
+        prompt_msg = await task_starter(message, text)
+        if prompt_msg:
+            try:
+                from .__main__ import _update_setup_session
+                await _update_setup_session(message.from_user.id, mode="leech", service_type="direct")
+            except Exception as e:
+                log.error(f"Failed to update setup session for instagram: {e}")
         log.info("  ✓ task_starter() completed")
 
     except Exception as e:
@@ -103,7 +127,14 @@ async def nzbcloud_cmd(client, message):
         text = build_nzbcloud_prompt()
 
         log.info("  - Calling task_starter()")
-        await task_starter(message, text)
+        prompt_msg = await task_starter(message, text)
+        if prompt_msg:
+            try:
+                from .__main__ import _update_setup_session
+                await _update_setup_session(message.from_user.id, mode="leech", service_type="nzbcloud")
+                log.info("  ✓ Setup session initialized for NZBcloud")
+            except Exception as e:
+                log.error(f"Failed to update setup session for nzbcloud: {e}")
         log.info("  ✓ task_starter() completed")
 
     except Exception as e:

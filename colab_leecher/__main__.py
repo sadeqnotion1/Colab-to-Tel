@@ -2608,7 +2608,7 @@ async def handle_url(client: Client, message: Message):
                         raise ContinuePropagation
 
                     # Detection 2: Mindvalley (TITLE=)
-                    elif first_line.startswith("TITLE="):
+                    elif first_line.startswith("TITLE=") and any('.m3u8' in line.lower() or '.webvtt' in line.lower() for line in gist_lines):
                         log.info(f"Auto-detected Mindvalley mode for gist: {input_text}")
                         await _update_setup_session(user_id, mode="leech", service_type="mindvalley")
                         await _set_mindvalley_waiting(user_id, True)
