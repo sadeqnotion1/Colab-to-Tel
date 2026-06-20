@@ -66,6 +66,7 @@ def download(url, download_dir=DOWNLOAD_DIR):
         "format": "bv*+ba/b",
         "merge_output_format": "mp4",
         "outtmpl": outtmpl,
+        "trim_file_name": 150,
         "noplaylist": True,
         "quiet": False,
         "no_warnings": False,

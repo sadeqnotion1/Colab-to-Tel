@@ -428,6 +428,7 @@ class MindvalleyDownloader:
             cmd = [
                 "yt-dlp",
                 "-o", output_template,
+                "--trim-filenames", "150",
                 "--no-warnings",
                 "--no-check-certificate",
                 m3u8_url

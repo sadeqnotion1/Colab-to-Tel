@@ -172,6 +172,7 @@ def _build_ydl_opts(output_template):
         "format": "bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
         "outtmpl": output_template,
+        "trim_file_name": 150,
 
         "extractor_args": {
             "tiktok": {"webpage_download": True},
@@ -277,9 +278,9 @@ def YouTubeDL(url, task_ctx=None):
             task_ctx.metadata["ytdl_results"] = {}
         task_ctx.metadata["ytdl_results"][url] = result
 
-    base_template = f"{down_path}/%(upload_date>%Y-%m-%d,unknown_date)s_%(title,id)s.%(ext)s"
-    fallback_template = f"{down_path}/%(id)s.%(ext)s"
-    thumb_template = f"{thumbnail_ytdl}/%(id)s.%(ext)s"
+    base_template = f"{down_path}/%(upload_date>%Y-%m-%d,unknown_date)s_%(title,id).120B.%(ext)s"
+    fallback_template = f"{down_path}/%(id).150B.%(ext)s"
+    thumb_template = f"{thumbnail_ytdl}/%(id).150B.%(ext)s"
 
     ydl_opts = _build_ydl_opts(base_template)
     ydl_opts["outtmpl"] = {
@@ -317,7 +318,7 @@ def YouTubeDL(url, task_ctx=None):
                     entry_opts["ignoreerrors"] = True
                     entry_opts["no_abort_on_error"] = True
                     entry_opts["outtmpl"] = {
-                        "default": f"{playlist_dir}/%(title,id)s.%(ext)s",
+                        "default": f"{playlist_dir}/%(title,id).120B.%(ext)s",
                         "thumbnail": thumb_template,
                     }
                     entry_opts["progress_hooks"] = ydl_opts["progress_hooks"]

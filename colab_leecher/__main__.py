@@ -30,6 +30,7 @@ from .utility.helper import (
     clean_filename, extract_filename_from_url, apply_dot_style, sizeUnit # Import sizeUnit if needed
 )
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, Message
+from pyrogram.errors import RPCError, QueryIdInvalid
 # Example import line in __main__.py
 from .utility.helper import (
     isLink, setThumbnail, message_deleter, send_settings,
@@ -2802,6 +2803,26 @@ async def handle_url(client: Client, message: Message):
         await _clear_setup_session(user_id)
 # --- End handle_url ---
 
+
+async def _safe_answer_callback(callback_query, *args, **kwargs):
+    """Answer a callback query, ignoring stale/expired query-id errors.
+
+    Telegram invalidates a callback query id a few seconds after the button is
+    shown. If the bot was briefly disconnected (connection reset / request
+    timeout) the id may already be invalid by the time we answer. Answering is
+    only cosmetic (it dismisses the button spinner), so a failure here must NOT
+    abort the rest of the handler.
+    """
+    try:
+        return await callback_query.answer(*args, **kwargs)
+    except QueryIdInvalid:
+        log.warning("Callback answer skipped: query id already invalid/expired.")
+    except RPCError as e:
+        log.warning(f"Callback answer failed (ignored): {e}")
+    except Exception as e:
+        log.warning(f"Callback answer unexpected error (ignored): {e}")
+    return None
+
 @colab_bot.on_callback_query()
 async def handle_options(client: Client, callback_query: CallbackQuery):
     global BOT, MSG, TaskError, TRANSFER, OWNER, DUMP_ID
@@ -2819,15 +2840,15 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         or query_data == "cancel_all_tasks_confirm"
         or query_data == "cancel_all_tasks_abort"
     ):
-        await callback_query.answer("Only owner can cancel all.", show_alert=True)
+        await _safe_answer_callback(callback_query, "Only owner can cancel all.", show_alert=True)
         return
     # Assuming settings callbacks start with "setting_" or similar prefixes handled later
     # Example check (adjust if needed):
     if query_data.startswith(("setting_", "video", "caption", "thumb", "set-suffix", "set-prefix", "close", "back")) and user_id != OWNER:
-         await callback_query.answer("Owner only settings.", show_alert=True)
+         await _safe_answer_callback(callback_query, "Owner only settings.", show_alert=True)
          return
     if not message:
-        await callback_query.answer("Original message lost?", show_alert=True)
+        await _safe_answer_callback(callback_query, "Original message lost?", show_alert=True)
         log.error("Callback query failed: Message context lost.")
         return
 
@@ -2838,10 +2859,10 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         if query_data.startswith("dash_page:") or query_data.startswith("dash_refresh"):
             try:
                 if query_data.startswith("dash_refresh"):
-                    await callback_query.answer("Refreshing Dashboard... 🔄")
+                    await _safe_answer_callback(callback_query, "Refreshing Dashboard... 🔄")
                     await force_update_summary(client, move_to_bottom=False)
                 else:
-                    await callback_query.answer()
+                    await _safe_answer_callback(callback_query, )
                     page_num = int(query_data.split(":")[1])
                     from .utility.dashboard_state import get_dashboard_state
                     ds = get_dashboard_state()
@@ -2854,13 +2875,13 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         # === TORRENT FILE SELECTION TOGGLE ===
         if query_data.startswith("tfile_toggle:"):
             file_idx = int(query_data.split(":")[1])
-            await callback_query.answer()
+            await _safe_answer_callback(callback_query, )
 
             async with user_tasks_lock:
                 task_ctx = user_tasks.get(user_id, None)
 
             if not task_ctx:
-                await callback_query.answer("Session expired.", show_alert=True)
+                await _safe_answer_callback(callback_query, "Session expired.", show_alert=True)
                 return
 
             selected = task_ctx.metadata.get('selected_torrent_files', set())
@@ -2875,7 +2896,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
         # === TORRENT FILE SELECTION: SELECT ALL ===
         if query_data == "tfile_selectall":
-            await callback_query.answer("All files selected")
+            await _safe_answer_callback(callback_query, "All files selected")
             async with user_tasks_lock:
                 task_ctx = user_tasks.get(user_id, None)
             if not task_ctx:
@@ -2887,7 +2908,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
         # === TORRENT FILE SELECTION: DESELECT ALL ===
         if query_data == "tfile_deselectall":
-            await callback_query.answer("All files deselected")
+            await _safe_answer_callback(callback_query, "All files deselected")
             async with user_tasks_lock:
                 task_ctx = user_tasks.get(user_id, None)
             if not task_ctx:
@@ -2905,16 +2926,16 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             async with user_tasks_lock:
                 task_ctx = user_tasks.get(user_id, None)
             if not task_ctx:
-                await callback_query.answer("Session expired.", show_alert=True)
+                await _safe_answer_callback(callback_query, "Session expired.", show_alert=True)
                 return
             task_ctx.metadata['tfile_page'] = new_page
-            await callback_query.answer()
+            await _safe_answer_callback(callback_query, )
             await _show_torrent_file_selection(client, chat_id, task_ctx, message.id)
             return
 
         # Harmless no-op for the page indicator button
         if query_data == "tfile_page_info":
-            await callback_query.answer()
+            await _safe_answer_callback(callback_query, )
             return
 
         # === TORRENT FILE SELECTION: PAGE SELECT/CLEAR ===
@@ -2922,7 +2943,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             async with user_tasks_lock:
                 task_ctx = user_tasks.get(user_id, None)
             if not task_ctx:
-                await callback_query.answer("Session expired.", show_alert=True)
+                await _safe_answer_callback(callback_query, "Session expired.", show_alert=True)
                 return
             files = task_ctx.metadata.get('torrent_files', [])
             selected = task_ctx.metadata.get('selected_torrent_files', set())
@@ -2934,7 +2955,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             else:
                 selected -= page_ids
             task_ctx.metadata['selected_torrent_files'] = selected
-            await callback_query.answer("Page updated")
+            await _safe_answer_callback(callback_query, "Page updated")
             await _show_torrent_file_selection(client, chat_id, task_ctx, message.id)
             return
 
@@ -2944,19 +2965,19 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 task_ctx = user_tasks.get(user_id, None)
 
             if not task_ctx:
-                await callback_query.answer("Session expired.", show_alert=True)
+                await _safe_answer_callback(callback_query, "Session expired.", show_alert=True)
                 return
 
             selected = task_ctx.metadata.get('selected_torrent_files', set())
             if not selected:
-                await callback_query.answer("Select at least one file!", show_alert=True)
+                await _safe_answer_callback(callback_query, "Select at least one file!", show_alert=True)
                 return
 
             files = task_ctx.metadata.get('torrent_files', [])
             total = len(files)
             sel_count = len(selected)
 
-            await callback_query.answer(f"Confirmed: {sel_count}/{total} files selected")
+            await _safe_answer_callback(callback_query, f"Confirmed: {sel_count}/{total} files selected")
 
             torrent_dest_keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("Google Drive", callback_data="tdest_gdrive")],
@@ -2978,7 +2999,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         # === TORRENT DESTINATION SELECTION ===
         if query_data.startswith("tdest_"):
             choice = query_data.split("_")[1]
-            await callback_query.answer(f"Selected: {choice.capitalize()}")
+            await _safe_answer_callback(callback_query, f"Selected: {choice.capitalize()}")
             try:
                 await callback_query.message.delete()
             except:
@@ -3048,10 +3069,10 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
             choice = query_data.split("_")[1]
             orig_msg = callback_query.message.reply_to_message
             if not orig_msg:
-                await callback_query.answer("❌ Original message not found. Please resend the link.", show_alert=True)
+                await _safe_answer_callback(callback_query, "❌ Original message not found. Please resend the link.", show_alert=True)
                 return
             
-            await callback_query.answer(f"Selected: {choice.capitalize()}")
+            await _safe_answer_callback(callback_query, f"Selected: {choice.capitalize()}")
             try: await callback_query.message.delete()
             except: pass
             
@@ -3082,7 +3103,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         # --- Handle Parallel Task Choice ---
         if ":" in query_data and not query_data.startswith("cancel:"):
             # Acknowledge
-            await callback_query.answer()
+            await _safe_answer_callback(callback_query, )
             parts = query_data.split(":", 1)
             if len(parts) != 2:
                 await client.send_message(chat_id, "❌ Invalid parallel task action.")
@@ -3226,7 +3247,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
         # --- Service Selection ---
         if query_data.startswith("service_"):
-            await callback_query.answer() # Acknowledge first
+            await _safe_answer_callback(callback_query, ) # Acknowledge first
             service = query_data.split("_", 1)[1]
             log.info(f"User selected service: {service}")
             setup_session = await _update_setup_session(user_id, service_type=service)
@@ -3252,7 +3273,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
 
         # --- Upload Destination Selection (Google Drive or Local Mirror) ---
         elif query_data.startswith("destination_"):
-            await callback_query.answer()
+            await _safe_answer_callback(callback_query, )
             destination = query_data.split("_", 1)[1]
             log.info(f"User selected upload destination: {destination}")
 
@@ -3265,7 +3286,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 log.info("Mode set to 'mirror' for local Colab mirror")
             else:
                 log.error(f"Unknown destination: {destination}")
-                await callback_query.answer("Unknown destination!", show_alert=True)
+                await _safe_answer_callback(callback_query, "Unknown destination!", show_alert=True)
                 return
 
             pending_service = None
@@ -3318,12 +3339,12 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         # --- Filename Options ---
         # <<< THIS BLOCK'S INDENTATION MUST MATCH THE 'if' ABOVE >>>
         elif query_data.startswith("fn_"):
-            await callback_query.answer()
+            await _safe_answer_callback(callback_query, )
             # Make sure service_type and fn_choice parsing is correct
             parts = query_data.split("_")
             if len(parts) < 3:
                  log.error(f"Invalid fn_ query data format: {query_data}")
-                 await callback_query.answer("Internal error parsing choice.", show_alert=True)
+                 await _safe_answer_callback(callback_query, "Internal error parsing choice.", show_alert=True)
                  return
 
             service_type = parts[1] # e.g., 'Debrid' or 'bitso'
@@ -3412,7 +3433,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         # --- Leech Type Selection ---
         # <<< THIS BLOCK'S INDENTATION MUST MATCH THE 'if' AND 'elif' ABOVE >>>
         elif query_data.startswith("leechtype_"):
-            await callback_query.answer()
+            await _safe_answer_callback(callback_query, )
             leech_type = query_data.split("_", 1)[1]
             log.info(f"User selected leech type: {leech_type}")
             setup_session = await _get_setup_session(user_id)
@@ -3477,35 +3498,35 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         # Add settings callbacks here with correct indentation
         # Example:
         elif query_data == "setting_refresh":
-             await callback_query.answer("Refreshing settings...")
+             await _safe_answer_callback(callback_query, "Refreshing settings...")
              await send_settings(client, message, msg_id, False)
         elif query_data == "media":
              BOT.Options.stream_upload = True; BOT.Setting.stream_upload = "Media"
-             await callback_query.answer("Uploading As Media", show_alert=False)
+             await _safe_answer_callback(callback_query, "Uploading As Media", show_alert=False)
              await send_settings(client, message, msg_id, False)
         elif query_data.startswith("set_concurrency:"):
              concurrency_choice = query_data.split(":")[1]
              if concurrency_choice == "serial":
                  BOT.Options.concurrency = "serial"
                  BOT.Setting.concurrency = "Serial"
-                 await callback_query.answer("Tasks will run one-by-one", show_alert=False)
+                 await _safe_answer_callback(callback_query, "Tasks will run one-by-one", show_alert=False)
              else:
                  BOT.Options.concurrency = "parallel"
                  BOT.Setting.concurrency = "Parallel"
-                 await callback_query.answer("Tasks will run in parallel", show_alert=False)
+                 await _safe_answer_callback(callback_query, "Tasks will run in parallel", show_alert=False)
              await send_settings(client, message, msg_id, False)
         elif query_data == "document":
              BOT.Options.stream_upload = False; BOT.Setting.stream_upload = "Document"
-             await callback_query.answer("Uploading As Document", show_alert=False)
+             await _safe_answer_callback(callback_query, "Uploading As Document", show_alert=False)
              await send_settings(client, message, msg_id, False)
         elif query_data == "video":
-             await callback_query.answer("Video toggles are not available in this menu yet.", show_alert=True)
+             await _safe_answer_callback(callback_query, "Video toggles are not available in this menu yet.", show_alert=True)
         elif query_data == "caption":
-             await callback_query.answer("Caption style is fixed in this build.", show_alert=True)
+             await _safe_answer_callback(callback_query, "Caption style is fixed in this build.", show_alert=True)
         elif query_data == "thumb":
-             await callback_query.answer("Send a photo in this chat to set thumbnail.", show_alert=True)
+             await _safe_answer_callback(callback_query, "Send a photo in this chat to set thumbnail.", show_alert=True)
         elif query_data == "set-prefix":
-             await callback_query.answer()
+             await _safe_answer_callback(callback_query, )
              await _clear_settings_reply_waiting(client, chat_id, user_id)
              prompt_msg = await client.send_message(
                  chat_id,
@@ -3518,7 +3539,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                  settings_message_id=msg_id,
              )
         elif query_data == "set-suffix":
-             await callback_query.answer()
+             await _safe_answer_callback(callback_query, )
              await _clear_settings_reply_waiting(client, chat_id, user_id)
              prompt_msg = await client.send_message(
                  chat_id,
@@ -3533,18 +3554,18 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         # ... add other settings callbacks like "video", "caption", "thumb", "set-prefix", "set-suffix", "close", "back" ...
         # Ensure they all start with 'elif' and have the same indentation as the main 'if'/'elif' blocks
         elif query_data == "close":
-            await callback_query.answer("Settings closed")
+            await _safe_answer_callback(callback_query, "Settings closed")
             await message.delete()
         elif query_data == "back":
-            await callback_query.answer()
+            await _safe_answer_callback(callback_query, )
             await send_settings(client, message, msg_id, False)
         elif query_data == "settings_back":
-            await callback_query.answer()
+            await _safe_answer_callback(callback_query, )
             await send_settings(client, message, msg_id, False)
         elif query_data == "page_info":
-            await callback_query.answer("Page info", show_alert=False)
+            await _safe_answer_callback(callback_query, "Page info", show_alert=False)
         elif query_data == "pause" or query_data.startswith("pause:"):
-            await callback_query.answer("Pause is not implemented yet.", show_alert=True)
+            await _safe_answer_callback(callback_query, "Pause is not implemented yet.", show_alert=True)
 
         # --- Task Cancellation ---
         # <<< THIS BLOCK'S INDENTATION MUST MATCH THE PREVIOUS BLOCKS >>>
@@ -3583,7 +3604,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 log.info("Legacy task cancellation requested by user via button.")
 
             try:
-                await callback_query.answer("Cancelling...")
+                await _safe_answer_callback(callback_query, "Cancelling...")
             except Exception:
                 pass
 
@@ -3653,9 +3674,9 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         elif query_data == "cancel_all_tasks":
             all_tasks = await TASK_QUEUE.get_all_tasks()
             if not all_tasks:
-                await callback_query.answer("No active tasks to cancel.", show_alert=True)
+                await _safe_answer_callback(callback_query, "No active tasks to cancel.", show_alert=True)
                 return
-            await callback_query.answer()
+            await _safe_answer_callback(callback_query, )
             confirm_keyboard = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("Confirm Cancel All", callback_data="cancel_all_tasks_confirm"),
@@ -3668,7 +3689,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 reply_markup=confirm_keyboard,
             )
         elif query_data == "cancel_all_tasks_abort":
-            await callback_query.answer("No tasks were canceled.", show_alert=True)
+            await _safe_answer_callback(callback_query, "No tasks were canceled.", show_alert=True)
             if message:
                 try:
                     await message.delete()
@@ -3677,9 +3698,9 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         elif query_data == "cancel_all_tasks_confirm":
             all_tasks = await TASK_QUEUE.get_all_tasks()
             if not all_tasks:
-                await callback_query.answer("No active tasks to cancel.", show_alert=True)
+                await _safe_answer_callback(callback_query, "No active tasks to cancel.", show_alert=True)
                 return
-            await callback_query.answer("Cancelling all tasks...", show_alert=True)
+            await _safe_answer_callback(callback_query, "Cancelling all tasks...", show_alert=True)
 
             log.info(f"Bulk cancel requested: {len(all_tasks)} tasks")
             from .utility.cancellation_coordinator import get_cancellation_coordinator
@@ -3708,13 +3729,13 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         # <<< THIS BLOCK'S INDENTATION MUST MATCH THE PREVIOUS BLOCKS >>>
         else:
             log.warning(f"Unhandled callback query data: {query_data}")
-            await callback_query.answer("Unknown action!", show_alert=True)
+            await _safe_answer_callback(callback_query, "Unknown action!", show_alert=True)
 
     # This 'except' MUST be aligned with the 'try' block at the start of the function
     except Exception as e:
         log.error(f"Error handling callback {query_data}: {e}", exc_info=True)
         try:
-            await callback_query.answer("An error occurred!", show_alert=True)
+            await _safe_answer_callback(callback_query, "An error occurred!", show_alert=True)
         except Exception as callback_answer_err:
             log.debug(f"Could not send callback error answer: {callback_answer_err}")
         # Reset shared runtime objects used by legacy code paths.

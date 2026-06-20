@@ -28,7 +28,8 @@ from .helper import (
     sysINFO,
     getTime,
     clean_filename,
-    get_max_split_size_mib)
+    get_max_split_size_mib,
+    is_split_file)
 from .task_context import TaskContext
 from .reply_state import set_password_reply_waiting
 from .ui_components import ProgressBar
@@ -930,6 +931,50 @@ async def sizeChecker(
         _, extension = ospath.splitext(filename)
         ext_lower = extension.lower()
         processing_done = False
+
+        # === BEGIN custom-name patch ===
+        # Apply the user's custom/leech name to the file BEFORE any split/archive,
+        # so every produced part (.001 / .partNNN / .7z.001 ...) inherits that name.
+        # Name priority mirrors archive(): custom_name > filenames[0] > download_name.
+        try:
+            _messages = task_ctx.messages if task_ctx else Messages
+        except Exception:
+            _messages = None
+
+        if not is_split_file(filename):
+            resolved_name = None
+            if getattr(_bot.Options, "custom_name", ""):
+                resolved_name = _bot.Options.custom_name
+            elif getattr(_bot.Options, "filenames", None):
+                resolved_name = _bot.Options.filenames[0]
+            elif _messages is not None and getattr(_messages, "download_name", ""):
+                resolved_name = _messages.download_name
+
+            if resolved_name:
+                res_root, res_ext = ospath.splitext(resolved_name)
+                # Drop an extension the user may have typed (e.g. /setname movie.mp4),
+                # but keep the real on-disk extension so fileType/split logic still works.
+                base_stem = res_root if (res_ext and len(res_ext) <= 5) else resolved_name
+                new_filename = clean_filename(base_stem) + extension
+                if new_filename and new_filename != filename:
+                    new_path = ospath.join(ospath.dirname(file_path), new_filename)
+                    if not ospath.exists(new_path):
+                        try:
+                            os.rename(file_path, new_path)
+                            log.info(
+                                f"sizeChecker: applied custom name before split: "
+                                f"'{filename}' -> '{new_filename}'"
+                            )
+                            file_path = new_path
+                            _, filename = ospath.split(file_path)
+                            _, extension = ospath.splitext(filename)
+                            ext_lower = extension.lower()
+                        except OSError as rn_err:
+                            log.warning(
+                                f"sizeChecker: could not rename to custom name "
+                                f"'{new_filename}': {rn_err}"
+                            )
+        # === END custom-name patch ===
 
         base = re.sub(r'\.(part\d+|[0-9]{3,}|z[0-9]{2,}|zip\.\d+)$', '', filename)
         base_ext = ospath.splitext(base)[1].lower()

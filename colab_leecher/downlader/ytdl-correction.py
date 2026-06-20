@@ -112,6 +112,7 @@ def _build_ydl_opts(output_template):
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "merge_output_format": "mp4",
         "outtmpl": output_template,
+        "trim_file_name": 150,
 
         "extractor_args": {
             "tiktok": {"webpage_download": True},
@@ -206,9 +207,9 @@ def YouTubeDL(url):
     if not ospath.exists(Paths.thumbnail_ytdl):
         makedirs(Paths.thumbnail_ytdl)
 
-    base_template = f"{Paths.down_path}/%(extractor_key,unknown_site)s/%(uploader,unknown_uploader)s/%(upload_date>%Y-%m-%d,unknown_date)s_%(title,id)s.%(ext)s"
-    fallback_template = f"{Paths.down_path}/%(id)s.%(ext)s"
-    thumb_template = f"{Paths.thumbnail_ytdl}/%(id)s.%(ext)s"
+    base_template = f"{Paths.down_path}/%(extractor_key,unknown_site)s/%(uploader,unknown_uploader)s/%(upload_date>%Y-%m-%d,unknown_date)s_%(title,id).120B.%(ext)s"
+    fallback_template = f"{Paths.down_path}/%(id).150B.%(ext)s"
+    thumb_template = f"{Paths.thumbnail_ytdl}/%(id).150B.%(ext)s"
 
     ydl_opts = _build_ydl_opts(base_template)
     ydl_opts["outtmpl"] = {
@@ -243,7 +244,7 @@ def YouTubeDL(url):
 
                     entry_opts = _build_ydl_opts(fallback_template)
                     entry_opts["outtmpl"] = {
-                        "default": f"{playlist_dir}/%(title,id)s.%(ext)s",
+                        "default": f"{playlist_dir}/%(title,id).120B.%(ext)s",
                         "thumbnail": thumb_template,
                     }
                     entry_opts["progress_hooks"] = ydl_opts["progress_hooks"]
