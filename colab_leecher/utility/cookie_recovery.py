@@ -53,6 +53,24 @@ _COOKIE_ERROR_MARKERS = (
     "cookies",
 )
 
+# Errors that look like 403 but are NOT fixable with cookies.
+_GEO_IP_MARKERS = (
+    "geolocation restrict",
+    "geo restrict",
+    "geo-restrict",
+    "not available in your",
+    "not available from your location",
+    "blocked it in your country",
+    "this video is not available in your country",
+)
+
+
+def is_geo_blocked(error_str: str) -> bool:
+    if not error_str:
+        return False
+    return any(m in str(error_str).lower() for m in _GEO_IP_MARKERS)
+
+
 # A small set of common multi-label public suffixes so site_from_url() returns a
 # sensible registrable domain (e.g. bbc.co.uk -> bbc.co.uk, not co.uk).
 _TWO_LEVEL_SUFFIXES = {
@@ -73,6 +91,8 @@ def needs_cookies(error_str: str) -> bool:
     if not error_str:
         return False
     low = str(error_str).lower()
+    if is_geo_blocked(low):      # geo/IP block -> cookies won't help
+        return False
     return any(marker in low for marker in _COOKIE_ERROR_MARKERS)
 
 

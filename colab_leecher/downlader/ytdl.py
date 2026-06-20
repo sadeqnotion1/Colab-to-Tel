@@ -19,6 +19,7 @@ from colab_leecher.utility.cookie_recovery import (
     needs_cookies,
     site_from_url,
     attempt_cookie_recovery,
+    is_geo_blocked,
 )
 
 log = logging.getLogger(__name__)
@@ -82,6 +83,15 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
 
         except Exception as e:
             err_str = str(e)
+            if is_geo_blocked(err_str):
+                final_err = ("Geo/IP-restricted stream: this signed URL is locked to a "
+                             "specific country/IP and cannot be downloaded from Colab. "
+                             "Use a proxy in the allowed region (see below).")
+                if task_ctx:
+                    task_ctx.error.state = True
+                    task_ctx.error.text = final_err
+                break
+
             hint = ""
             lower_err = err_str.lower()
             if needs_cookies(err_str):
