@@ -187,7 +187,7 @@ def _build_ydl_opts(output_template):
         "extractor_args": {
             "tiktok": {"webpage_download": True},
         },
-        "remote_components": "ejs:github",
+        "remote_components": ["ejs:github"],
 
         "concurrent_fragment_downloads": 10,
         "http_chunk_size": 10485760,
@@ -195,7 +195,7 @@ def _build_ydl_opts(output_template):
 
         "retries": 10,
         "fragment_retries": 10,
-        "skip_unavailable_fragments": True,
+        "skip_unavailable_fragments": False,
         "ignoreerrors": False,
         "no_abort_on_error": False,
 
@@ -301,7 +301,7 @@ def YouTubeDL(url, task_ctx=None):
     try:
         ydl = yt_dlp.YoutubeDL(ydl_opts)
     except Exception as e:
-        log.warning(f"Failed to init yt-dlp: {e}. Retrying without impersonation.")
+        log.warning(f"Failed to init yt-dlp ({type(e).__name__}: {e!r}). Retrying without impersonation.")
         ydl_opts.pop("impersonate", None)
         ydl = yt_dlp.YoutubeDL(ydl_opts)
 
@@ -457,7 +457,7 @@ def _get_YT_Name_sync(link, task_ctx=None):
     try:
         ydl = yt_dlp.YoutubeDL(ydl_opts)
     except Exception as e:
-        log.warning(f"Failed to init yt-dlp in get_YT_Name: {e}. Retrying without impersonation.")
+        log.warning(f"Failed to init yt-dlp in get_YT_Name ({type(e).__name__}: {e!r}). Retrying without impersonation.")
         ydl_opts.pop("impersonate", None)
         ydl = yt_dlp.YoutubeDL(ydl_opts)
 
