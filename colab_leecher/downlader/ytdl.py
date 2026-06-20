@@ -35,7 +35,11 @@ async def YTDL_Status(link, num, task_ctx=None, max_retries=3):
 
     while attempt < max_retries:
         try:
-            name = await get_YT_Name(link, task_ctx)
+            try:
+                name = await get_YT_Name(link, task_ctx)
+            except Exception as e:
+                log.warning(f"Name lookup failed ({e}); using fallback name and continuing to download.")
+                name = "YTDL Download"
             from ..utility.message_safety import escape_html
             Messages.status_head = f"<b>\U0001f4e5 DOWNLOADING FROM \u00bb </b><i>\U0001f517Link {str(num).zfill(2)}</i>\n\n<code>{escape_html(name)}</code>\n"
 
@@ -449,6 +453,11 @@ def _get_YT_Name_sync(link, task_ctx=None):
         "no_warnings": True,
         "logger": SilentLogger(),
     }
+    proxy = os.environ.get("YTDL_PROXY") or os.environ.get("HTTPS_PROXY")
+    if proxy:
+        ydl_opts["proxy"] = proxy
+    ydl_opts["geo_bypass"] = True
+    ydl_opts["geo_bypass_country"] = os.environ.get("YTDL_GEO_COUNTRY", "US")
     if has_impersonate:
         ydl_opts["impersonate"] = "chrome"
     if ospath.exists("cookies.txt"):
