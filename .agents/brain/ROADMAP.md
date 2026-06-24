@@ -39,7 +39,7 @@ Status: 🧪 ready-to-fix · ⚠️ partial · 🔍 to-audit
 
 - [ ] **A1** 🧪 yt-dlp template: date as suffix (not `unknown_date_` prefix) + better no-title fallback — `ytdl.py YouTubeDL()` (effort S)
 - [ ] **A2** 🧪 NZBcloud real-name auto-resolve (HEAD/Content-Disposition) vs forced `TITLE=` — `manager.nzbcloud_download`, `build_nzbcloud_prompt` (M)
-- [ ] **A3** ⚠️ task dashboard logic — audited copy/queue; `task_dashboard.py` + progress unification pending (rate-limited) (L)
+- [ ] **A3** 🧪 task dashboard fully audited — 2 bar renderers, `0%/Unknown` + stuck-archive branches, 4 progress producers; fold into M2 unification (L)
 - [ ] **A4** 🧪 `/nimbaha` mode: add cmd + `force_split_mib=990` so `get_max_split_size_mib()` guarantees <1GB parts — `aliases.py`, `telegram.upload_file`, `handler.Leech` (M)
 - [ ] **A5** 🧪 multitasking clobber: global `BOT.Mode/Options/Setting` shared across tasks — isolate into `TaskContext` or serialize intake (L/S)
 - [ ] **A6** 🧪 notify on thumbnail failure (currently `log.warning` only → silent DEFAULT_HERO) — `uploader/telegram.py` (S)
@@ -47,5 +47,6 @@ Status: 🧪 ready-to-fix · ⚠️ partial · 🔍 to-audit
 - [ ] **A8** 🧪 forwarded media menu: GDrive / Colab / unzip→reupload (parts exist: `build_upload_destination_prompt`, `Unzip_Handler`, `Leech`) (M/L)
 - [ ] **A9** 🧪 PC smoke tests for downloaders (detect→metadata only) — precedent: root `nzb_pc_downloader.py` (M)
 - [ ] **A10** 🔍 catch-all: command drift, per-task settings leak, aria2 stub-detection gap, nested ytdl retry ladder, progress unification, open PR
+
 
 

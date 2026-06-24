@@ -6,7 +6,7 @@
 >
 > Status: 🔍 to-audit · 🧪 audited→ready-to-fix · ⚠️ partially-audited · ✅ done · ❄️ deferred
 > Sources read this pass: `ytdl.py`, `manager.py`, `aliases.py`, `uploader/telegram.py`,
-> `utility/ui_copy.py`, `utility/handler.py`, `utility/converters.py` (prior). `task_dashboard.py` = rate-limited, pending.
+> `utility/ui_copy.py`, `utility/handler.py`, `utility/converters.py` (prior), and `utility/task_dashboard.py` (2026-06-24 follow-up read).
 
 ---
 
@@ -45,18 +45,19 @@ and the playlist branch reuses `"%(title,id).120B.%(ext)s"`.
   (“Use detected name” vs “Type your own”), same UX other services already have.
 **Effort:** M. **Risk:** medium (depends on nzbcloud returning a usable header behind Cloudflare).
 
-## A3 — task_manager / Telegram dashboard logic  ⚠️ partially-audited (dashboard internals pending)
+## A3 — task_manager / Telegram dashboard logic  🧪 ready-to-fix (dashboard now audited)
 **Reported:** task_manager Telegram UI logic isn’t the best.
-**Confirmed so far:**
-- `aliases.py → status_cmd` deletes the user command and calls `update_summary_dashboard(client, force=True, move_to_bottom=True)`; reads `TASK_QUEUE.get_all_tasks()`.
-- `ui_copy.py` holds the copy: `build_archiver_progress_text` (Modern bar), `build_health_summary_text`,
-  `summarize_task_name`, `build_cancel_task_button_label`, `build_task_in_progress_notice`.
-- Known issue (`Issues/mimo.txt`): **3 competing progress systems** (helper.py / progress_dispatcher.py / task_dashboard.py).
-**Still to read (blocked by GitHub rate limit this pass):** `colab_leecher/utility/task_dashboard.py`,
-  `utility/task_context.py` (TASK_QUEUE), `utility/progress_dispatcher.py`, `helper.py status_bar`.
-**Provisional fix direction:** one source of truth for status (single renderer), debounce message edits (current code
-  throttles at 2.0–2.5s in several places independently), and reconcile the cancel/queue buttons.
-**Effort:** L. **Risk:** high (touches the progress unification milestone). **Next action:** finish reading dashboard files.
+**Confirmed in `colab_leecher/utility/task_dashboard.py → update_summary_dashboard()`:**
+- **Two different bar renderers inside one dashboard:** page 0 (Global list) uses `_progress_bar()` → `ProgressBar.generate(pct, 10, "ascii")` wrapped in `[...]`; the detail pages use `ProgressBar.generate(pct, length=16, style=BAR_STYLE)` (gradient). So one task shows a 10-char ASCII bar on the list and a 16-char gradient bar on its own page — inconsistent by design.
+- **`0% / Unknown` upload bug — exact branch:** in the upload view, `if ts <= 0 or ts < u_bytes:` it falls back to `current_file_size`; when that is `0` → `percentage = 0.0, total_str = "Unknown"`. That is exactly the “0% / Unknown” on split-part uploads (total_size isn’t known before each part starts).
+- **Archiving bar stuck at 0% — exact branch:** the archiving view uses `task_ctx.transfer.get_percentage()`, and only if that’s `0.0` falls back to `files_processed/total_files`. If the archiver reports neither, it sits at 0% (precisely what the delivered `archive_progress.py` poller fixes).
+- **Percentage computed differently per page:** page 0 uses `base = up or down; base/ts*100` with **no** current_file_size fallback, while the detail page has the cfs fallback → the same task can read 0% on the list but a real % on its detail page.
+- **Throttle/debounce constants are scattered:** `should_update_summary()`, `min_forced_update_interval`, a 2.0s window in `force_update_summary`, and a `_ui_suspended_until` FloodWait guard — each owns its own timing, so edits can still race.
+- **A 4th progress coordinator confirmed:** this file does `get_progress_manager().subscribe(try_update_summary)` at import. So on top of `Issues/mimo.txt`’s three (helper.py / progress_dispatcher.py / task_dashboard.py) there is also `progress_manager` feeding it — the dashboard is downstream of all of them.
+- **Global thumbnail again (ties A5/A6):** dashboard thumb = `BOT.Setting.thumbnail` + `Paths.THMB_PATH` (global) → first task’s `hero_image` → `Paths.DEFAULT_HERO`; a multi-task dashboard can’t show a per-task thumb.
+**Root cause:** there is no single status model — each stage (download/archive/upload) and each page recomputes %/total/bar independently, fed by 4 progress producers and gated by several independent timers.
+**Fix plan:** (1) one `render_progress(task_ctx, page)` helper so list and detail agree; (2) one `BAR_STYLE` everywhere (drop the ascii/gradient split); (3) fix `Unknown` by setting `current_file_size` before each part upload; (4) collapse the 4 producers into the single ProgressManager source (the M2 unification milestone); (5) one debounce owner. Pairs with the delivered archive/upload-progress package.
+**Effort:** L. **Risk:** high (this *is* the M2 progress-unification milestone). **Status:** fully audited — ready to schedule under M2.
 
 ## A4 — `/nimbaha` mode: force every output part <1GB (hard external limit)  🧪 ready-to-fix (design clear)
 **Reported:** An upstream bot only accepts links if each file is <1GB; want a regular/aria-like mode that guarantees parts <1GB.
