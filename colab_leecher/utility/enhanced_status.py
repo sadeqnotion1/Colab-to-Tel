@@ -4,7 +4,7 @@ Beautiful, modern progress tracking for downloads/uploads
 """
 
 import os
-BAR_STYLE = os.environ.get("BAR_STYLE", "gradient")
+from .bar_style import BAR_STYLE  # M2: single source of truth
 from typing import Dict, Any, List
 from datetime import datetime
 from .ui_components import (

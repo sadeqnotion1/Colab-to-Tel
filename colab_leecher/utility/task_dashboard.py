@@ -26,7 +26,7 @@ from .enhanced_status import StatusDisplay
 from .formatting import format_bytes, format_speed
 
 BOT_DEBUG = os.getenv("BOT_DEBUG", "0") == "1"
-BAR_STYLE = os.environ.get("BAR_STYLE", "gradient")
+from .bar_style import BAR_STYLE  # M2: single source of truth
 
 log = logging.getLogger(__name__)
 

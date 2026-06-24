@@ -12,14 +12,14 @@ Don't start the next one until the current one's acceptance criteria pass.
 ## ✅ M0 — Scaffold & brain
 - `.agents/` brain installed from the CreateProject starter pack and filled for this repo (2026-06-24).
 
-## 🟦 M1 — Fast 7z + honest progress + streaming upload  ← NEXT
+## ✅ M1 — Fast 7z + honest progress + streaming upload
 - Integrate the drop-in fix: `utility/archive_progress.py` + `utility/streaming_archive.py` + anchored edits.
-- Acceptance: faster store-mode 7z; archiving bar moves; per-part upload shows real %; `STREAM_ARCHIVE_UPLOAD=1` overlaps archive+upload; env-flag rollback intact.
+- Acceptance: faster store-mode 7z; archiving bar moves; per-part upload shows real %; `STREAM_ARCHIVE_UPLOAD=1` overlaps archive+upload; env-flag rollback intact. (Completed 2026-06-24)
 
-## ⬜ M2 — Progress-system unification
-- Collapse the 3 competing renderers (`helper.py` `status_bar`, `progress_dispatcher.py`, `task_dashboard.py`) into one source of truth.
+## 🟦 M2 — Progress-system unification  ← NEXT
+- Collapse the 3 competing renderers into one source of truth (`ProgressManager` + `task_dashboard`), and centralize duplicated `BAR_STYLE` in `bar_style.py`.
 - Reference: `Issues/mimo.txt`, `Issues/01_progress_system_unification.md`.
-- Acceptance: a single renderer + one `BAR_STYLE`; download/archive/upload all use it; no duplicate/competing edits to the same Telegram message.
+- Acceptance: single renderer + one `BAR_STYLE` (centralized in `bar_style.py`); download/archive/upload all use it; live verification in Google Colab passes with no duplicate edits or regressions.
 
 ## ⬜ M3 — Pipeline decision: keep vs. remove `colab_leecher`
 - Resolve the open PR "Remove legacy colab_leecher bot pipeline". Decide whether the bot stays (and these improvements land) or the repo narrows to `ytdl.py`.

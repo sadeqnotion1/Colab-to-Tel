@@ -19,7 +19,8 @@
     {"id": "archive_progress", "type": "new", "path": "colab_leecher/utility/archive_progress.py", "desc": "NEW (Fix #2): poll on-disk .7z.00N sizes -> dashboard percent."},
     {"id": "streaming_archive", "type": "new", "path": "colab_leecher/utility/streaming_archive.py", "desc": "NEW (Fix #5): upload each volume as the next appears; STREAM_ARCHIVE_UPLOAD=1."},
     {"id": "issues_mimo", "type": "doc", "path": "Issues/mimo.txt", "desc": "Notes the 3 competing progress systems."},
-    {"id": "issues_unify", "type": "doc", "path": "Issues/01_progress_system_unification.md", "desc": "Progress unification plan (M2)."}
+    {"id": "issues_unify", "type": "doc", "path": "Issues/01_progress_system_unification.md", "desc": "Progress unification plan (M2)."},
+    {"id": "bar_style", "type": "module", "path": "colab_leecher/utility/bar_style.py", "desc": "Centralized single source of truth for BAR_STYLE."}
   ],
   "edges": [
     {"from": "task_manager", "to": "handler", "rel": "calls Zip_Handler"},
@@ -34,6 +35,9 @@
     {"from": "enhanced_status", "to": "telegram", "rel": "renders upload status"},
     {"from": "archive_progress", "to": "task_dashboard", "rel": "drives files_processed/total_files"},
     {"from": "streaming_archive", "to": "telegram", "rel": "uploads volumes during archiving"},
-    {"from": "converters", "to": "streaming_archive", "rel": "hands running 7z proc (flagged)"}
+    {"from": "converters", "to": "streaming_archive", "rel": "hands running 7z proc (flagged)"},
+    {"from": "bar_style", "to": "progress_manager", "rel": "imports BAR_STYLE"},
+    {"from": "bar_style", "to": "task_dashboard", "rel": "imports BAR_STYLE"},
+    {"from": "bar_style", "to": "enhanced_status", "rel": "imports BAR_STYLE"}
   ]
 }

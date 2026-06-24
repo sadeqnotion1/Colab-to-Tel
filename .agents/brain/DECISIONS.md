@@ -23,3 +23,7 @@
 
 ### D-OPEN — 2026-06-24 — Unresolved: keep vs. remove `colab_leecher`
 **Open decision (needs maintainer):** PR "Remove legacy colab_leecher bot pipeline" (theSadeQ, 2026-06-13) proposes deleting the package. All current improvement work assumes the pipeline **stays**. Resolve before M3.
+
+### D5 — 2026-06-24 — Centralize BAR_STYLE under bar_style.py
+**Decision:** Extract and centralize the `BAR_STYLE` configuration to a new helper module `colab_leecher/utility/bar_style.py` and replace all duplicate module-level declarations with direct imports.
+**Why:** Completes the M2 code cleanup by eliminating the duplicated `BAR_STYLE` constant in `progress_manager.py`, `task_dashboard.py`, and `enhanced_status.py`, ensuring a single source of truth at import and runtime.

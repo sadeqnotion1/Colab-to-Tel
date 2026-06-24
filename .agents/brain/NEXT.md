@@ -5,31 +5,21 @@ The AI rewrites this at the end of every session._
 > Repo: https://github.com/sadeqnotion1/Colab-to-Tel
 
 ## ➡️ The one next task
-**M1 — Integrate & verify "Fast 7z + Honest Progress + Streaming Upload".** Apply the
-drop-in delivery (2 new files: `utility/archive_progress.py`, `utility/streaming_archive.py`
-+ the anchored edits in its APPLY.md) onto one small test torrent. Confirm: 7z runs in
-store mode faster, the archiving bar moves, each `.7z.00N` upload shows a real percent,
-and — with `STREAM_ARCHIVE_UPLOAD=1` — the first volume uploads while later volumes are
-still being written.
+**M2 Live Verification & M3 Pipeline Decision.** Verify the unified progress manager and centralized `BAR_STYLE` live in Google Colab on a test download->archive->upload run. Ensure no duplicate status messages, correct styling, and no regressions. Then, align with the maintainer on the M3 decision (keep vs. remove `colab_leecher` pipeline).
 
 ## Start the next chat with this
-> "Integrate the Fast-7z/Honest-Progress/Streaming-Upload delivery into colab_leecher, one small torrent, verify all five fixes, keep the old behavior reachable by unsetting the env flags."
+> "Verify M2 progress unification and centralized BAR_STYLE live in Google Colab, then resolve the M3 pipeline decision (keep vs. remove colab_leecher)."
 
 ## What to paste / give me at the start
 Pull these from the repo (or paste them):
-1. `colab_leecher/utility/converters.py` — the real `archive()` body (subprocess creation + the `await proc.wait()` section) so the Fix #4/#5 anchors land exactly.
-2. `colab_leecher/utility/task_dashboard.py` — the upload branch (for the `0% / Unknown` fix) and the `ProgressBar.generate(... style=...)` call.
-3. `colab_leecher/utility/handler.py` — the leech upload loop (`items_to_process`) so streamed-and-removed parts are skipped.
-4. The delivery package `Colab-to-Tel-archive-upload-fix.zip` (APPLY.md + the 2 new files).
+1. `colab_leecher/utility/bar_style.py` — the centralized style module.
+2. Colab runtime logs or screenshots of a leech run showing progress bar behavior.
+3. Git status / branch state.
 
 ## Decisions I need from you for this task
-- Default `ARCHIVE_COMPRESSION` = `store` (fastest) or `fast` (old behavior)?
-- Turn on `STREAM_ARCHIVE_UPLOAD=1` by default, or keep it opt-in for now?
-- The open "remove colab_leecher" PR — are we keeping and improving the pipeline (this work assumes yes)?
+- The open PR "Remove legacy colab_leecher bot pipeline" — are we keeping the `colab_leecher` package (with these improvements) or removing it in favor of a narrowed `ytdl.py` focus?
 
 ## Definition of done for this task
-- Bot still completes a normal download → archive → upload on a small torrent.
-- 7z noticeably faster in store mode; archiving bar visibly moves (not stuck at 0%).
-- Each split part upload shows a real percent (no `0% / Unknown`).
-- With `STREAM_ARCHIVE_UPLOAD=1`, upload of part 1 starts before the last part is written; final file count matches the sequential run.
-- Unsetting the env flags restores exact prior behavior. Verified live in Colab.
+- A download->archive->upload run completes in Colab with no errors.
+- Progress bar and summary output show consistent styling and update dynamically without double-message edits.
+- The `colab_leecher` keep/remove decision is finalized and recorded in `DECISIONS.md`.

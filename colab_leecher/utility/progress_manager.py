@@ -6,7 +6,7 @@ import re
 from typing import Optional, Any
 from os import path as ospath
 import os
-BAR_STYLE = os.environ.get("BAR_STYLE", "gradient")
+from .bar_style import BAR_STYLE  # M2: single source of truth
 
 # Safely import Pyrogram errors/enums
 try:
