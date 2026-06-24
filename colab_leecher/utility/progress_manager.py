@@ -5,6 +5,8 @@ import logging
 import re
 from typing import Optional, Any
 from os import path as ospath
+import os
+BAR_STYLE = os.environ.get("BAR_STYLE", "gradient")
 
 # Safely import Pyrogram errors/enums
 try:
@@ -210,7 +212,7 @@ class ProgressManager:
                             task_id=task_ctx.task_id,
                             eta=eta_val,
                             destination=engine if engine and engine != "Unknown" else "Telegram",
-                            style="sleek"
+                            style=BAR_STYLE
                         )
                     else:
                         final_text, _kb_markup = StatusDisplay.download_status(
@@ -223,7 +225,7 @@ class ProgressManager:
                             task_id=task_ctx.task_id,
                             eta=eta_val,
                             engine=engine,
-                            style="sleek"
+                            style=BAR_STYLE
                         )
                 else:
                     # Fallback classic legacy text generation

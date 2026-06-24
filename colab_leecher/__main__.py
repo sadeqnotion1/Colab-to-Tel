@@ -1,3 +1,4 @@
+from __future__ import annotations
 # /content/Telegram-Leecher/colab_leecher/__main__.py
 
 from . import aliases  # registers /mirror,/leech,/ytdl,/count,/del,/stats

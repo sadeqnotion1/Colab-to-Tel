@@ -1,3 +1,4 @@
+from __future__ import annotations
 # /content/Telegram-Leecher-Gemini/colab_leecher/utility/helper.py
 import os
 import math

@@ -1,3 +1,4 @@
+from __future__ import annotations
 # /content/Telegram-Leecher/colab_leecher/utility/converters.py
 import os
 import re
@@ -40,6 +41,8 @@ from .ui_copy import (
 )
 # Import bot client and owner ID for password prompts
 from .. import colab_bot
+from .archive_progress import start_archive_progress, finish_archive_progress
+from .streaming_archive import stream_archive_upload
 
 log = logging.getLogger(__name__)
 
@@ -211,7 +214,12 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
         archive_out_final_name = f"{clean_name}.7z"
         archive_format_param = "-t7z"
         # FASTEST compression (TikTok videos are already compressed)
-        compression_level = "-mx=1"
+        _amode = os.environ.get("ARCHIVE_COMPRESSION", "store").lower()
+        compression_level = {
+            "store": "-mx=0",   # package + split only (fastest, default)
+            "fast": "-mx=1",    # previous behavior
+            "normal": "-mx=5",
+        }.get(_amode, "-mx=0")
         format_display = "7Z"
     else:  # ZIP (fallback)
         archive_out_final_name = f"{clean_name}.zip"
@@ -273,7 +281,7 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
         _task_error.text = "Invalid characters in archive paths."
         return None, 0
 
-    cmd_args = ["7z", "a", compression_level, archive_format_param, "-y"]
+    cmd_args = ["7z", "a", compression_level, archive_format_param, "-y", "-mmt=on"]
     if pswd_arg:
         cmd_args.append(pswd_arg)
     
@@ -296,143 +304,160 @@ async def archive(path: str, remove: bool, max_split_size_bytes: int,
         last_reported_pct = -1  # Reset percentage tracking
         last_update_time = datetime.now()  # Reset last update time
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd_args,
-            stdin=asyncio.subprocess.DEVNULL,  # CRITICAL: Prevent hanging on stdin
-            stdout=asyncio.subprocess.PIPE,  # Capture stdout for progress
-            stderr=asyncio.subprocess.PIPE,
-            limit=10 * 1024 * 1024  # 10MB buffer: prevents LimitOverrunError on long 7z output lines
-        )
-        log.debug(f"Archiver (7z) process started (PID: {proc.pid})")
+        _ap_task, _ap_stop = start_archive_progress(archive_out_path, total_size, task_ctx)
+        exit_code = -1
+        stdout_lines = []
+        stderr_output = []
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd_args,
+                stdin=asyncio.subprocess.DEVNULL,  # CRITICAL: Prevent hanging on stdin
+                stdout=asyncio.subprocess.PIPE,  # Capture stdout for progress
+                stderr=asyncio.subprocess.PIPE,
+                limit=10 * 1024 * 1024  # 10MB buffer: prevents LimitOverrunError on long 7z output lines
+            )
+            log.debug(f"Archiver (7z) process started (PID: {proc.pid})")
 
-        # Modified log_stream to handle both \n and \r for real-time progress
-        async def log_stream_wrapper(stream, stream_name, is_stdout):
-            nonlocal last_reported_pct, last_update_time  # CRITICAL: Fix missing updates
-            lines = []
-            buffer = ""
-            while True:
-                # Read in chunks to catch \r progress updates from 7z
-                chunk_bytes = await stream.read(1024)
-                if not chunk_bytes:
-                    break
-                
-                buffer += chunk_bytes.decode('utf-8', errors='ignore')
-                
+            # Modified log_stream to handle both \n and \r for real-time progress
+            async def log_stream_wrapper(stream, stream_name, is_stdout):
+                nonlocal last_reported_pct, last_update_time  # CRITICAL: Fix missing updates
+                lines = []
+                buffer = ""
                 while True:
-                    # Find first occurrence of \r or \n
-                    pos_n = buffer.find('\n')
-                    pos_r = buffer.find('\r')
-                    
-                    if pos_n == -1 and pos_r == -1:
+                    # Read in chunks to catch \r progress updates from 7z
+                    chunk_bytes = await stream.read(1024)
+                    if not chunk_bytes:
                         break
                     
-                    # Get the earliest delimiter
-                    if pos_n != -1 and (pos_r == -1 or pos_n < pos_r):
-                        pos = pos_n
-                    else:
-                        pos = pos_r
+                    buffer += chunk_bytes.decode('utf-8', errors='ignore')
                     
-                    line = buffer[:pos].strip()
-                    buffer = buffer[pos + 1:]
-
-                    if line:
-                        if not is_stdout:
-                            log.warning(f"7z {stream_name}: {line}")
-                            lines.append(line)
-                        else:
-                            log.debug(f"7z {stream_name}: {line}")
+                    while True:
+                        # Find first occurrence of \r or \n
+                        pos_n = buffer.find('\n')
+                        pos_r = buffer.find('\r')
                         
-                        # Progress tracking
-                        if is_stdout:
-                            match = re.search(r"(\d+)\s*%", line)
-                            if match:
-                                try:
-                                    percentage = int(match.group(1))
-                                    current_time = datetime.now()
-                                    # Use strict time-based throttling (3.0s) to avoid spamming the inner status_bar
-                                    # which could lead to its own debounce bugs or FloodWait.
-                                    if (current_time - last_update_time).total_seconds() >= 3.0 or percentage == 100:
+                        if pos_n == -1 and pos_r == -1:
+                            break
+                        
+                        # Get the earliest delimiter
+                        if pos_n != -1 and (pos_r == -1 or pos_n < pos_r):
+                            pos = pos_n
+                        else:
+                            pos = pos_r
+                        
+                        line = buffer[:pos].strip()
+                        buffer = buffer[pos + 1:]
 
-                                        # Update throttle variables
-                                        last_reported_pct = percentage
-                                        last_update_time = current_time
+                        if line:
+                            if not is_stdout:
+                                log.warning(f"7z {stream_name}: {line}")
+                                lines.append(line)
+                            else:
+                                log.debug(f"7z {stream_name}: {line}")
+                            
+                            # Progress tracking
+                            if is_stdout:
+                                match = re.search(r"(\d+)\s*%", line)
+                                if match:
+                                    try:
+                                        percentage = int(match.group(1))
+                                        current_time = datetime.now()
+                                        # Use strict time-based throttling (3.0s) to avoid spamming the inner status_bar
+                                        # which could lead to its own debounce bugs or FloodWait.
+                                        if (current_time - last_update_time).total_seconds() >= 3.0 or percentage == 100:
 
-                                        # Calculate Speed and ETA based on percentage and time
-                                        elapsed_seconds = (current_time - _task_start).total_seconds()
-                                        if elapsed_seconds > 0.5 and percentage > 0:
-                                            # Estimate bytes processed: total * percentage
-                                            bytes_done = total_size * (percentage / 100)
-                                            speed_bps = bytes_done / elapsed_seconds
-                                            remaining_bytes = total_size - bytes_done
-                                            
-                                            speed_text = f"{sizeUnit(speed_bps)}/s"
-                                            if speed_bps > 0:
-                                                eta_seconds = remaining_bytes / speed_bps
-                                                eta_text = getTime(eta_seconds)
+                                            # Update throttle variables
+                                            last_reported_pct = percentage
+                                            last_update_time = current_time
+
+                                            # Calculate Speed and ETA based on percentage and time
+                                            elapsed_seconds = (current_time - _task_start).total_seconds()
+                                            if elapsed_seconds > 0.5 and percentage > 0:
+                                                # Estimate bytes processed: total * percentage
+                                                bytes_done = total_size * (percentage / 100)
+                                                speed_bps = bytes_done / elapsed_seconds
+                                                remaining_bytes = total_size - bytes_done
+                                                
+                                                speed_text = f"{sizeUnit(speed_bps)}/s"
+                                                if speed_bps > 0:
+                                                    eta_seconds = remaining_bytes / speed_bps
+                                                    eta_text = getTime(eta_seconds)
+                                                else:
+                                                    eta_text = "Calculating..."
                                             else:
+                                                speed_text = "N/A"
                                                 eta_text = "Calculating..."
-                                        else:
-                                            speed_text = "N/A"
-                                            eta_text = "Calculating..."
 
-                                        # Update TaskMessages archiving progress
-                                        _messages.total_files = 1
-                                        _messages.files_processed = 1 if percentage >= 100 else 0
-                                        _messages.current_file = archive_out_final_name
+                                            # Update TaskMessages archiving progress
+                                            _messages.total_files = 1
+                                            _messages.files_processed = 1 if percentage >= 100 else 0
+                                            _messages.current_file = archive_out_final_name
 
-                                        # Use the beautiful gradient style progress bar
-                                        bar = ProgressBar.generate(percentage, length=20, style='gradient')
-                                        
-                                        elapsed_time_str = getTime(elapsed_seconds)
-                                        status_text = build_archiver_progress_text(
-                                            _messages.status_head,
-                                            bar=bar,
-                                            percentage=percentage,
-                                            speed_text=speed_text,
-                                            eta_text=eta_text,
-                                            elapsed_time_text=elapsed_time_str,
-                                            source_size_text=total_in_unit,
-                                        )
-                                        # PASS REAL VALUES to status_bar for dashboard tracking
-                                        # Force update since we are strictly throttling it here
-                                        await status_bar(
-                                            status_text, 
-                                            speed_text, 
-                                            percentage, 
-                                            eta_text, 
-                                            status_text, # Use status_text as 'done' for custom text mode
-                                            total_in_unit, # total_size
-                                            engine="Archiver (7z) 🗜️", 
-                                            use_custom_text=True, 
-                                            task_ctx=task_ctx, 
-                                            force_update=True
-                                        )
-                                except ValueError:
-                                    log.warning(
-                                        f"Could not convert 7z percentage '{match.group(1)}' to int.")
-                                except Exception as status_err:
-                                    log.warning(
-                                        f"Status update error in log_stream: {status_err}")
-                
-                await asyncio.sleep(0.01)
-            return lines
+                                            # Use the beautiful gradient style progress bar
+                                            bar = ProgressBar.generate(percentage, length=20, style='gradient')
+                                            
+                                            elapsed_time_str = getTime(elapsed_seconds)
+                                            status_text = build_archiver_progress_text(
+                                                _messages.status_head,
+                                                bar=bar,
+                                                percentage=percentage,
+                                                speed_text=speed_text,
+                                                eta_text=eta_text,
+                                                elapsed_time_text=elapsed_time_str,
+                                                source_size_text=total_in_unit,
+                                            )
+                                            # PASS REAL VALUES to status_bar for dashboard tracking
+                                            # Force update since we are strictly throttling it here
+                                            await status_bar(
+                                                status_text, 
+                                                speed_text, 
+                                                percentage, 
+                                                eta_text, 
+                                                status_text, # Use status_text as 'done' for custom text mode
+                                                total_in_unit, # total_size
+                                                engine="Archiver (7z) 🗜️", 
+                                                use_custom_text=True, 
+                                                task_ctx=task_ctx, 
+                                                force_update=True
+                                            )
+                                    except ValueError:
+                                        log.warning(
+                                            f"Could not convert 7z percentage '{match.group(1)}' to int.")
+                                    except Exception as status_err:
+                                        log.warning(
+                                            f"Status update error in log_stream: {status_err}")
+                    
+                    await asyncio.sleep(0.01)
+                return lines
 
-        # Run stream loggers concurrently
-        stdout_task = asyncio.create_task(
-            log_stream_wrapper(
-                proc.stdout, 'stdout', True))
-        stderr_task = asyncio.create_task(
-            log_stream_wrapper(
-                proc.stderr, 'stderr', False))
+            # Run stream loggers concurrently
+            stdout_task = asyncio.create_task(
+                log_stream_wrapper(
+                    proc.stdout, 'stdout', True))
+            stderr_task = asyncio.create_task(
+                log_stream_wrapper(
+                    proc.stderr, 'stderr', False))
 
-        # CRITICAL FIX: Wait for BOTH process AND streams to complete simultaneously
-        # This prevents race condition where process exits but streams still reading
-        # and archive file not fully flushed to disk
-        exit_code, stdout_lines, stderr_output = await asyncio.gather(
-            proc.wait(),
-            stdout_task,
-            stderr_task
-        )
+            # CRITICAL FIX: Wait for BOTH process AND streams to complete simultaneously
+            # This prevents race condition where process exits but streams still reading
+            # and archive file not fully flushed to disk
+            if os.environ.get("STREAM_ARCHIVE_UPLOAD") == "1":
+                _proc_task = asyncio.create_task(proc.wait())
+                upload_task = asyncio.create_task(stream_archive_upload(archive_out_path, _proc_task, task_ctx))
+                exit_code, stdout_lines, stderr_output, _ = await asyncio.gather(
+                    _proc_task,
+                    stdout_task,
+                    stderr_task,
+                    upload_task
+                )
+            else:
+                exit_code, stdout_lines, stderr_output = await asyncio.gather(
+                    proc.wait(),
+                    stdout_task,
+                    stderr_task
+                )
+        finally:
+            await finish_archive_progress(_ap_task, _ap_stop, task_ctx)
         log.debug(
             f"Archiver (7z) process finished with exit code: {exit_code}")
 

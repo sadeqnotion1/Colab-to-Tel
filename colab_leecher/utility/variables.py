@@ -1,3 +1,4 @@
+from __future__ import annotations
 # ================================================
 # FILE: colab_leecher/utility/variables.py
 # ================================================

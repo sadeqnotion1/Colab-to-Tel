@@ -1,3 +1,4 @@
+from __future__ import annotations
 # /content/Telegram-Leecher/colab_leecher/utility/task_manager.py
 import pytz
 import shutil

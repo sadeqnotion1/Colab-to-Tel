@@ -106,6 +106,9 @@ async def Leech(path: str, remove_source: bool, task_ctx: TaskContext = None):
         f"Leech: Found {total_items_to_process} potential item(s) to process/upload from initial path: {path}")
 
     for index, item_path in enumerate(items_to_process):
+        if not ospath.exists(item_path):
+            continue  # already streamed + removed by streaming_archive
+
         current_item_name = ospath.basename(item_path)
         log.info(
             f"Leech: Processing item {index + 1}/{total_items_to_process}: {current_item_name}")

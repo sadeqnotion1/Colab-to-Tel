@@ -3,6 +3,8 @@ Enhanced Status and Progress Display
 Beautiful, modern progress tracking for downloads/uploads
 """
 
+import os
+BAR_STYLE = os.environ.get("BAR_STYLE", "gradient")
 from typing import Dict, Any, List
 from datetime import datetime
 from .ui_components import (
@@ -184,7 +186,7 @@ class StatusDisplay:
             f"{Box.TOP_LEFT}{Emoji.TAG} <b>Name:</b> <code>{filename}</code>")
 
         if progress is not None:
-            bar = ProgressBar.generate(progress, 12, "gradient")
+            bar = ProgressBar.generate(progress, 12, BAR_STYLE)
             lines.append(f"{Box.MIDDLE_LEFT}[{bar}] <b>{progress:.1f}%</b>")
 
         if current_file:
@@ -234,7 +236,7 @@ class StatusDisplay:
         🟢 45.2 MB/s   ⏳ 12s   ⏱ 1m 4s
         💾 3.20 GB / 4.37 GB
         """
-        bar = ProgressBar.generate(progress, 15, "gradient")
+        bar = ProgressBar.generate(progress, 15, BAR_STYLE)
         speed_dot = cls.speed_emoji(speed)
         speed_str = SizeFormatter.format_speed(speed) if speed > 0 else "--"
         eta_str = cls.smart_eta(eta, done)
@@ -280,7 +282,7 @@ class StatusDisplay:
             f"{Box.TOP_LEFT}{Emoji.TAG} <b>Name:</b> <code>{filename}</code>",
         ]
 
-        bar = ProgressBar.generate(progress, 14, "gradient")
+        bar = ProgressBar.generate(progress, 14, BAR_STYLE)
         lines.append(f"{Box.MIDDLE_LEFT}[{bar}] <b>{progress:.1f}%</b>")
 
         if speed > 0:
@@ -331,7 +333,7 @@ class StatusDisplay:
             f"{Box.TOP_LEFT}{Emoji.TAG} <b>Name:</b> <code>{filename}</code>",
         ]
 
-        bar = ProgressBar.generate(progress, 14, "gradient")
+        bar = ProgressBar.generate(progress, 14, BAR_STYLE)
         lines.append(f"{Box.MIDDLE_LEFT}[{bar}] <b>{progress:.1f}%</b>")
 
         if speed > 0:
@@ -376,7 +378,7 @@ class StatusDisplay:
         engine: str = None
     ) -> "tuple[str, Any]":
         """Compact style - saves vertical space."""
-        bar = ProgressBar.generate(progress, 12, "gradient")
+        bar = ProgressBar.generate(progress, 12, BAR_STYLE)
         speed_dot = cls.speed_emoji(speed)
         speed_str = SizeFormatter.format_speed(speed) if speed > 0 else "--"
         eta_str = cls.smart_eta(eta, done)
@@ -417,7 +419,7 @@ class StatusDisplay:
         engine: str = None
     ) -> "tuple[str, Any]":
         """Classic style - all formatting in HTML (no broken __markdown__ mix)."""
-        bar = ProgressBar.generate(progress, 12, "gradient")
+        bar = ProgressBar.generate(progress, 12, BAR_STYLE)
         message = f"<b>{header}</b>\n\n"
         message += f"<b>\U0001f3f7\ufe0f Name >> </b><code>{filename}</code>\n\n"
         message += f"\u256d[{bar}] <b>>></b> <i>{progress:.1f}%</i>\n"

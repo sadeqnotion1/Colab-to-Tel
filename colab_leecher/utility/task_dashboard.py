@@ -26,6 +26,7 @@ from .enhanced_status import StatusDisplay
 from .formatting import format_bytes, format_speed
 
 BOT_DEBUG = os.getenv("BOT_DEBUG", "0") == "1"
+BAR_STYLE = os.environ.get("BAR_STYLE", "gradient")
 
 log = logging.getLogger(__name__)
 
@@ -204,13 +205,18 @@ async def update_summary_dashboard(
                 
                 ts = task_ctx.transfer.total_size
                 if ts <= 0 or ts < u_bytes:
-                    total_str = "Unknown"
-                    percentage = 0.0
+                    cfs = getattr(task_ctx.transfer, "current_file_size", 0) or 0
+                    if cfs > 0:
+                        percentage = min(100.0, (u_bytes / cfs) * 100)
+                        total_str = format_bytes(cfs)
+                    else:
+                        percentage = 0.0
+                        total_str = "Unknown"
                 else:
                     total_str = format_bytes(ts)
                     percentage = min(100.0, (u_bytes / ts) * 100)
                 
-                bar = ProgressBar.generate(percentage, length=16, style="gradient")
+                bar = ProgressBar.generate(percentage, length=16, style=BAR_STYLE)
                 eta_seconds = task_ctx.transfer.get_eta()
                 eta_str = StatusDisplay.smart_eta(eta_seconds, u_bytes)
                 
@@ -246,7 +252,7 @@ async def update_summary_dashboard(
                     if percentage == 0.0 and task_ctx.messages.total_files > 0:
                         percentage = (task_ctx.messages.files_processed / task_ctx.messages.total_files) * 100
                     
-                    bar = ProgressBar.generate(percentage, length=16, style="gradient")
+                    bar = ProgressBar.generate(percentage, length=16, style=BAR_STYLE)
                     elapsed = getTime(task_ctx.get_elapsed_time())
                     
                     summary_text = header + (
@@ -275,7 +281,7 @@ async def update_summary_dashboard(
                         total_str = format_bytes(ts)
                         percentage = task_ctx.transfer.get_percentage()
                     
-                    bar = ProgressBar.generate(percentage, length=16, style="gradient")
+                    bar = ProgressBar.generate(percentage, length=16, style=BAR_STYLE)
                     eta_seconds = task_ctx.transfer.get_eta()
                     eta_str = StatusDisplay.smart_eta(eta_seconds, d_bytes)
                     
@@ -294,7 +300,7 @@ async def update_summary_dashboard(
             else:
                 emoji = "⏳"
                 verb = "INITIALIZING"
-                bar = ProgressBar.generate(0.0, length=16, style="gradient")
+                bar = ProgressBar.generate(0.0, length=16, style=BAR_STYLE)
                 summary_text = header + (
                     "<pre>"
                     f"╭─── {emoji} {verb} ───╮\n"
