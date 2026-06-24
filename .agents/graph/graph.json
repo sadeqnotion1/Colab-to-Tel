@@ -1,0 +1,39 @@
+{
+  "project": "Colab-to-Tel",
+  "repo": "https://github.com/sadeqnotion1/Colab-to-Tel",
+  "note": "Conceptual repo map. Query, don't dump. Seeded from known modules on 2026-06-24; refine as code is read. If this disagrees with the code, the code wins.",
+  "nodes": [
+    {"id": "ytdl", "type": "entry", "path": "ytdl.py", "desc": "yt-dlp entry point (kept by the open removal PR)."},
+    {"id": "aria2", "type": "module", "path": "colab_leecher/downlader/aria2.py", "desc": "aria2c download; per-file streaming upload then temp delete."},
+    {"id": "telegram", "type": "module", "path": "colab_leecher/uploader/telegram.py", "desc": "upload_file(path, display_name, task_ctx); safety-net split upload loop."},
+    {"id": "converters", "type": "module", "path": "colab_leecher/utility/converters.py", "desc": "archive(): 7z -t7z -mx=1 + split (-v<bytes>b) + -bsp1 stdout %."},
+    {"id": "handler", "type": "module", "path": "colab_leecher/utility/handler.py", "desc": "Zip_Handler(); leech upload loop over items_to_process (.00N via natsorted)."},
+    {"id": "task_manager", "type": "module", "path": "colab_leecher/utility/task_manager.py", "desc": "_handle_archive_processing(); chunk size from get_max_split_size_mib()."},
+    {"id": "task_dashboard", "type": "module", "path": "colab_leecher/utility/task_dashboard.py", "desc": "Dashboard render; archiving = files_processed/total_files; upload pins 0%/Unknown when ts<=u_bytes; ProgressBar.generate(style)."},
+    {"id": "helper", "type": "module", "path": "colab_leecher/utility/helper.py", "desc": "status_bar() legacy renderer; multipartArchive() handles .001/.002."},
+    {"id": "progress_manager", "type": "module", "path": "colab_leecher/utility/progress_manager.py", "desc": "StatusDisplay.upload_status(style=sleek)."},
+    {"id": "enhanced_status", "type": "module", "path": "colab_leecher/utility/enhanced_status.py", "desc": "_modern_upload_status(style=gradient)."},
+    {"id": "progress_dispatcher", "type": "module", "path": "colab_leecher/utility/progress_dispatcher.py", "desc": "One of 3 competing progress systems (see Issues/mimo.txt)."},
+    {"id": "ui_copy", "type": "module", "path": "colab_leecher/utility/ui_copy.py", "desc": "build_archiver_progress_text(...)."},
+    {"id": "variables", "type": "module", "path": "colab_leecher/utility/variables.py", "desc": "Options: archive_format=7z, is_split=True, concurrency=parallel."},
+    {"id": "archive_progress", "type": "new", "path": "colab_leecher/utility/archive_progress.py", "desc": "NEW (Fix #2): poll on-disk .7z.00N sizes -> dashboard percent."},
+    {"id": "streaming_archive", "type": "new", "path": "colab_leecher/utility/streaming_archive.py", "desc": "NEW (Fix #5): upload each volume as the next appears; STREAM_ARCHIVE_UPLOAD=1."},
+    {"id": "issues_mimo", "type": "doc", "path": "Issues/mimo.txt", "desc": "Notes the 3 competing progress systems."},
+    {"id": "issues_unify", "type": "doc", "path": "Issues/01_progress_system_unification.md", "desc": "Progress unification plan (M2)."}
+  ],
+  "edges": [
+    {"from": "task_manager", "to": "handler", "rel": "calls Zip_Handler"},
+    {"from": "handler", "to": "converters", "rel": "invokes archive()"},
+    {"from": "handler", "to": "telegram", "rel": "uploads split parts"},
+    {"from": "converters", "to": "ui_copy", "rel": "build_archiver_progress_text"},
+    {"from": "converters", "to": "task_dashboard", "rel": "reports archiving state"},
+    {"from": "aria2", "to": "telegram", "rel": "streaming per-file upload"},
+    {"from": "task_dashboard", "to": "helper", "rel": "competing renderer"},
+    {"from": "task_dashboard", "to": "progress_dispatcher", "rel": "competing renderer"},
+    {"from": "progress_manager", "to": "telegram", "rel": "renders upload status"},
+    {"from": "enhanced_status", "to": "telegram", "rel": "renders upload status"},
+    {"from": "archive_progress", "to": "task_dashboard", "rel": "drives files_processed/total_files"},
+    {"from": "streaming_archive", "to": "telegram", "rel": "uploads volumes during archiving"},
+    {"from": "converters", "to": "streaming_archive", "rel": "hands running 7z proc (flagged)"}
+  ]
+}
