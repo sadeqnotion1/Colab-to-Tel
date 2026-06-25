@@ -40,3 +40,7 @@
 **Decision:** Inject `_patch_instagrapi_extractors` helper to intercept private API and GQL extractors and set `clips_metadata` entirely to `None` in the raw dictionary.
 **Why:** In the installed `instagrapi` version, `ClipsMetadata.original_sound_info` is defined as required and non-nullable. If missing, it fails with `Field required`. If present but `None`, it fails with `Input should be a valid dictionary`. Since we only need basic media attributes (like `pk`, `media_type`, and `product_type`) for downloading and never read `clips_metadata`, and `Media.clips_metadata` itself is Optional, setting the whole sub-object to `None` skips this fragile validation entirely. This provides a robust, future-proof fix.
 
+### D9 — 2026-06-25 — Thread task_ctx to show live progress for Instagram downloads in parallel-task mode
+**Decision:** Forward `task_ctx` through the download manager and the main `instagram` hook entry points into the `grapi` engine. Update `_render(task_ctx=None)` to edit `task_ctx.status_msg` and use the per-task inline keyboard, falling back to `MSG.status_msg` only if `task_ctx` is None.
+**Why:** In parallel-task mode, the global `MSG.status_msg` remains `None`, so `_render()` was a permanent no-op and the Telegram download message remained frozen on `#STARTING_TASK`. Passing `task_ctx` fixes this so live progress updates are correctly rendered on a per-task basis.
+
