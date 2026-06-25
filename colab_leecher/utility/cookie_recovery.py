@@ -71,6 +71,22 @@ def is_geo_blocked(error_str: str) -> bool:
     return any(m in str(error_str).lower() for m in _GEO_IP_MARKERS)
 
 
+# Errors that look like 403/Forbidden but are a player/signature failure
+# (outdated yt-dlp, missing Deno/JS solver) rather than an auth problem.
+# Cookies will NOT fix these, so we must not prompt the owner for cookies.
+_SIGNATURE_FAILURE_MARKERS = (
+    "giving up after",
+    "unable to download video data",
+    "nsig",
+)
+
+
+def is_signature_failure(error_str: str) -> bool:
+    if not error_str:
+        return False
+    return any(m in str(error_str).lower() for m in _SIGNATURE_FAILURE_MARKERS)
+
+
 # A small set of common multi-label public suffixes so site_from_url() returns a
 # sensible registrable domain (e.g. bbc.co.uk -> bbc.co.uk, not co.uk).
 _TWO_LEVEL_SUFFIXES = {
@@ -92,6 +108,8 @@ def needs_cookies(error_str: str) -> bool:
         return False
     low = str(error_str).lower()
     if is_geo_blocked(low):      # geo/IP block -> cookies won't help
+        return False
+    if is_signature_failure(low):  # player/signature failure -> cookies won't help
         return False
     return any(marker in low for marker in _COOKIE_ERROR_MARKERS)
 

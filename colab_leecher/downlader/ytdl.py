@@ -230,7 +230,11 @@ def _build_ydl_opts(output_template):
     }
 
     if has_impersonate:
-        opts["impersonate"] = "chrome"
+        # Override the impersonate target via env (e.g. "chrome-124",
+        # "chrome:windows-10") without code changes. Bare "chrome" can raise
+        # an AssertionError on some yt-dlp/curl_cffi combos; YouTubeDL() below
+        # already retries with impersonation disabled if construction fails.
+        opts["impersonate"] = os.environ.get("YTDL_IMPERSONATE", "chrome")
 
     cookie_file = "cookies.txt"
     if ospath.exists(cookie_file):
