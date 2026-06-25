@@ -4,6 +4,18 @@
 
 from __future__ import annotations
 
+# --- Colab-to-Tel runtime self-heal (runtime-bootstrap fix pack v3) ---
+# Aligns yt-dlp + curl_cffi (impersonation) and installs Deno (ejs:github
+# signature solver) BEFORE yt-dlp is imported, so YTDL stops failing with
+# AssertionError / HTTP 403. Safe, idempotent, never blocks startup.
+try:
+    from .runtime_bootstrap import ensure_runtime as _ensure_runtime
+    _ensure_runtime()
+except Exception as _bootstrap_exc:  # never let bootstrap crash the bot
+    import logging as _logging
+    _logging.getLogger(__name__).warning("runtime-bootstrap skipped: %r", _bootstrap_exc)
+# --- end runtime self-heal ---
+
 import asyncio
 import json
 import logging
