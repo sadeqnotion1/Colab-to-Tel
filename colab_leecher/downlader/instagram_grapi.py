@@ -306,19 +306,29 @@ def _profile_worker(cl, username, max_posts, profile_dir, result):
         result["error"] = str(e)
 
 
-async def _render():
-    """Update the Telegram status message with current progress."""
+async def _render(task_ctx=None):
+    """Update the Telegram status message with current progress.
+
+    In parallel mode the live per-task Telegram message is task_ctx.status_msg;
+    the legacy global MSG.status_msg is never populated in that mode, so prefer
+    task_ctx.status_msg and fall back to the global only when there is no task
+    context available.
+    """
     try:
-        if _state.header and MSG.status_msg is not None:
-            await MSG.status_msg.edit_text(
+        status_msg = getattr(task_ctx, "status_msg", None) if task_ctx is not None else None
+        if status_msg is None:
+            status_msg = MSG.status_msg
+        _kb = keyboard(task_ctx.get_short_id()) if task_ctx is not None else keyboard()
+        if _state.header and status_msg is not None:
+            await status_msg.edit_text(
                 text=Messages.task_msg + Messages.status_head + _state.header + sysINFO(),
-                reply_markup=keyboard(),
+                reply_markup=_kb,
             )
     except Exception as e:
         log.debug(f"instagrapi: status render failed: {e}")
 
 
-async def grapi_profile_download(url: str, num: int, max_posts: int = 50):
+async def grapi_profile_download(url: str, num: int, max_posts: int = 50, task_ctx=None):
     """See module docstring. Returns True / False / None."""
     username = _extract_username(url)
     if not username:
@@ -344,9 +354,9 @@ async def grapi_profile_download(url: str, num: int, max_posts: int = 50):
     worker.start()
 
     while worker.is_alive():
-        await _render()
+        await _render(task_ctx)
         await sleep(2.5)
-    await _render()
+    await _render(task_ctx)
 
     files = result["files"]
     if not files:
@@ -364,7 +374,7 @@ async def grapi_profile_download(url: str, num: int, max_posts: int = 50):
     # Zip everything into a single archive next to the downloads so the
     # existing uploader sends one ZIP.
     _state.header = f"🗜️ __Zipping {len(files)} files for @{username}...__"
-    await _render()
+    await _render(task_ctx)
     try:
         zip_base = os.path.join(Paths.down_path, username)
         archive = shutil.make_archive(
@@ -397,7 +407,7 @@ async def grapi_profile_download(url: str, num: int, max_posts: int = 50):
         return True
 
 
-async def grapi_post_download(url: str, num: int) -> bool | None:
+async def grapi_post_download(url: str, num: int, task_ctx=None) -> bool | None:
     """
     Download a single Instagram post/reel/story/IGTV using `instagrapi`.
     Returns:
@@ -465,9 +475,9 @@ async def grapi_post_download(url: str, num: int) -> bool | None:
     worker.start()
 
     while worker.is_alive():
-        await _render()
+        await _render(task_ctx)
         await sleep(2.5)
-    await _render()
+    await _render(task_ctx)
 
     files = result["files"]
     if not files:

@@ -59,7 +59,7 @@ class InstagramState:
 _instagram_state = InstagramState()
 
 
-async def instagram_download(link: str, num: int) -> bool:
+async def instagram_download(link: str, num: int, task_ctx=None) -> bool:
     """
     Download from Instagram (posts, reels, stories, IGTV).
 
@@ -75,7 +75,7 @@ async def instagram_download(link: str, num: int) -> bool:
     # === instagrapi engine hook (additive; preferred path) ==================
     try:
         from .instagram_grapi import grapi_post_download
-        _grapi_result = await grapi_post_download(link, num)
+        _grapi_result = await grapi_post_download(link, num, task_ctx=task_ctx)
         if _grapi_result is not None:
             return _grapi_result
         log.info("instagrapi engine not usable for post; falling back to instaloader.")
@@ -491,7 +491,7 @@ def check_instagram_success(name: str, link: str, num: int) -> bool:
         return False
 
 
-async def instagram_profile_download(url: str, num: int, max_posts: int = 50) -> bool:
+async def instagram_profile_download(url: str, num: int, max_posts: int = 50, task_ctx=None) -> bool:
     """
     Download all posts from an Instagram profile using instaloader.
 
@@ -511,7 +511,7 @@ async def instagram_profile_download(url: str, num: int, max_posts: int = 50) ->
     # fall through to the original instaloader/yt-dlp logic below, untouched.
     try:
         from .instagram_grapi import grapi_profile_download
-        _grapi_result = await grapi_profile_download(url, num, max_posts)
+        _grapi_result = await grapi_profile_download(url, num, max_posts, task_ctx=task_ctx)
         if _grapi_result is not None:
             return _grapi_result
         log.info("instagrapi engine not usable; falling back to instaloader.")

@@ -474,9 +474,9 @@ async def downloadManager(source: list, is_ytdl: bool, batch_filenames: list = N
                       link_success = await dood_downloader.download(link, i + 1)
                  elif is_instagram(link):
                       if is_profile_url(link):
-                          link_success = await instagram_profile_download(link, i + 1, max_posts=9999)
+                          link_success = await instagram_profile_download(link, i + 1, max_posts=9999, task_ctx=task_ctx)
                       else:
-                          link_success = await instagram_download(link, i + 1)
+                          link_success = await instagram_download(link, i + 1, task_ctx=task_ctx)
                  elif is_ytdl_link(link):
                       await YTDL_Status(link, i + 1, task_ctx=task_ctx)
                       link_success = not (_task_error and _task_error.state)
