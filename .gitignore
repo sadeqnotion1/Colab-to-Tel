@@ -2,6 +2,8 @@
 # Credentials & Secrets
 # ===================================
 credentials.json
+instagrapi_settings.json
+instagrapi_settings_test.json
 *.session
 *.session-journal
 cell.py
