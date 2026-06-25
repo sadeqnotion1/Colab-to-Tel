@@ -15,7 +15,7 @@
 | Progress dashboard | ✅ | Unified under `ProgressManager` and `task_dashboard`. Duplicated `BAR_STYLE` centralized in `bar_style.py`. |
 | Fast 7z + honest progress + streaming upload fix | ✅ | Merged and verified in `master` (commit `ca319ec`). |
 | YTDL 403 & Runtime Fixes | ✅ | Applied proxy/impersonate override, and baked auto self-heal into bot startup (commit `26924ee`). |
-| Instagram Profile → ZIP Engine | ✅ | Added instagrapi-powered downloader with instaloader fallback (commit `ab13dfd`). |
+| Instagram Profile → ZIP Engine | ✅ | Added instagrapi-powered downloader with instaloader fallback + automatic sessionid URL-decoding (commit `26a7367`). |
 | `.agents/` brain | ✅ | This system (installed 2026-06-24). |
 | Knowledge graph | 🟦 | Seeded in `graph/graph.json` from known modules; needs update for new `bar_style.py`. |
 
