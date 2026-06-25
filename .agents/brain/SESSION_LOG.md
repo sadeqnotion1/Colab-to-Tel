@@ -15,7 +15,7 @@
 - **Verified:** Script `apply_m2_barstyle.py --check` passed. Validated that `bar_style.py` imports cleanly as a standalone module, resolving default value and env override correctly under the local Python environment.
 - **Stop point:** Ready for M2 live verification in Google Colab and the M3 pipeline decision. See NEXT.md.
 
-## 2026-06-25 — YTDL 403, Runtime & Self-Heal Fixes (Fix Packs 935625, 1004625, 1145625, & 12116252026)
-- **Did:** Applied YTDL 403 edits, added standalone diagnostics, and implemented startup self-healing (v3/v3.1). Created `colab_leecher/runtime_bootstrap.py` and modified `colab_leecher/__init__.py` to run `ensure_runtime()` on startup. Improved the self-healing bootstrap script to use a single prerelease-aware `pip install -U --pre` call, preventing automatic downgrades of `curl_cffi` to stable releases when `yt-dlp` dev/nightly requires a prerelease build.
-- **Verified:** Checked that the bootstrap process runs in a clean subprocess to prevent parent import namespace pollution. Verified code compilation, checked local skipping logic on Windows, and verified the v3.1 revision check.
-- **Stop point:** Pushed all files and brain updates to `master` (commit `26924ee`). Ready for live verification of M2 progress unification in Google Colab and M3 pipeline decision. See NEXT.md.
+## 2026-06-25 — YTDL 403, Runtime, Self-Heal & Instagram Grapi Engine (Fix Packs 935625, 1004625, 1145625, 12116252026, & 408624)
+- **Did:** Applied YTDL 403 edits, added standalone diagnostics, implemented startup self-healing (v3/v3.1), and added the new `instagrapi` profile downloader. Created `colab_leecher/downlader/instagram_grapi.py` to fetch, download, and zip all media from an Instagram profile. Modified `colab_leecher/downlader/instagram.py` to hook this engine as the preferred path with automatic fallback to `instaloader`. Appended `instagrapi>=2.0.0` dependency to `requirements.txt`.
+- **Verified:** Checked namespace isolation, compilation of all files, and verified that both downloaders compile cleanly under the local development python environment.
+- **Stop point:** Pushed all files and brain updates to `master` (commit `ab13dfd`). Ready for live verification of M2 progress unification in Google Colab and M3 pipeline decision. See NEXT.md.
