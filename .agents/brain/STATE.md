@@ -14,7 +14,7 @@
 | Telegram upload | ✅ | `uploader/telegram.py` `upload_file(path, display_name, task_ctx)`. Working. |
 | Progress dashboard | ✅ | Unified under `ProgressManager` and `task_dashboard`. Duplicated `BAR_STYLE` centralized in `bar_style.py`. |
 | Fast 7z + honest progress + streaming upload fix | ✅ | Merged and verified in `master` (commit `ca319ec`). |
-| YTDL 403 & Runtime Fixes | ✅ | Applied proxy/impersonate override, and baked auto self-heal into bot startup (commit `07e1c1d`). |
+| YTDL 403 & Runtime Fixes | ✅ | Applied proxy/impersonate override, and baked auto self-heal into bot startup (commit `26924ee`). |
 | `.agents/` brain | ✅ | This system (installed 2026-06-24). |
 | Knowledge graph | 🟦 | Seeded in `graph/graph.json` from known modules; needs update for new `bar_style.py`. |
 

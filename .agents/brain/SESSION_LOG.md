@@ -15,7 +15,7 @@
 - **Verified:** Script `apply_m2_barstyle.py --check` passed. Validated that `bar_style.py` imports cleanly as a standalone module, resolving default value and env override correctly under the local Python environment.
 - **Stop point:** Ready for M2 live verification in Google Colab and the M3 pipeline decision. See NEXT.md.
 
-## 2026-06-25 — YTDL 403, Runtime & Self-Heal Fixes (Fix Packs 935625, 1004625, & 1145625)
-- **Did:** Applied YTDL 403 edits, added standalone diagnostics, and implemented startup self-healing (v3). Created `colab_leecher/runtime_bootstrap.py` and modified `colab_leecher/__init__.py` to run `ensure_runtime()` on startup. This automates dependency alignment (`curl_cffi` alignment + Deno installation) directly in Colab without needing separate cell steps.
-- **Verified:** Checked that the bootstrap process runs in a clean subprocess to prevent parent import namespace pollution. Verified code compilation and verified local skipping logic on Windows.
-- **Stop point:** Pushed all files and brain updates to `master` (commit `07e1c1d`). Ready for live verification of M2 progress unification in Google Colab and M3 pipeline decision. See NEXT.md.
+## 2026-06-25 — YTDL 403, Runtime & Self-Heal Fixes (Fix Packs 935625, 1004625, 1145625, & 12116252026)
+- **Did:** Applied YTDL 403 edits, added standalone diagnostics, and implemented startup self-healing (v3/v3.1). Created `colab_leecher/runtime_bootstrap.py` and modified `colab_leecher/__init__.py` to run `ensure_runtime()` on startup. Improved the self-healing bootstrap script to use a single prerelease-aware `pip install -U --pre` call, preventing automatic downgrades of `curl_cffi` to stable releases when `yt-dlp` dev/nightly requires a prerelease build.
+- **Verified:** Checked that the bootstrap process runs in a clean subprocess to prevent parent import namespace pollution. Verified code compilation, checked local skipping logic on Windows, and verified the v3.1 revision check.
+- **Stop point:** Pushed all files and brain updates to `master` (commit `26924ee`). Ready for live verification of M2 progress unification in Google Colab and M3 pipeline decision. See NEXT.md.
