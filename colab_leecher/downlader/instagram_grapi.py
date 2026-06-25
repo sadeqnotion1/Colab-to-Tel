@@ -118,6 +118,20 @@ def _build_client():
         elif os.path.exists(_REPO_SETTINGS_PATH):
             active_settings_path = _REPO_SETTINGS_PATH
 
+        if not active_settings_path:
+            raw_session = getattr(BOT.Setting, "instagram_session", "") or ""
+            if raw_session.strip():
+                try:
+                    import json
+                    session_data = json.loads(raw_session.strip())
+                    os.makedirs(os.path.dirname(_SETTINGS_PATH), exist_ok=True)
+                    with open(_SETTINGS_PATH, "w", encoding="utf-8") as sf:
+                        json.dump(session_data, sf, indent=4)
+                    active_settings_path = _SETTINGS_PATH
+                    log.info("instagrapi: recreated settings file from credentials.json session.")
+                except Exception as parse_err:
+                    log.warning(f"instagrapi: failed to parse session from credentials: {parse_err}")
+
         if active_settings_path:
             cl.load_settings(active_settings_path)
             cl.get_timeline_feed()  # validates the session

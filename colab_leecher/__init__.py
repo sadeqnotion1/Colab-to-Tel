@@ -127,6 +127,7 @@ def _apply_optional_settings(source: dict[str, Any]) -> None:
     BOT.Setting.instagram_password = source.get("INSTAGRAM_PASSWORD", "") or inst.get("PASSWORD", "")
     BOT.Setting.instagram_sessionid = source.get("INSTAGRAM_SESSIONID", "") or inst.get("SESSIONID", "")
     BOT.Setting.instagram_cookies_file = source.get("INSTAGRAM_COOKIES_FILE", "") or inst.get("COOKIES_FILE", "")
+    BOT.Setting.instagram_session = source.get("INSTAGRAM_SESSION", "") or inst.get("SESSION", "")
     BOT.Setting.terabox_cookie = source.get("TERABOX_COOKIE", "")
     BOT.Setting.nzb_providers = source.get("NZB_PROVIDERS", {}) or {}
     BOT.Setting.nzb_active_provider = source.get("NZB_DEFAULT_PROVIDER", "")
