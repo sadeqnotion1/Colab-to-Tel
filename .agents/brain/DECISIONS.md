@@ -32,3 +32,7 @@
 **Decision:** Hook `grapi_post_download` into `instagram_download` (single posts) in `instagram.py` as the preferred path. Search for `instagrapi_settings.json` in both the dynamic `Paths.WORK_PATH` and the repo root directory. Parse both flat keys and nested `INSTAGRAM` key mapping in `colab_leecher/__init__.py`.
 **Why:** Unifies the instagrapi private API session for single post downloads as well as profile downloads. Reading settings from the repo root and supporting nested keys allows the setup cell to dynamically inject settings on startup.
 
+### D7 — 2026-06-25 — Override default instagrapi request_timeout to 15s
+**Decision:** Force `cl.request_timeout = 15` after Client initialization and after `cl.load_settings(...)` in `instagram_grapi.py` and diagnostic scripts.
+**Why:** Instagrapi's default `request_timeout` is hardcoded to 1 second. While loading settings JSON directly, this value gets written/restored to 1 second, causing CDN media file downloads to fail with a ConnectTimeoutError. Explicitly overriding it to 15 seconds ensures stable media downloads.
+
