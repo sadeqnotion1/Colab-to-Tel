@@ -104,16 +104,15 @@ def _patch_instagrapi_extractors():
             if not isinstance(d, dict):
                 return d
             
-            # Fix clips_metadata for instagrapi's pydantic v2 Media model.
-            # ClipsMetadata.original_sound_info / music_info are Optional WITHOUT
-            # a default => "required but nullable". Instagram omits them for many
-            # reels, which raises: 1 validation error for Media
-            #   clips_metadata.original_sound_info  Field required [type=missing]
-            # Fix: INJECT the key as None when missing (never pop it).
-            clips_meta = d.get("clips_metadata")
-            if isinstance(clips_meta, dict):
-                clips_meta.setdefault("original_sound_info", None)
-                clips_meta.setdefault("music_info", None)
+            # instagrapi validates clips_metadata against a strict nested model
+            # (ClipsMetadata -> ClipsOriginalSoundInfo, ...) whose required sub-
+            # fields Instagram frequently omits or sends as null, which aborts the
+            # entire feed parse. We never use clips_metadata (downloads only need
+            # pk / media_type / product_type) and Media.clips_metadata is Optional,
+            # so drop the whole sub-object to skip the fragile nested validation.
+            # Covers top-level media and nested carousel items (via recursion).
+            if isinstance(d.get("clips_metadata"), dict):
+                d["clips_metadata"] = None
             
             # Recurse
             for k, v in list(d.items()):
