@@ -99,8 +99,9 @@ nul
 # ===================================
 # Test & Development
 # ===================================
-test*.*
-*_test.py
+test/*.json
+test/*.txt
+test/test_downloads/
 testing_purpose/
 test_extraction/
 tests/debug/*.py

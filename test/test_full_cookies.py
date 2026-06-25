@@ -56,6 +56,7 @@ def main():
 
     cl = Client()
     cl.delay_range = [1, 2]
+    cl.request_timeout = 15
 
     print("\n[*] Loading complete cookie set into instagrapi...")
     # Load cookies into instagrapi's HTTP session cookie jar with the correct domain

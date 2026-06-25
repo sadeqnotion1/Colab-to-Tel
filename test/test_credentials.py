@@ -17,6 +17,7 @@ def main():
 
     cl = Client()
     cl.delay_range = [1, 2]
+    cl.request_timeout = 15
 
     # Setup device settings to avoid flag
     cl.set_device({

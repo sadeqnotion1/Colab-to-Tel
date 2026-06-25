@@ -13,10 +13,12 @@ def main():
 
     cl = Client()
     cl.delay_range = [1, 2]
+    cl.request_timeout = 15
 
     print("[*] Loading saved session settings...")
     try:
         cl.load_settings(settings_path)
+        cl.request_timeout = 15
         cl.get_timeline_feed()
         print("[+] Session loaded and validated successfully!")
     except Exception as e:

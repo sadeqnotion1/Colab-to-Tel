@@ -44,6 +44,7 @@ def main():
 
     cl = Client()
     cl.delay_range = [1, 2]
+    cl.request_timeout = 15
 
     print("[*] Logging in...")
     try:

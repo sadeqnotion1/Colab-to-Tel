@@ -116,6 +116,7 @@ def main():
     print("\n[*] Initializing instagrapi client...")
     cl = Client()
     cl.delay_range = [1, 2]
+    cl.request_timeout = 15
 
     try:
         print("[*] Attempting login by sessionid...")

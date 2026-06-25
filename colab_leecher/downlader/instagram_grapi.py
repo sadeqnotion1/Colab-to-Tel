@@ -109,6 +109,7 @@ def _build_client():
 
     cl = Client()
     cl.delay_range = [1, 3]  # be gentle with the private API
+    cl.request_timeout = 15  # increase from default of 1s to prevent timeouts
 
     # 1) Reuse a saved session if we have one.
     try:
@@ -134,6 +135,7 @@ def _build_client():
 
         if active_settings_path:
             cl.load_settings(active_settings_path)
+            cl.request_timeout = 15  # override timeout loaded from settings
             cl.get_timeline_feed()  # validates the session
             log.info(f"instagrapi: reused saved session from {active_settings_path}.")
             if active_settings_path == _REPO_SETTINGS_PATH:
@@ -143,6 +145,7 @@ def _build_client():
         log.info(f"instagrapi: saved session invalid, will re-auth: {e}")
         cl = Client()
         cl.delay_range = [1, 3]
+        cl.request_timeout = 15
 
     # 2) sessionid setting, else 3) sessionid from cookies file.
     sessionid = getattr(BOT.Setting, "instagram_sessionid", "") or ""
