@@ -492,6 +492,20 @@ async def instagram_profile_download(url: str, num: int, max_posts: int = 50) ->
     """
     global Messages, Paths, TRANSFER, TaskError, BOT
 
+    # === instagrapi engine hook (additive; preferred path) ==================
+    # Try the instagrapi-powered engine first. It returns None when it can't
+    # be used (library missing / no auth / bad username), in which case we
+    # fall through to the original instaloader/yt-dlp logic below, untouched.
+    try:
+        from .instagram_grapi import grapi_profile_download
+        _grapi_result = await grapi_profile_download(url, num, max_posts)
+        if _grapi_result is not None:
+            return _grapi_result
+        log.info("instagrapi engine not usable; falling back to instaloader.")
+    except Exception as _grapi_err:
+        log.warning(f"instagrapi engine error; falling back to instaloader: {_grapi_err}")
+    # === end instagrapi hook ================================================
+
     username = extract_username(url)
     if not username:
         log.error(f"Could not extract username from URL: {url}")
