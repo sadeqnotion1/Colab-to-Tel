@@ -126,6 +126,8 @@ def _build_client():
         sessionid = _sessionid_from_cookies_file()
     if sessionid:
         try:
+            import urllib.parse
+            sessionid = urllib.parse.unquote(sessionid)
             cl.login_by_sessionid(sessionid)
             _safe_dump(cl, _SETTINGS_PATH)
             log.info("instagrapi: logged in via sessionid.")
