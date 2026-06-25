@@ -36,7 +36,7 @@
 **Decision:** Force `cl.request_timeout = 15` after Client initialization and after `cl.load_settings(...)` in `instagram_grapi.py` and diagnostic scripts.
 **Why:** Instagrapi's default `request_timeout` is hardcoded to 1 second. While loading settings JSON directly, this value gets written/restored to 1 second, causing CDN media file downloads to fail with a ConnectTimeoutError. Explicitly overriding it to 15 seconds ensures stable media downloads.
 
-### D8 — 2026-06-25 — Monkeypatch instagrapi media extractors to sanitize null clips_metadata.original_sound_info
-**Decision:** Inject `_patch_instagrapi_extractors` helper that patches `extract_media_v1`, `extract_resource_v1` (and other GQL/Story extractors) in `instagrapi.extractors` and all submodules loaded in `sys.modules`.
-**Why:** The latest Instagram API changes return `clips_metadata.original_sound_info = null` for some posts. Since `instagrapi`'s Pydantic model lacks `Optional` or `NoneType` annotation for this field in the version used, it crashes with a `ValidationError` when retrieving user media feeds or post info. Recursively stripping the null field at the dictionary-level before Pydantic parsing resolves this validation crash safely.
+### D8 — 2026-06-25 — Monkeypatch instagrapi media extractors to drop clips_metadata (v2)
+**Decision:** Inject `_patch_instagrapi_extractors` helper to intercept private API and GQL extractors and set `clips_metadata` entirely to `None` in the raw dictionary.
+**Why:** In the installed `instagrapi` version, `ClipsMetadata.original_sound_info` is defined as required and non-nullable. If missing, it fails with `Field required`. If present but `None`, it fails with `Input should be a valid dictionary`. Since we only need basic media attributes (like `pk`, `media_type`, and `product_type`) for downloading and never read `clips_metadata`, and `Media.clips_metadata` itself is Optional, setting the whole sub-object to `None` skips this fragile validation entirely. This provides a robust, future-proof fix.
 
