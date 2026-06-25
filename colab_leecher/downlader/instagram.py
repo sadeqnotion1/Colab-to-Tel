@@ -70,6 +70,17 @@ async def instagram_download(link: str, num: int) -> bool:
     """
     global Messages, Paths, TRANSFER, TaskError
 
+    # === instagrapi engine hook (additive; preferred path) ==================
+    try:
+        from .instagram_grapi import grapi_post_download
+        _grapi_result = await grapi_post_download(link, num)
+        if _grapi_result is not None:
+            return _grapi_result
+        log.info("instagrapi engine not usable for post; falling back to instaloader.")
+    except Exception as _grapi_err:
+        log.warning(f"instagrapi engine post error; falling back to instaloader: {_grapi_err}")
+    # === end instagrapi hook ================================================
+
     name = await get_instagram_title(link)
     Messages.download_name = name
     from ..utility.message_safety import escape_html

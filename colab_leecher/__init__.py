@@ -122,10 +122,11 @@ def _apply_optional_settings(source: dict[str, Any]) -> None:
     BOT.Setting.nzb_user_agent = source.get("NZBCLOUD_USER_AGENT", "")
     BOT.Setting.bitso_identity_cookie = source.get("BITSO_IDENTITY_COOKIE", "")
     BOT.Setting.bitso_phpsessid_cookie = source.get("BITSO_PHPSESSID_COOKIE", "")
-    BOT.Setting.instagram_username = source.get("INSTAGRAM_USERNAME", "")
-    BOT.Setting.instagram_password = source.get("INSTAGRAM_PASSWORD", "")
-    BOT.Setting.instagram_sessionid = source.get("INSTAGRAM_SESSIONID", "")
-    BOT.Setting.instagram_cookies_file = source.get("INSTAGRAM_COOKIES_FILE", "")
+    inst = source.get("INSTAGRAM", {}) if isinstance(source.get("INSTAGRAM"), dict) else {}
+    BOT.Setting.instagram_username = source.get("INSTAGRAM_USERNAME", "") or inst.get("USERNAME", "")
+    BOT.Setting.instagram_password = source.get("INSTAGRAM_PASSWORD", "") or inst.get("PASSWORD", "")
+    BOT.Setting.instagram_sessionid = source.get("INSTAGRAM_SESSIONID", "") or inst.get("SESSIONID", "")
+    BOT.Setting.instagram_cookies_file = source.get("INSTAGRAM_COOKIES_FILE", "") or inst.get("COOKIES_FILE", "")
     BOT.Setting.terabox_cookie = source.get("TERABOX_COOKIE", "")
     BOT.Setting.nzb_providers = source.get("NZB_PROVIDERS", {}) or {}
     BOT.Setting.nzb_active_provider = source.get("NZB_DEFAULT_PROVIDER", "")

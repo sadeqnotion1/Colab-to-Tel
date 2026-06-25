@@ -1,6 +1,7 @@
 # ================================================
 # FILE: colab_leecher/downlader/instagram_grapi.py
 # ================================================
+from __future__ import annotations
 """
 Instagram profile -> single ZIP engine, powered by `instagrapi`.
 
@@ -36,6 +37,7 @@ log = logging.getLogger(__name__)
 
 # Where instagrapi caches its authenticated session between runs.
 _SETTINGS_PATH = os.path.join(Paths.WORK_PATH, "instagrapi_settings.json")
+_REPO_SETTINGS_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "instagrapi_settings.json"))
 
 
 class _State:
@@ -110,10 +112,18 @@ def _build_client():
 
     # 1) Reuse a saved session if we have one.
     try:
+        active_settings_path = None
         if os.path.exists(_SETTINGS_PATH):
-            cl.load_settings(_SETTINGS_PATH)
+            active_settings_path = _SETTINGS_PATH
+        elif os.path.exists(_REPO_SETTINGS_PATH):
+            active_settings_path = _REPO_SETTINGS_PATH
+
+        if active_settings_path:
+            cl.load_settings(active_settings_path)
             cl.get_timeline_feed()  # validates the session
-            log.info("instagrapi: reused saved session.")
+            log.info(f"instagrapi: reused saved session from {active_settings_path}.")
+            if active_settings_path == _REPO_SETTINGS_PATH:
+                _safe_dump(cl, _SETTINGS_PATH)
             return cl
     except Exception as e:
         log.info(f"instagrapi: saved session invalid, will re-auth: {e}")
@@ -300,3 +310,98 @@ async def grapi_profile_download(url: str, num: int, max_posts: int = 50):
             "reason": f"Zip failed: {str(e)[:100]}",
         })
         return True
+
+
+async def grapi_post_download(url: str, num: int) -> bool | None:
+    """
+    Download a single Instagram post/reel/story/IGTV using `instagrapi`.
+    Returns:
+        True  = post downloaded successfully
+        False = engine ran but failed to download
+        None  = engine unusable -> fallback to legacy path
+    """
+    cl = _build_client()
+    if cl is None:
+        return None  # engine unusable -> fall back
+
+    import re
+    # Clean the URL to extract shortcode and generate a clean post URL
+    match = re.search(r'/(?:p|reel|tv|stories)/([^/?#\s]+)', url)
+    cleaned_url = url
+    if match:
+        shortcode = match.group(1)
+        cleaned_url = f"https://www.instagram.com/p/{shortcode}/"
+    else:
+        log.warning(f"instagrapi: could not extract shortcode from {url}")
+        return None
+
+    try:
+        media_pk = cl.media_pk_from_url(cleaned_url)
+    except Exception as e:
+        log.warning(f"instagrapi: failed to resolve media PK from {cleaned_url}: {e}")
+        return None  # let fallback try
+
+    try:
+        media = cl.media_info(media_pk)
+        owner_username = getattr(media.user, "username", "instagram_post")
+        name = f"{owner_username}_{media_pk}"
+    except Exception as e:
+        log.warning(f"instagrapi: failed to fetch media info for PK {media_pk}: {e}")
+        name = f"instagram_{media_pk}"
+        media = None
+
+    if media is None:
+        return None
+
+    Messages.download_name = name
+    from ..utility.message_safety import escape_html
+    Messages.status_head = f"<b>📥 DOWNLOADING FROM INSTAGRAM » </b><i>🔗Link {str(num).zfill(2)}</i>\n\n<code>{escape_html(name)}</code>\n"
+    _reset_state()
+
+    os.makedirs(Paths.down_path, exist_ok=True)
+    result = {"files": [], "done": False, "error": None}
+
+    def worker_func():
+        try:
+            _state.header = f"📥 __Downloading media {media_pk}...__"
+            paths = _download_one(cl, media, Paths.down_path)
+            for p in paths:
+                if p:
+                    result["files"].append(str(p))
+            result["done"] = True
+        except Exception as e:
+            log.error(f"instagrapi: post worker error: {e}", exc_info=True)
+            result["error"] = str(e)
+
+    worker = Thread(
+        target=worker_func,
+        name="InstagrapiPostDL",
+    )
+    worker.start()
+
+    while worker.is_alive():
+        await _render()
+        await sleep(2.5)
+    await _render()
+
+    files = result["files"]
+    if not files:
+        reason = result.get("error") or "No files downloaded"
+        log.error(f"instagrapi: post download failed: {reason}")
+        TaskError.failed_links.append({
+            "link": url,
+            "filename": name,
+            "index": num,
+            "reason": f"instagrapi: {str(reason)[:100]}",
+        })
+        return False
+
+    for f in files:
+        TRANSFER.successful_downloads.append({
+            "url": url,
+            "filename": os.path.basename(f)
+        })
+    log.info(f"instagrapi: downloaded {len(files)} files for post.")
+    _state.header = f"✅ __Done: downloaded {len(files)} files__"
+    return True
+
