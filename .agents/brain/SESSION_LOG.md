@@ -15,7 +15,7 @@
 - **Verified:** Script `apply_m2_barstyle.py --check` passed. Validated that `bar_style.py` imports cleanly as a standalone module, resolving default value and env override correctly under the local Python environment.
 - **Stop point:** Ready for M2 live verification in Google Colab and the M3 pipeline decision. See NEXT.md.
 
-## 2026-06-25 — YTDL 403 Fix Pack (Fix Pack 935625)
-- **Did:** Applied the YTDL 403 Fix Pack from `.agents/fixes/935625`. Patched `colab_leecher/downlader/ytdl.py` to support proxy configuration (`YTDL_PROXY`/`HTTPS_PROXY`) and allow overriding the curl_cffi/impersonation target. Patched `colab_leecher/utility/cookie_recovery.py` to check for player/signature failures and bypass the Telegram cookie-recovery prompt for those error types.
-- **Verified:** Smoke test `apply_fixpack.py --check` reports `PASS`. Verified function compilation and executed a mocked classification test proving signature-aware cookie bypass is functional.
-- **Stop point:** Pushed to `master` (commit `36d5f09`). Ready for live verification of M2 progress unification in Google Colab and M3 pipeline decision. See NEXT.md.
+## 2026-06-25 — YTDL 403 & Runtime Fixes (Fix Packs 935625 & 1004625)
+- **Did:** Applied YTDL 403 code edits (Fix Pack 935625) and added YTDL Runtime Fixes (Fix Pack 1004625). Created `tools/diagnose_runtime.py` and `tools/setup_runtime.sh` to align/reinstall `curl_cffi`, verify Deno installation, and serve as a hard gate for runtime health.
+- **Verified:** Ran local diagnostics on the Windows environment (`diagnose_runtime.py` correctly identified missing Deno and incompatible impersonation targets). Functional smoke tests compile and pass.
+- **Stop point:** Pushed all changes and tools to `master` (commit `3f3916c`). Ready for live verification of M2 progress unification in Google Colab and M3 pipeline decision. See NEXT.md.
