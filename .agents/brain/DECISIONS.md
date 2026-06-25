@@ -44,3 +44,7 @@
 **Decision:** Forward `task_ctx` through the download manager and the main `instagram` hook entry points into the `grapi` engine. Update `_render(task_ctx=None)` to edit `task_ctx.status_msg` and use the per-task inline keyboard, falling back to `MSG.status_msg` only if `task_ctx` is None.
 **Why:** In parallel-task mode, the global `MSG.status_msg` remains `None`, so `_render()` was a permanent no-op and the Telegram download message remained frozen on `#STARTING_TASK`. Passing `task_ctx` fixes this so live progress updates are correctly rendered on a per-task basis.
 
+### D10 — 2026-06-25 — Paginate and download Instagram media incrementally in _profile_worker
+**Decision:** Replace the all-or-nothing listing call `cl.user_medias(user_id, amount=amount)` in `_profile_worker` with an incremental page-by-page loop using `cl.user_medias_paginated(user_id, amount=50, end_cursor=...)` and download items on each page immediately. Add a short delay (`3.0`s) between page requests to pace pagination.
+**Why:** Accumulating the entire media list up front took several minutes and triggered Instagram's "Please wait a few minutes" rate limiting (HTTP 401). When a rate limit occurred, the entire list was discarded, failing the task with "nothing downloaded". Paging and downloading incrementally ensures that any fetched media is successfully processed/uploaded even if rate-limiting halts the listing early (partial success), and the download time naturally paces the API requests to prevent throttling.
+

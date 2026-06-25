@@ -15,7 +15,7 @@
 | Progress dashboard | ✅ | Unified under `ProgressManager` and `task_dashboard`. Duplicated `BAR_STYLE` centralized in `bar_style.py`. |
 | Fast 7z + honest progress + streaming upload fix | ✅ | Merged and verified in `master` (commit `ca319ec`). |
 | YTDL 403 & Runtime Fixes | ✅ | Applied proxy/impersonate override, and baked auto self-heal into bot startup (commit `26924ee`). |
-| Instagram Profile & Post Downloader Hook | ✅ | Added instagrapi profile/post hooks, session cookie self-healing, request_timeout=15 override, clips_metadata v2 patch, and parallel-task progress fix (commit `2966b1d`). |
+| Instagram Profile & Post Downloader Hook | ✅ | Added instagrapi profile/post hooks, session cookie self-healing, request_timeout=15 override, clips_metadata v2 patch, parallel-task progress, and resilient listing fix (commit `5163e29`). |
 | `.agents/` brain | ✅ | This system (installed 2026-06-24). |
 | Knowledge graph | ✅ | Seeded in `graph/graph.json` and regenerated using render_graph.py. |
 
