@@ -9,6 +9,13 @@ ever imported. Ensures — in the environment where the bot actually runs — th
   * Deno is installed and on PATH, required by yt-dlp's ejs:github JS signature
     solver (remote_components=['ejs:github']).
 
+Why the install is a SINGLE prerelease-aware command (v3.1 fix):
+  yt-dlp[default] dev builds depend on a prerelease curl_cffi (e.g. 0.15.1b2).
+  A second 'pip install --force-reinstall curl_cffi' WITHOUT --pre downgrades it
+  back to the latest stable (e.g. 0.15.0), which the dev yt-dlp cannot use ->
+  impersonation breaks again. So we let pip's --pre resolver pick the matching
+  pair in one shot and never force a separate (stable) curl_cffi on top.
+
 Design notes:
   * All probes run in SUBPROCESSES, so this parent process never imports yt-dlp
     or curl_cffi before the (possible) upgrade. The later real `import yt_dlp`
@@ -28,6 +35,8 @@ import os
 import shutil
 import subprocess
 import sys
+
+BOOTSTRAP_REVISION = "2026.06.25-v3.1"
 
 log = logging.getLogger("colab_leecher.runtime_bootstrap")
 
@@ -72,7 +81,7 @@ def diagnose(target: str | None = None) -> tuple[bool, bool]:
     target = target or os.environ.get("YTDL_IMPERSONATE", "chrome")
     _add_deno_to_path()
     imp, deno = _probe(target)
-    log.info("runtime-bootstrap: impersonate(%s)=%s deno=%s", target, imp, deno)
+    log.info("runtime-bootstrap[%s]: impersonate(%s)=%s deno=%s", BOOTSTRAP_REVISION, target, imp, deno)
     return imp, deno
 
 
@@ -90,7 +99,7 @@ def ensure_runtime(target: str | None = None) -> bool:
     imp, deno = _probe(target)
     if imp and deno:
         os.environ["CLB_RUNTIME_READY"] = "1"
-        log.info("runtime-bootstrap: runtime already healthy (impersonate=%s, deno=ok)", target)
+        log.info("runtime-bootstrap[%s]: runtime already healthy (impersonate=%s, deno=ok)", BOOTSTRAP_REVISION, target)
         return True
 
     if not (sys.platform.startswith("linux") or os.environ.get("CLB_RUNTIME_FORCE") == "1"):
@@ -102,12 +111,14 @@ def ensure_runtime(target: str | None = None) -> bool:
         return False
 
     if not imp:
-        log.info("runtime-bootstrap: aligning yt-dlp[default] + curl_cffi ...")
+        # SINGLE prerelease-aware install. Do NOT add a separate
+        # 'curl_cffi' install afterwards without --pre: it would downgrade
+        # curl_cffi to stable and re-break impersonation (see module docstring).
+        log.info("runtime-bootstrap[%s]: aligning yt-dlp[default] + curl_cffi (prerelease-aware) ...", BOOTSTRAP_REVISION)
         _pip("-U", "--pre", "yt-dlp[default]", "curl_cffi")
-        _pip("-U", "--force-reinstall", "--no-deps", "curl_cffi")
 
     if not deno:
-        log.info("runtime-bootstrap: installing Deno ...")
+        log.info("runtime-bootstrap[%s]: installing Deno ...", BOOTSTRAP_REVISION)
         try:
             subprocess.run(
                 ["bash", "-lc", "curl -fsSL https://deno.land/install.sh | sh"],
@@ -120,13 +131,14 @@ def ensure_runtime(target: str | None = None) -> bool:
     imp, deno = _probe(target)
     if imp and deno:
         os.environ["CLB_RUNTIME_READY"] = "1"
-        log.info("runtime-bootstrap: runtime ready (impersonate=%s, deno=ok)", target)
+        log.info("runtime-bootstrap[%s]: runtime ready (impersonate=%s, deno=ok)", BOOTSTRAP_REVISION, target)
         return True
 
     log.warning(
-        "runtime-bootstrap: runtime NOT fully ready (impersonate_ok=%s deno_ok=%s); "
-        "bot will continue. YTDL may still 403 until this is resolved.",
-        imp, deno,
+        "runtime-bootstrap[%s]: runtime NOT fully ready (impersonate_ok=%s deno_ok=%s); "
+        "bot will continue. If impersonate_ok is False, run "
+        "`pip show curl_cffi yt-dlp` and share it.",
+        BOOTSTRAP_REVISION, imp, deno,
     )
     return False
 
