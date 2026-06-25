@@ -27,3 +27,8 @@
 ### D5 — 2026-06-24 — Centralize BAR_STYLE under bar_style.py
 **Decision:** Extract and centralize the `BAR_STYLE` configuration to a new helper module `colab_leecher/utility/bar_style.py` and replace all duplicate module-level declarations with direct imports.
 **Why:** Completes the M2 code cleanup by eliminating the duplicated `BAR_STYLE` constant in `progress_manager.py`, `task_dashboard.py`, and `enhanced_status.py`, ensuring a single source of truth at import and runtime.
+
+### D6 — 2026-06-25 — Hook instagrapi post downloader & support root instagrapi_settings.json
+**Decision:** Hook `grapi_post_download` into `instagram_download` (single posts) in `instagram.py` as the preferred path. Search for `instagrapi_settings.json` in both the dynamic `Paths.WORK_PATH` and the repo root directory. Parse both flat keys and nested `INSTAGRAM` key mapping in `colab_leecher/__init__.py`.
+**Why:** Unifies the instagrapi private API session for single post downloads as well as profile downloads. Reading settings from the repo root and supporting nested keys allows the setup cell to dynamically inject settings on startup.
+
