@@ -25,6 +25,7 @@ Public entry point:
 """
 
 import os
+import time
 import shutil
 import logging
 from threading import Thread
@@ -38,6 +39,13 @@ log = logging.getLogger(__name__)
 # Where instagrapi caches its authenticated session between runs.
 _SETTINGS_PATH = os.path.join(Paths.WORK_PATH, "instagrapi_settings.json")
 _REPO_SETTINGS_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "instagrapi_settings.json"))
+
+# Profile listing is paged in small chunks and each page is downloaded
+# immediately (see _profile_worker) so a mid-pagination rate limit can't
+# discard the whole list. Smaller pages + a short delay also avoid tripping
+# Instagram's "Please wait a few minutes" throttle.
+_IG_PAGE_SIZE = 50            # media per listing request (Instagram caps ~50)
+_IG_PAGE_DELAY = 3.0          # seconds to wait between listing pages
 
 
 class _State:
@@ -277,29 +285,73 @@ def _profile_worker(cl, username, max_posts, profile_dir, result):
         user_id = cl.user_id_from_username(username)
 
         amount = max_posts if (isinstance(max_posts, int) and max_posts > 0) else 0
-        _state.header = f"📡 __Fetching media list for @{username}...__"
-        medias = cl.user_medias(user_id, amount=amount)
-        total = len(medias)
+        os.makedirs(profile_dir, exist_ok=True)
 
-        if total == 0:
+        # Page through the media list and download each page as we go.
+        #
+        # Why: cl.user_medias(amount=9999) fetches the ENTIRE list up front and
+        # accumulates every page in memory. If any single page hits Instagram's
+        # rate limit ("Please wait a few minutes" / HTTP 401) mid-pagination,
+        # the whole call raises and every already-listed item is lost -> the
+        # task ends with "nothing downloaded" even after dozens of good pages.
+        # Paging in small chunks and downloading immediately keeps everything
+        # fetched so far, and the download time paces the requests so the rate
+        # limit is far less likely to trigger.
+        end_cursor = ""
+        fetched = 0
+        page_no = 0
+        stopped_early = False
+        while True:
+            page_no += 1
+            _state.header = f"📡 __Listing @{username} (page {page_no}, {fetched} so far)...__"
+            try:
+                page, end_cursor = cl.user_medias_paginated(
+                    user_id, amount=_IG_PAGE_SIZE, end_cursor=end_cursor
+                )
+            except Exception as page_err:
+                # Rate limited / transient API error: stop listing but keep and
+                # download whatever we already have instead of failing the task.
+                stopped_early = True
+                log.warning(
+                    f"instagrapi: media listing for @{username} stopped early "
+                    f"after {fetched} item(s): {page_err}"
+                )
+                break
+
+            if not page:
+                break
+
+            for media in page:
+                fetched += 1
+                _state.header = f"📥 __Downloading {fetched} from @{username}...__"
+                try:
+                    paths = _download_one(cl, media, profile_dir)
+                    for p in paths:
+                        if p:
+                            result["files"].append(str(p))
+                except Exception as item_err:
+                    log.warning(f"instagrapi: failed item {getattr(media, 'pk', '?')}: {item_err}")
+                    TaskError.failed_links.append({
+                        "link": "instagram:" + str(getattr(media, "code", "") or getattr(media, "pk", "")),
+                        "filename": f"{username}_{getattr(media, 'pk', 'item')}",
+                        "reason": f"instagrapi item error: {str(item_err)[:100]}",
+                    })
+
+            if amount and fetched >= amount:
+                break
+            if not end_cursor:
+                break
+            time.sleep(_IG_PAGE_DELAY)  # pace pagination to avoid rate limits
+
+        if fetched == 0:
             result["error"] = "No media found on this profile."
             return
 
-        os.makedirs(profile_dir, exist_ok=True)
-        for i, media in enumerate(medias, start=1):
-            _state.header = f"📥 __Downloading {i}/{total} from @{username}...__"
-            try:
-                paths = _download_one(cl, media, profile_dir)
-                for p in paths:
-                    if p:
-                        result["files"].append(str(p))
-            except Exception as item_err:
-                log.warning(f"instagrapi: failed item {getattr(media, 'pk', '?')}: {item_err}")
-                TaskError.failed_links.append({
-                    "link": "instagram:" + str(getattr(media, "code", "") or getattr(media, "pk", "")),
-                    "filename": f"{username}_{getattr(media, 'pk', 'item')}",
-                    "reason": f"instagrapi item error: {str(item_err)[:100]}",
-                })
+        if stopped_early:
+            log.warning(
+                f"instagrapi: @{username} only partially listed; downloaded "
+                f"{len(result['files'])} file(s) before the listing stopped."
+            )
         result["done"] = True
     except Exception as e:
         log.error(f"instagrapi: profile worker error: {e}", exc_info=True)
