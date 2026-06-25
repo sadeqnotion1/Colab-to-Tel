@@ -7,7 +7,7 @@ The AI rewrites this at the end of every session._
 ## ➡️ The one next task
 **Colab Live Verification of instagrapi post/profile downloading & M2 Unification.** Run the bot in Google Colab using the updated `setup_cell.txt` (which has the fresh US-VPN session JSON with request_timeout=15 injected) to verify that:
 1. `instagrapi_settings.json` is successfully written on startup and successfully loaded.
-2. The bot reads this session JSON and downloads profile and post links (e.g. `https://www.instagram.com/p/DZzndRyD82d/`) bypassing login limits (verified locally to resolve PK and fetch media info correctly).
+2. The bot reads this session JSON and downloads profile and post links (e.g. `https://www.instagram.com/p/DZzndRyD82d/`) bypassing login limits (a Pydantic `ValidationError` regarding null `clips_metadata.original_sound_info` has been resolved by a runtime monkeypatch).
 3. Centralized `BAR_STYLE` and unified progress manager display correctly without duplicate status edits.
 Then, resolve the M3 pipeline decision (keep vs. remove `colab_leecher` package).
 

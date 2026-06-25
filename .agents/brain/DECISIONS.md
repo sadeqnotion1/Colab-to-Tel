@@ -36,3 +36,7 @@
 **Decision:** Force `cl.request_timeout = 15` after Client initialization and after `cl.load_settings(...)` in `instagram_grapi.py` and diagnostic scripts.
 **Why:** Instagrapi's default `request_timeout` is hardcoded to 1 second. While loading settings JSON directly, this value gets written/restored to 1 second, causing CDN media file downloads to fail with a ConnectTimeoutError. Explicitly overriding it to 15 seconds ensures stable media downloads.
 
+### D8 — 2026-06-25 — Monkeypatch instagrapi media extractors to sanitize null clips_metadata.original_sound_info
+**Decision:** Inject `_patch_instagrapi_extractors` helper that patches `extract_media_v1`, `extract_resource_v1` (and other GQL/Story extractors) in `instagrapi.extractors` and all submodules loaded in `sys.modules`.
+**Why:** The latest Instagram API changes return `clips_metadata.original_sound_info = null` for some posts. Since `instagrapi`'s Pydantic model lacks `Optional` or `NoneType` annotation for this field in the version used, it crashes with a `ValidationError` when retrieving user media feeds or post info. Recursively stripping the null field at the dictionary-level before Pydantic parsing resolves this validation crash safely.
+
