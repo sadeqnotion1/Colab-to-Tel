@@ -21,13 +21,13 @@ def is_profile_url(url: str) -> bool:
     Returns:
         bool: True if profile URL, False if post/reel URL
     """
-    # Profile patterns: instagram.com/username/ or instagram.com/username
-    # NOT post patterns: instagram.com/p/xxx or instagram.com/reel/xxx
-    profile_pattern = r'^https?://(?:www\.)?instagram\.com/([^/]+)/?$'
+    # Clean the URL by stripping query parameters, hashes, and trailing slashes
+    clean_url = url.split('?')[0].split('#')[0].rstrip('/')
+    profile_pattern = r'^https?://(?:www\.)?(?:instagram\.com|instagr\.am)/([^/]+)/?$'
 
-    if re.match(profile_pattern, url):
-        # Make sure it's not a special page
-        username = url.rstrip('/').split('/')[-1]
+    match = re.match(profile_pattern, clean_url)
+    if match:
+        username = match.group(1)
         special_pages = ['explore', 'p', 'reel', 'tv', 'stories', 'accounts', 'direct']
         return username not in special_pages
 
@@ -36,7 +36,9 @@ def is_profile_url(url: str) -> bool:
 
 def extract_username(url: str) -> str:
     """Extract username from Instagram profile URL."""
-    match = re.search(r'instagram\.com/([^/]+)', url)
+    # Clean the URL by stripping query parameters, hashes, and trailing slashes
+    clean_url = url.split('?')[0].split('#')[0].rstrip('/')
+    match = re.search(r'(?:instagram\.com|instagr\.am)/([^/]+)', clean_url)
     if match:
         return match.group(1)
     return ""
