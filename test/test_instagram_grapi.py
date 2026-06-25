@@ -113,6 +113,12 @@ def main():
         return
 
     # 4. Authenticate
+    try:
+        from colab_leecher.downlader.instagram_grapi import _patch_instagrapi_extractors
+        _patch_instagrapi_extractors()
+    except Exception as patch_err:
+        print(f"[-] Could not apply extractor patch: {patch_err}")
+
     print("\n[*] Initializing instagrapi client...")
     cl = Client()
     cl.delay_range = [1, 2]

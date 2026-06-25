@@ -92,6 +92,69 @@ def _sessionid_from_cookies_file() -> str:
     return ""
 
 
+def _patch_instagrapi_extractors():
+    try:
+        import sys
+        import instagrapi.extractors
+
+        if getattr(instagrapi.extractors, "_patched_for_clips", False):
+            return
+
+        def _sanitize_ig_dict(d):
+            if not isinstance(d, dict):
+                return d
+            
+            # Clean clips_metadata.original_sound_info
+            clips_meta = d.get("clips_metadata")
+            if isinstance(clips_meta, dict):
+                if "original_sound_info" in clips_meta and clips_meta["original_sound_info"] is None:
+                    clips_meta.pop("original_sound_info", None)
+            
+            # Recurse
+            for k, v in list(d.items()):
+                if isinstance(v, dict):
+                    _sanitize_ig_dict(v)
+                elif isinstance(v, list):
+                    for item in v:
+                        if isinstance(item, dict):
+                            _sanitize_ig_dict(item)
+            return d
+
+        target_names = [
+            "extract_media_v1",
+            "extract_resource_v1",
+            "extract_media_gql",
+            "extract_resource_gql",
+            "extract_story_v1",
+            "extract_story_gql"
+        ]
+
+        for name in target_names:
+            orig_func = getattr(instagrapi.extractors, name, None)
+            if orig_func is None:
+                continue
+
+            def make_patched(original):
+                def patched(data):
+                    sanitized = _sanitize_ig_dict(data)
+                    return original(sanitized)
+                patched.__name__ = original.__name__
+                return patched
+
+            patched_func = make_patched(orig_func)
+            setattr(instagrapi.extractors, name, patched_func)
+
+            for mod_name, mod in list(sys.modules.items()):
+                if mod_name.startswith("instagrapi"):
+                    if hasattr(mod, name) and getattr(mod, name) is orig_func:
+                        setattr(mod, name, patched_func)
+
+        setattr(instagrapi.extractors, "_patched_for_clips", True)
+        log.info("instagrapi: successfully monkeypatched extractors to sanitize clips_metadata.")
+    except Exception as patch_err:
+        log.warning(f"instagrapi: failed to monkeypatch extractors: {patch_err}")
+
+
 def _build_client():
     """
     Build an authenticated instagrapi Client using, in priority order:
@@ -103,6 +166,7 @@ def _build_client():
     """
     try:
         from instagrapi import Client
+        _patch_instagrapi_extractors()
     except ImportError:
         log.warning("instagrapi is not installed - cannot use the instagrapi engine.")
         return None

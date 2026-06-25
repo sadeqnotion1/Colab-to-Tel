@@ -3,6 +3,11 @@ import sys
 from pathlib import Path
 from instagrapi import Client
 
+# Add project root to sys.path to allow imports from colab_leecher
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 def main():
     current_dir = Path(__file__).resolve().parent
     settings_path = current_dir / "instagrapi_settings_test.json"
@@ -10,6 +15,13 @@ def main():
     if not settings_path.exists():
         print("[-] Error: Saved settings file not found at test/instagrapi_settings_test.json.")
         return
+
+    # Trigger instagrapi extractor patch
+    try:
+        from colab_leecher.downlader.instagram_grapi import _patch_instagrapi_extractors
+        _patch_instagrapi_extractors()
+    except Exception as patch_err:
+        print(f"[-] Could not apply extractor patch: {patch_err}")
 
     cl = Client()
     cl.delay_range = [1, 2]

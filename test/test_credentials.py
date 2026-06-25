@@ -15,6 +15,17 @@ def main():
         print("[-] Username and password are required. Exiting.")
         return
 
+    # Add project root to sys.path to allow imports from colab_leecher
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+
+    try:
+        from colab_leecher.downlader.instagram_grapi import _patch_instagrapi_extractors
+        _patch_instagrapi_extractors()
+    except Exception as patch_err:
+        print(f"[-] Could not apply extractor patch: {patch_err}")
+
     cl = Client()
     cl.delay_range = [1, 2]
     cl.request_timeout = 15
