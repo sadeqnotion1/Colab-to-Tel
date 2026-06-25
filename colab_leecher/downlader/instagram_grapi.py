@@ -104,11 +104,16 @@ def _patch_instagrapi_extractors():
             if not isinstance(d, dict):
                 return d
             
-            # Clean clips_metadata.original_sound_info
+            # Fix clips_metadata for instagrapi's pydantic v2 Media model.
+            # ClipsMetadata.original_sound_info / music_info are Optional WITHOUT
+            # a default => "required but nullable". Instagram omits them for many
+            # reels, which raises: 1 validation error for Media
+            #   clips_metadata.original_sound_info  Field required [type=missing]
+            # Fix: INJECT the key as None when missing (never pop it).
             clips_meta = d.get("clips_metadata")
             if isinstance(clips_meta, dict):
-                if "original_sound_info" in clips_meta and clips_meta["original_sound_info"] is None:
-                    clips_meta.pop("original_sound_info", None)
+                clips_meta.setdefault("original_sound_info", None)
+                clips_meta.setdefault("music_info", None)
             
             # Recurse
             for k, v in list(d.items()):
