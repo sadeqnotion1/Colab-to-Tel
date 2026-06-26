@@ -48,3 +48,7 @@
 **Decision:** Replace the all-or-nothing listing call `cl.user_medias(user_id, amount=amount)` in `_profile_worker` with an incremental page-by-page loop using `cl.user_medias_paginated(user_id, amount=50, end_cursor=...)` and download items on each page immediately. Add a short delay (`3.0`s) between page requests to pace pagination.
 **Why:** Accumulating the entire media list up front took several minutes and triggered Instagram's "Please wait a few minutes" rate limiting (HTTP 401). When a rate limit occurred, the entire list was discarded, failing the task with "nothing downloaded". Paging and downloading incrementally ensures that any fetched media is successfully processed/uploaded even if rate-limiting halts the listing early (partial success), and the download time naturally paces the API requests to prevent throttling.
 
+### D11 — 2026-06-26 — Pause and resume on rate limits during profile listing
+**Decision:** Upgrade `_profile_worker` to dynamically detect rate limit errors (like `PleaseWaitFewMinutes` / "wait a few minutes" / 429) during listing. On detection, sleep for a graded duration `_IG_RETRY_WAIT * retry_number` showing a live countdown, then retry the same pagination cursor up to `_IG_MAX_RETRIES` times (per page).
+**Why:** Rate-limiting on the very first page or later pages caused tasks to end with "nothing downloaded". Pausing and retrying the same cursor prevents the task from aborting prematurely and gives the API request time to succeed, while keeping all files successfully fetched so far.
+
