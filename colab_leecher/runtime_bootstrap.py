@@ -1,28 +1,26 @@
 """Runtime self-heal for Colab-to-Tel YTDL.
 
 Called ONCE at bot startup from colab_leecher/__init__.py, BEFORE yt-dlp is
-ever imported. Ensures — in the environment where the bot actually runs — that:
+ever imported. Ensures - in the environment where the bot actually runs - that:
 
-  * yt-dlp + curl_cffi are installed and version-aligned, so the impersonate
-    target initialises. Otherwise YoutubeDL() raises AssertionError and every
-    request falls back to a plain client -> HTTP 403 on each fragment.
+  * curl_cffi is installed so yt-dlp's impersonation backend exists. Without an
+    impersonation backend the signed CDN URLs reject every fragment (HTTP 403).
   * Deno is installed and on PATH, required by yt-dlp's ejs:github JS signature
     solver (remote_components=['ejs:github']).
 
-Why the install is a SINGLE prerelease-aware command (v3.1 fix):
-  yt-dlp[default] dev builds depend on a prerelease curl_cffi (e.g. 0.15.1b2).
-  A second 'pip install --force-reinstall curl_cffi' WITHOUT --pre downgrades it
-  back to the latest stable (e.g. 0.15.0), which the dev yt-dlp cannot use ->
-  impersonation breaks again. So we let pip's --pre resolver pick the matching
-  pair in one shot and never force a separate (stable) curl_cffi on top.
+Important companion fix (in downlader/ytdl.py):
+  yt-dlp's *library* API requires the `impersonate` option to be an
+  ImpersonateTarget instance, NOT a bare string. Passing a string trips
+  `assert isinstance(target, ImpersonateTarget)` in networking/impersonate.py,
+  which disables impersonation and causes the 403 storm. The ytdl.py patch
+  converts the target with ImpersonateTarget.from_str(); this probe does the
+  same so its health check matches the bot's real construction exactly.
 
 Design notes:
   * All probes run in SUBPROCESSES, so this parent process never imports yt-dlp
-    or curl_cffi before the (possible) upgrade. The later real `import yt_dlp`
-    in downlader/ytdl.py then loads the freshly installed versions.
+    or curl_cffi before the (possible) upgrade.
   * Idempotent + fast: if the runtime is already healthy it returns in ~1-2s.
-  * Never raises: any failure is logged and the bot continues with its previous
-    fallback behaviour.
+  * Never raises: any failure is logged and the bot continues.
   * Controls:
       CLB_SKIP_RUNTIME_BOOTSTRAP=1  disable entirely
       CLB_RUNTIME_FORCE=1           allow installs on non-Linux (e.g. WSL dev)
@@ -36,18 +34,26 @@ import shutil
 import subprocess
 import sys
 
-BOOTSTRAP_REVISION = "2026.06.25-v3.1"
+BOOTSTRAP_REVISION = "2026.06.26-v3.2"
 
 log = logging.getLogger("colab_leecher.runtime_bootstrap")
 
 DENO_BIN = os.path.expanduser(os.environ.get("DENO_INSTALL", "~/.deno").rstrip("/") + "/bin")
 
-# Probe runs in a child process so the parent never imports yt_dlp/curl_cffi.
+# Faithful probe: builds YoutubeDL exactly like the bot (remote_components +
+# an ImpersonateTarget instance) in a child process, so a False result here
+# means the bot's real construction would also fail.
 _PROBE = (
     "import sys, shutil\n"
     "try:\n"
     "    import yt_dlp\n"
-    "    yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'impersonate': sys.argv[1]})\n"
+    "    opts = {'quiet': True, 'no_warnings': True, 'remote_components': ['ejs:github']}\n"
+    "    try:\n"
+    "        from yt_dlp.networking.impersonate import ImpersonateTarget\n"
+    "        opts['impersonate'] = ImpersonateTarget.from_str(sys.argv[1])\n"
+    "    except Exception:\n"
+    "        opts['impersonate'] = sys.argv[1]\n"
+    "    yt_dlp.YoutubeDL(opts)\n"
     "    imp = True\n"
     "except Exception:\n"
     "    imp = False\n"
@@ -111,9 +117,9 @@ def ensure_runtime(target: str | None = None) -> bool:
         return False
 
     if not imp:
-        # SINGLE prerelease-aware install. Do NOT add a separate
-        # 'curl_cffi' install afterwards without --pre: it would downgrade
-        # curl_cffi to stable and re-break impersonation (see module docstring).
+        # SINGLE prerelease-aware install. Do NOT add a separate stable
+        # 'curl_cffi' install afterwards without --pre: it would downgrade and
+        # re-break impersonation.
         log.info("runtime-bootstrap[%s]: aligning yt-dlp[default] + curl_cffi (prerelease-aware) ...", BOOTSTRAP_REVISION)
         _pip("-U", "--pre", "yt-dlp[default]", "curl_cffi")
 

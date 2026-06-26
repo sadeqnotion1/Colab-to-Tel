@@ -234,7 +234,17 @@ def _build_ydl_opts(output_template):
         # "chrome:windows-10") without code changes. Bare "chrome" can raise
         # an AssertionError on some yt-dlp/curl_cffi combos; YouTubeDL() below
         # already retries with impersonation disabled if construction fails.
-        opts["impersonate"] = os.environ.get("YTDL_IMPERSONATE", "chrome")
+        _imp_target = os.environ.get("YTDL_IMPERSONATE", "chrome")
+        try:
+            # yt-dlp library API needs an ImpersonateTarget instance, not a
+            # bare string: a str trips `assert isinstance(target,
+            # ImpersonateTarget)` -> AssertionError -> impersonation silently
+            # disabled -> HTTP 403 on every fragment. Fall back to the raw
+            # string on older yt-dlp that still accepts it.
+            from yt_dlp.networking.impersonate import ImpersonateTarget
+            opts["impersonate"] = ImpersonateTarget.from_str(_imp_target)
+        except Exception:
+            opts["impersonate"] = _imp_target
 
     cookie_file = "cookies.txt"
     if ospath.exists(cookie_file):
