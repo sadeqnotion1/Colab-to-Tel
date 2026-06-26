@@ -473,7 +473,17 @@ def _get_YT_Name_sync(link, task_ctx=None):
     ydl_opts["geo_bypass"] = True
     ydl_opts["geo_bypass_country"] = os.environ.get("YTDL_GEO_COUNTRY", "US")
     if has_impersonate:
-        ydl_opts["impersonate"] = "chrome"
+        _imp_target = os.environ.get("YTDL_IMPERSONATE", "chrome")
+        try:
+            # yt-dlp library API needs an ImpersonateTarget instance, not a
+            # bare string: a str trips `assert isinstance(target,
+            # ImpersonateTarget)` -> AssertionError -> impersonation silently
+            # disabled -> HTTP 403 on every fragment. Fall back to the raw
+            # string on older yt-dlp that still accepts it.
+            from yt_dlp.networking.impersonate import ImpersonateTarget
+            ydl_opts["impersonate"] = ImpersonateTarget.from_str(_imp_target)
+        except Exception:
+            ydl_opts["impersonate"] = _imp_target
     if ospath.exists("cookies.txt"):
         ydl_opts["cookiefile"] = "cookies.txt"
 
