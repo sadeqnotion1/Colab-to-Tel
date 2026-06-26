@@ -52,3 +52,7 @@
 **Decision:** Upgrade `_profile_worker` to dynamically detect rate limit errors (like `PleaseWaitFewMinutes` / "wait a few minutes" / 429) during listing. On detection, sleep for a graded duration `_IG_RETRY_WAIT * retry_number` showing a live countdown, then retry the same pagination cursor up to `_IG_MAX_RETRIES` times (per page).
 **Why:** Rate-limiting on the very first page or later pages caused tasks to end with "nothing downloaded". Pausing and retrying the same cursor prevents the task from aborting prematurely and gives the API request time to succeed, while keeping all files successfully fetched so far.
 
+### D12 — 2026-06-26 — Convert impersonate string to ImpersonateTarget in ytdl.py
+**Decision:** Modify `colab_leecher/downlader/ytdl.py` to instantiate `ImpersonateTarget` using `ImpersonateTarget.from_str()` for the `"impersonate"` option, falling back to the raw string if older yt-dlp is in use. Update `runtime_bootstrap.py` to version `3.2` to simulate this behavior exactly in its health checks.
+**Why:** yt-dlp's library API asserts that the `impersonate` option is an instance of `ImpersonateTarget`, rather than a plain string. Passing `"chrome"` raised an `AssertionError` during constructor execution, which disabled impersonation silently and caused YouTube and other CDNs to return HTTP 403 Forbidden errors on all download fragments.
+
