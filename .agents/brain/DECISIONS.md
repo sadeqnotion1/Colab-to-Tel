@@ -56,3 +56,7 @@
 **Decision:** Modify `colab_leecher/downlader/ytdl.py` to instantiate `ImpersonateTarget` using `ImpersonateTarget.from_str()` for the `"impersonate"` option, falling back to the raw string if older yt-dlp is in use. Update `runtime_bootstrap.py` to version `3.2` to simulate this behavior exactly in its health checks.
 **Why:** yt-dlp's library API asserts that the `impersonate` option is an instance of `ImpersonateTarget`, rather than a plain string. Passing `"chrome"` raised an `AssertionError` during constructor execution, which disabled impersonation silently and caused YouTube and other CDNs to return HTTP 403 Forbidden errors on all download fragments.
 
+### D13 — 2026-06-26 — Convert impersonate string to ImpersonateTarget in get_YT_Name (v4.1)
+**Decision:** Modify `_get_YT_Name_sync` inside `colab_leecher/downlader/ytdl.py` to instantiate `ImpersonateTarget` using `ImpersonateTarget.from_str()` for the `"impersonate"` option, falling back to the raw string if older yt-dlp is in use.
+**Why:** The metadata/name lookup in `_get_YT_Name_sync` also constructs a `YoutubeDL` client instance. In v4, we only patched `_build_ydl_opts()` (the downloader itself), leaving `_get_YT_Name_sync()` to pass a raw string. This caused name lookups to raise `AssertionError` and fall back to no impersonation, triggering rate limits/HTTP 403 Forbidden errors on segment downloads. Patching this second site fully completes the fix.
+
