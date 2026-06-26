@@ -41,11 +41,13 @@ _SETTINGS_PATH = os.path.join(Paths.WORK_PATH, "instagrapi_settings.json")
 _REPO_SETTINGS_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "instagrapi_settings.json"))
 
 # Profile listing is paged in small chunks and each page is downloaded
-# immediately (see _profile_worker) so a mid-pagination rate limit can't
-# discard the whole list. Smaller pages + a short delay also avoid tripping
-# Instagram's "Please wait a few minutes" throttle.
+# immediately (see _profile_worker). On a rate limit the worker sleeps and
+# retries the SAME cursor so the whole profile can finish in one task.
 _IG_PAGE_SIZE = 50            # media per listing request (Instagram caps ~50)
 _IG_PAGE_DELAY = 3.0          # seconds to wait between listing pages
+_IG_RETRY_WAIT = 300          # base seconds to wait after a rate limit (x retry #)
+_IG_MAX_RETRIES = 3           # rate-limit retries per stall (budget resets per good page)
+_IG_WAIT_TICK = 15            # how often (s) to refresh the wait countdown in the UI
 
 
 class _State:
@@ -287,20 +289,30 @@ def _profile_worker(cl, username, max_posts, profile_dir, result):
         amount = max_posts if (isinstance(max_posts, int) and max_posts > 0) else 0
         os.makedirs(profile_dir, exist_ok=True)
 
-        # Page through the media list and download each page as we go.
-        #
-        # Why: cl.user_medias(amount=9999) fetches the ENTIRE list up front and
-        # accumulates every page in memory. If any single page hits Instagram's
-        # rate limit ("Please wait a few minutes" / HTTP 401) mid-pagination,
-        # the whole call raises and every already-listed item is lost -> the
-        # task ends with "nothing downloaded" even after dozens of good pages.
-        # Paging in small chunks and downloading immediately keeps everything
-        # fetched so far, and the download time paces the requests so the rate
-        # limit is far less likely to trigger.
+        def _is_rate_limit(err):
+            name = type(err).__name__.lower()
+            msg = str(err).lower()
+            return (
+                "pleasewait" in name
+                or "throttl" in name
+                or "ratelimit" in name
+                or "wait a few minutes" in msg
+                or "try again" in msg
+                or "429" in msg
+                or "too many" in msg
+            )
+
+        # Page through the media list, downloading each page as it arrives, and
+        # PAUSE-AND-RESUME on a rate limit so the whole profile finishes in one
+        # task. On a throttle we sleep and retry the SAME cursor (the failed
+        # tuple assignment leaves end_cursor untouched) up to _IG_MAX_RETRIES
+        # times; the retry budget resets after each successful page, so a long
+        # profile that trips the limit several times can still complete.
         end_cursor = ""
         fetched = 0
         page_no = 0
         stopped_early = False
+        retries_used = 0
         while True:
             page_no += 1
             _state.header = f"📡 __Listing @{username} (page {page_no}, {fetched} so far)...__"
@@ -308,13 +320,34 @@ def _profile_worker(cl, username, max_posts, profile_dir, result):
                 page, end_cursor = cl.user_medias_paginated(
                     user_id, amount=_IG_PAGE_SIZE, end_cursor=end_cursor
                 )
+                retries_used = 0  # a good page resets the per-stall retry budget
             except Exception as page_err:
-                # Rate limited / transient API error: stop listing but keep and
-                # download whatever we already have instead of failing the task.
+                if _is_rate_limit(page_err) and retries_used < _IG_MAX_RETRIES:
+                    retries_used += 1
+                    wait_s = int(_IG_RETRY_WAIT * retries_used)
+                    log.warning(
+                        f"instagrapi: rate limited listing @{username} at page "
+                        f"{page_no} ({fetched} so far); waiting {wait_s}s then "
+                        f"resuming (retry {retries_used}/{_IG_MAX_RETRIES})."
+                    )
+                    waited = 0
+                    while waited < wait_s:
+                        remaining = wait_s - waited
+                        _state.header = (
+                            f"⏳ __Rate limited — resuming @{username} in "
+                            f"{remaining}s (got {fetched}, retry "
+                            f"{retries_used}/{_IG_MAX_RETRIES})...__"
+                        )
+                        step = _IG_WAIT_TICK if remaining > _IG_WAIT_TICK else remaining
+                        time.sleep(step)
+                        waited += step
+                    page_no -= 1   # the retry is not a new page
+                    continue        # retry the same cursor
+                # not a rate limit, or retries exhausted: keep what we have
                 stopped_early = True
                 log.warning(
-                    f"instagrapi: media listing for @{username} stopped early "
-                    f"after {fetched} item(s): {page_err}"
+                    f"instagrapi: media listing for @{username} stopped after "
+                    f"{fetched} item(s): {page_err}"
                 )
                 break
 
