@@ -2639,37 +2639,35 @@ async def handle_url(client: Client, message: Message):
 
                         await _clear_source_waiting(client, user_id)
 
-                        processing_msg = await message.reply_text(
+                        # Store in user_tasks registry so we can match callbacks
+                        async with user_tasks_lock:
+                            user_tasks[user_id] = task_ctx
+
+                        # Show quality selection inline keyboard
+                        from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+                        keyboard_quality = InlineKeyboardMarkup([
+                            [
+                                InlineKeyboardButton("Best 🌟", callback_data=f"ytgistq:best:{task_ctx.get_short_id()}"),
+                                InlineKeyboardButton("720p", callback_data=f"ytgistq:720:{task_ctx.get_short_id()}")
+                            ],
+                            [
+                                InlineKeyboardButton("480p", callback_data=f"ytgistq:480:{task_ctx.get_short_id()}"),
+                                InlineKeyboardButton("360p", callback_data=f"ytgistq:360:{task_ctx.get_short_id()}")
+                            ],
+                            [
+                                InlineKeyboardButton("Audio Only 🎵", callback_data=f"ytgistq:audio:{task_ctx.get_short_id()}")
+                            ]
+                        ])
+
+                        choice_msg = await message.reply_text(
                             "<b>YouTube-only Gist detected!</b>\n\n"
                             f"<b>Videos:</b> <code>{len(yt_links)}</code>\n"
                             "<b>Mode:</b> Leech - Sequential (one-by-one)\n\n"
-                            "<i>Starting download automatically to avoid YouTube rate-limits...</i>",
+                            "<b>Select download quality:</b>",
+                            reply_markup=keyboard_quality,
                             parse_mode=enums.ParseMode.HTML,
                         )
-                        task_ctx.status_msg = processing_msg
-
-                        _prepare_task_context(
-                            task_ctx=task_ctx,
-                            source_links=yt_links,
-                            filenames=[],
-                            custom_name=BOT.Options.custom_name if hasattr(BOT.Options, 'custom_name') else '',
-                            zip_pswd=BOT.Options.zip_pswd if hasattr(BOT.Options, 'zip_pswd') else '',
-                            unzip_pswd=BOT.Options.unzip_pswd if hasattr(BOT.Options, 'unzip_pswd') else '',
-                            archive_format=BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else '7z',
-                        )
-                        task_ctx.service_type = "ytdl"
-                        task_ctx.metadata['youtube_only_gist'] = True
-                        try:
-                            task_ctx.bot.Options.service_type = "ytdl"
-                        except Exception:
-                            pass
-
-                        async_task = TASK_QUEUE.create_background_task(
-                            run_parallel_task(client, message, task_ctx),
-                            name=f"ytdl-gist-{task_ctx.get_short_id()}"
-                        )
-                        task_ctx.async_task = async_task
-                        _attach_task_exception_handler(async_task, task_ctx)
+                        task_ctx.status_msg = choice_msg
 
                         raise ContinuePropagation
             except ContinuePropagation:
@@ -2967,6 +2965,71 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
                 log.error(f"Dashboard update error: {e}")
             return
 
+
+        # === NEW: Handle YouTube Gist quality selection callback ===
+        if query_data.startswith("ytgistq:"):
+            await _safe_answer_callback(callback_query)
+            parts = query_data.split(":")
+            quality_choice = parts[1]
+            task_short_id = parts[2]
+
+            # Find matching task_ctx in user_tasks registry
+            task_ctx = None
+            async with user_tasks_lock:
+                for uid, ctx in list(user_tasks.items()):
+                    if ctx.get_short_id() == task_short_id:
+                        task_ctx = user_tasks.pop(uid)
+                        break
+
+            if not task_ctx:
+                try:
+                    await message.edit_text("❌ Error: Task context not found or already started.")
+                except Exception:
+                    pass
+                return
+
+            # Apply quality choice to task_ctx
+            task_ctx.metadata['youtube_only_gist'] = True
+            task_ctx.metadata['ytdl_quality'] = quality_choice
+
+            # Edit status message
+            quality_labels = {"best": "Best Quality 🌟", "720": "720p", "480": "480p", "360": "360p", "audio": "Audio Only 🎵"}
+            selected_label = quality_labels.get(quality_choice, "Best Quality")
+
+            try:
+                await message.edit_text(
+                    "<b>YouTube-only Gist detected!</b>\n\n"
+                    f"<b>Videos:</b> <code>{len(task_ctx.source_urls)}</code>\n"
+                    "<b>Mode:</b> Leech - Sequential (one-by-one)\n"
+                    f"<b>Selected Quality:</b> <code>{selected_label}</code>\n\n"
+                    "<i>Starting download automatically...</i>",
+                    parse_mode=enums.ParseMode.HTML,
+                )
+            except Exception:
+                pass
+
+            # Setup task context with ytdl_quality passed
+            _prepare_task_context(
+                task_ctx=task_ctx,
+                source_links=task_ctx.source_urls,
+                filenames=[],
+                custom_name=BOT.Options.custom_name if hasattr(BOT.Options, 'custom_name') else '',
+                zip_pswd=BOT.Options.zip_pswd if hasattr(BOT.Options, 'zip_pswd') else '',
+                unzip_pswd=BOT.Options.unzip_pswd if hasattr(BOT.Options, 'unzip_pswd') else '',
+                archive_format=BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else '7z',
+            )
+            # Copy quality choice to task-isolated Options/Setting
+            task_ctx.bot.Options.ytdl_quality = quality_choice
+            task_ctx.bot.Setting.ytdl_quality = quality_choice
+
+            # Launch task in background
+            async_task = TASK_QUEUE.create_background_task(
+                run_parallel_task(client, message, task_ctx),
+                name=f"ytdl-gist-{task_ctx.get_short_id()}"
+            )
+            task_ctx.async_task = async_task
+            _attach_task_exception_handler(async_task, task_ctx)
+            return
 
         # === TORRENT FILE SELECTION TOGGLE ===
         if query_data.startswith("tfile_toggle:"):
