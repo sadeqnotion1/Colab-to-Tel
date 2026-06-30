@@ -178,7 +178,7 @@ except ImportError:
     has_impersonate = False
 
 
-def _build_ydl_opts(output_template):
+def _build_ydl_opts(output_template, task_ctx=None):
     import shutil
     if shutil.which("deno") is None:
         log.warning("\u26a0\ufe0f WARNING: 'deno' executable was not found on PATH! The 'ejs:github' solver requires Deno to run. Downloads may fail with 'DRM protected' or format errors.")
@@ -253,7 +253,10 @@ def _build_ydl_opts(output_template):
 
     # Fix #5: apply the user-selected YTDL quality / audio-only preference.
     try:
-        _quality = getattr(BOT.Options, "ytdl_quality", None) or getattr(BOT.Setting, "ytdl_quality", "best")
+        if task_ctx and hasattr(task_ctx, "bot") and task_ctx.bot:
+            _quality = getattr(task_ctx.bot.Options, "ytdl_quality", None) or getattr(task_ctx.bot.Setting, "ytdl_quality", "best")
+        else:
+            _quality = getattr(BOT.Options, "ytdl_quality", None) or getattr(BOT.Setting, "ytdl_quality", "best")
     except Exception:
         _quality = "best"
     _quality = str(_quality or "best").lower()
@@ -384,7 +387,7 @@ def YouTubeDL(url, task_ctx=None):
     fallback_template = f"{down_path}/%(id).150B.%(ext)s"
     thumb_template = f"{thumbnail_ytdl}/%(id).150B.%(ext)s"
 
-    ydl_opts = _build_ydl_opts(base_template)
+    ydl_opts = _build_ydl_opts(base_template, task_ctx)
     ydl_opts["outtmpl"] = {
         "default": base_template,
         "thumbnail": thumb_template,
@@ -415,7 +418,7 @@ def YouTubeDL(url, task_ctx=None):
                     if not video_url:
                         continue
 
-                    entry_opts = _build_ydl_opts(fallback_template)
+                    entry_opts = _build_ydl_opts(fallback_template, task_ctx)
                     # For playlists, keep ignoreerrors / no_abort_on_error to True so one failing item doesn't crash the whole run
                     entry_opts["ignoreerrors"] = True
                     entry_opts["no_abort_on_error"] = True
