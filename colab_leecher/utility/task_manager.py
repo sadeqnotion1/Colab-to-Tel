@@ -1015,9 +1015,14 @@ async def Do_Leech(
                     break
 
                 if _task_error.state:
-                    log.warning(f"Skipping further batches due to earlier critical error: {_task_error.text}")
-                    overall_success = False
-                    break
+                    if "downloads failed" in str(_task_error.text).lower() or "download failed" in str(_task_error.text).lower():
+                        log.info(f"Continuing to next batch/link despite previous download failure: {_task_error.text}")
+                        _task_error.state = False
+                        _task_error.text = ""
+                    else:
+                        log.warning(f"Skipping further batches due to earlier critical error: {_task_error.text}")
+                        overall_success = False
+                        break
 
                 batch_start_index = i
                 batch_end_index = min(i + batch_size, total_links)
