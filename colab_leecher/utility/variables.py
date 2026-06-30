@@ -47,6 +47,8 @@ class BOT:
         convert_quality = "Low"
         caption = "Monospace"
         split_video = "Split Videos"
+        ytdl_quality = "best"  # Fix #5: best | 720 | 480 | 360 | audio
+        bulk_pack_size = "auto"  # TikTok bulk pack cap: auto | 2048 | 1024 | 500 (MiB)
         prefix = ""
         suffix = ""
         thumbnail = False
@@ -71,6 +73,8 @@ class BOT:
         convert_quality = False  # False for Low
         is_split = True
         caption = "code"
+        ytdl_quality = "best"  # Fix #5: best | 720 | 480 | 360 | audio
+        bulk_pack_size = "auto"  # TikTok bulk pack cap: auto | 2048 | 1024 | 500 (MiB)
         video_out = "mp4"
         custom_name = ""
         zip_pswd = ""

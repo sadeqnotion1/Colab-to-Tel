@@ -37,7 +37,8 @@ from .utility.helper import (
     isLink, setThumbnail, message_deleter, send_settings,
     clean_filename, extract_filename_from_url, apply_dot_style, sizeUnit,
     keyboard, fetch_links_from_url, fetch_filenames_from_url,
-    is_instagram, is_nzbcloud, is_m3u8_url, is_mindvalley_url
+    is_instagram, is_nzbcloud, is_m3u8_url, is_mindvalley_url,
+    send_video_settings, send_pack_settings
 )
 # Enhanced UI Components
 from .utility.ui_components import MessageTemplate, Emoji
@@ -819,7 +820,9 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
                 return
 
         # Main Download Loop
-        TARGET_BATCH_SIZE = 500 * 1024 * 1024 
+        # Fix #1: batch target follows the user's Telegram premium upload limit.
+        from colab_leecher.utility.helper import get_bulk_pack_size_mib
+        TARGET_BATCH_SIZE = get_bulk_pack_size_mib() * 1024 * 1024
         total_urls = len(urls)
         current_urls = urls
         part_num = 1
@@ -854,8 +857,8 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
                 part_num += 1
                 continue
 
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            zip_name = f"TikTok_Bulk_{timestamp}_Batch{part_num}"
+            # Fix #2: descriptive archive name (usernames / single-user date range)
+            zip_name = downloader.get_batch_archive_name(part_num)
             task_ctx.messages.download_name = zip_name
             task_ctx.messages.src_link = gist_url if not is_subtask else "TikTok Sub-task"
 
@@ -874,13 +877,21 @@ async def _execute_tiktok_bulk(client, message, task_ctx):
                 part_num += 1
                 continue
 
+            # Fix #2: surface the TikTok users present in this batch
             user_summary = downloader.get_batch_user_summary()
+            batch_caption = downloader.get_batch_caption()
+            if batch_caption:
+                task_ctx.metadata['batch_caption'] = batch_caption
             zip_size = os.path.getsize(zip_path)
             status_text = (
                 f"<b>{Emoji.UPLOAD} Uploading Batch {part_num}</b>\n"
                 f"{Box.TOP_LEFT}{Emoji.ARCHIVE} <b>ZIP:</b> <code>{zip_name}</code>\n"
                 f"{Box.BOTTOM_LEFT}{Emoji.INFO} <b>Size:</b> <code>{sizeUnit(zip_size)}</code>"
             )
+            if batch_caption:
+                status_text += f"\n{Emoji.INFO} <i>{batch_caption}</i>"
+            if user_summary:
+                status_text += user_summary
             await _safe_edit(status_text)
 
             await Leech(path=zip_path, remove_source=False, task_ctx=task_ctx)
@@ -2284,6 +2295,44 @@ async def ask_service_type(client, message):
 
 # --- Replace the entire handle_url function ---
 @colab_bot.on_message(filters.create(isLink) & ~filters.photo & filters.private)
+def _is_single_youtube_link(line) -> bool:
+    """Fix #3: True if a single line is a YouTube (youtube.com / youtu.be) URL."""
+    line = (line or "").strip()
+    if not line or line.startswith(("#", "//")):
+        return False
+    low = line.lower()
+    if not (low.startswith("http://") or low.startswith("https://")):
+        return False
+    return (
+        "youtube.com/" in low
+        or "youtu.be/" in low
+        or "youtube-nocookie.com/" in low
+        or low.rstrip("/").endswith("youtube.com")
+        or low.rstrip("/").endswith("youtu.be")
+    )
+
+
+def _extract_youtube_links(gist_lines) -> list:
+    """Fix #3: return the cleaned YouTube URLs from gist lines."""
+    links = []
+    for raw in (gist_lines or []):
+        line = (raw or "").strip()
+        if _is_single_youtube_link(line):
+            links.append(line)
+    return links
+
+
+def _is_youtube_only_gist(gist_lines) -> bool:
+    """Fix #3: True if every non-empty/non-comment line is a YouTube link."""
+    non_empty = [
+        l.strip() for l in (gist_lines or [])
+        if l and l.strip() and not l.strip().startswith(("#", "//"))
+    ]
+    if not non_empty:
+        return False
+    return all(_is_single_youtube_link(l) for l in non_empty)
+
+
 async def handle_url(client: Client, message: Message):
     global BOT, user_tasks
     user_id = message.from_user.id
@@ -2577,6 +2626,52 @@ async def handle_url(client: Client, message: Message):
                             user_tasks[user_id] = task_ctx
                         # Re-call handle_url which will now catch the task_ctx at the top
                         return await handle_url(client, message)
+
+                    # Detection 4: YouTube-only Gist -> auto sequential YTDL bulk (Fix #3)
+                    elif _is_youtube_only_gist(gist_lines):
+                        yt_links = _extract_youtube_links(gist_lines)
+                        log.info(f"Auto-detected YouTube-only Gist ({len(yt_links)} links) for: {input_text}")
+
+                        task_ctx = create_task_context(user_id, message.chat.id, mode="leech")
+                        task_ctx.service_type = "ytdl"
+                        task_ctx.metadata['youtube_only_gist'] = True
+                        task_ctx.source_urls = yt_links
+
+                        await _clear_source_waiting(client, user_id)
+
+                        processing_msg = await message.reply_text(
+                            "<b>YouTube-only Gist detected!</b>\n\n"
+                            f"<b>Videos:</b> <code>{len(yt_links)}</code>\n"
+                            "<b>Mode:</b> Leech - Sequential (one-by-one)\n\n"
+                            "<i>Starting download automatically to avoid YouTube rate-limits...</i>",
+                            parse_mode=enums.ParseMode.HTML,
+                        )
+                        task_ctx.status_msg = processing_msg
+
+                        _prepare_task_context(
+                            task_ctx=task_ctx,
+                            source_links=yt_links,
+                            filenames=[],
+                            custom_name=BOT.Options.custom_name if hasattr(BOT.Options, 'custom_name') else '',
+                            zip_pswd=BOT.Options.zip_pswd if hasattr(BOT.Options, 'zip_pswd') else '',
+                            unzip_pswd=BOT.Options.unzip_pswd if hasattr(BOT.Options, 'unzip_pswd') else '',
+                            archive_format=BOT.Options.archive_format if hasattr(BOT.Options, 'archive_format') else '7z',
+                        )
+                        task_ctx.service_type = "ytdl"
+                        task_ctx.metadata['youtube_only_gist'] = True
+                        try:
+                            task_ctx.bot.Options.service_type = "ytdl"
+                        except Exception:
+                            pass
+
+                        async_task = TASK_QUEUE.create_background_task(
+                            run_parallel_task(client, message, task_ctx),
+                            name=f"ytdl-gist-{task_ctx.get_short_id()}"
+                        )
+                        task_ctx.async_task = async_task
+                        _attach_task_exception_handler(async_task, task_ctx)
+
+                        raise ContinuePropagation
             except ContinuePropagation:
                 raise
             except Exception as e:
@@ -2845,7 +2940,7 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
         return
     # Assuming settings callbacks start with "setting_" or similar prefixes handled later
     # Example check (adjust if needed):
-    if query_data.startswith(("setting_", "video", "caption", "thumb", "set-suffix", "set-prefix", "close", "back")) and user_id != OWNER:
+    if query_data.startswith(("setting_", "video", "ytdlq", "packsize", "caption", "thumb", "set-suffix", "set-prefix", "close", "back")) and user_id != OWNER:
          await _safe_answer_callback(callback_query, "Owner only settings.", show_alert=True)
          return
     if not message:
@@ -3521,7 +3616,31 @@ async def handle_options(client: Client, callback_query: CallbackQuery):
              await _safe_answer_callback(callback_query, "Uploading As Document", show_alert=False)
              await send_settings(client, message, msg_id, False)
         elif query_data == "video":
-             await _safe_answer_callback(callback_query, "Video toggles are not available in this menu yet.", show_alert=True)
+             await _safe_answer_callback(callback_query, )
+             await send_video_settings(client, message, msg_id)
+        elif query_data.startswith("ytdlq:"):
+             quality_choice = query_data.split(":", 1)[1]
+             valid_qualities = {"best", "720", "480", "360", "audio"}
+             if quality_choice not in valid_qualities:
+                 quality_choice = "best"
+             BOT.Options.ytdl_quality = quality_choice
+             BOT.Setting.ytdl_quality = quality_choice
+             quality_labels = {"best": "Best Quality", "720": "720p", "480": "480p", "360": "360p", "audio": "Audio Only"}
+             await _safe_answer_callback(callback_query, f"Quality set: {quality_labels[quality_choice]}", show_alert=False)
+             await send_video_settings(client, message, msg_id)
+        elif query_data == "packsize":
+             await _safe_answer_callback(callback_query, )
+             await send_pack_settings(client, message, msg_id)
+        elif query_data.startswith("packsize:"):
+             pack_choice = query_data.split(":", 1)[1]
+             valid_packs = {"auto", "2048", "1024", "500"}
+             if pack_choice not in valid_packs:
+                 pack_choice = "auto"
+             BOT.Options.bulk_pack_size = pack_choice
+             BOT.Setting.bulk_pack_size = pack_choice
+             pack_labels = {"auto": "Auto (Max)", "2048": "2 GB", "1024": "1 GB", "500": "500 MB"}
+             await _safe_answer_callback(callback_query, f"Pack size: {pack_labels[pack_choice]}", show_alert=False)
+             await send_pack_settings(client, message, msg_id)
         elif query_data == "caption":
              await _safe_answer_callback(callback_query, "Caption style is fixed in this build.", show_alert=True)
         elif query_data == "thumb":

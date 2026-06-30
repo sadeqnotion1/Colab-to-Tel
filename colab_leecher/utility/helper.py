@@ -1590,14 +1590,25 @@ async def send_settings(client, message, msg_id, is_command: bool):
     concurrency_display = "Parallel" if getattr(BOT.Options, "concurrency", "parallel") == "parallel" else "Serial"
     next_concurrency_action = "set_concurrency:serial" if concurrency_display == "Parallel" else "set_concurrency:parallel"
 
+    # Fix #5: show current YTDL quality on the Video Settings button
+    _ytdl_quality = getattr(BOT.Setting, "ytdl_quality", "best")
+    _ytdl_quality_labels = {"best": "Best", "720": "720p", "480": "480p", "360": "360p", "audio": "Audio"}
+    video_quality_display = _ytdl_quality_labels.get(_ytdl_quality, "Best")
+
+    # TikTok bulk pack-size label for the settings button
+    _pack = getattr(BOT.Setting, "bulk_pack_size", "auto")
+    _pack_labels = {"auto": "Auto (Max)", "2048": "2 GB", "1024": "1 GB", "500": "500 MB"}
+    pack_size_display = _pack_labels.get(str(_pack), "Auto (Max)")
+
     # Create keyboard layout
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"Upload As: {up_mode_display}", callback_data=next_up_mode_action),
-         InlineKeyboardButton("Video Settings", callback_data="video")],
+         InlineKeyboardButton(f"Video: {video_quality_display}", callback_data="video")],
         [InlineKeyboardButton("Caption Font", callback_data="caption"),
          InlineKeyboardButton("Thumbnail", callback_data="thumb")],
         [InlineKeyboardButton("Set Suffix", callback_data="set-suffix"),
          InlineKeyboardButton("Set Prefix", callback_data="set-prefix")],
+        [InlineKeyboardButton(f"TikTok Pack: {pack_size_display}", callback_data="packsize")],
         [InlineKeyboardButton(f"Concurrency: {concurrency_display}", callback_data=next_concurrency_action),
          InlineKeyboardButton("Close ❌", callback_data="close")],
     ])
@@ -1637,6 +1648,84 @@ async def send_settings(client, message, msg_id, is_command: bool):
         # Avoid logging "message is not modified" errors
         if "Message is not modified" not in str(error):
             log.error(f"Settings display error: {error}", exc_info=False)
+
+
+async def send_video_settings(client, message, msg_id):
+    """Fix #5: YTDL quality / audio-only sub-menu for the /settings panel."""
+    global BOT
+    current = getattr(BOT.Setting, "ytdl_quality", "best")
+
+    def _opt(value, label):
+        return f"\u2705 {label}" if current == value else label
+
+    keyboard_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton(_opt("best", "Best Quality"), callback_data="ytdlq:best")],
+        [InlineKeyboardButton(_opt("720", "720p"), callback_data="ytdlq:720"),
+         InlineKeyboardButton(_opt("480", "480p"), callback_data="ytdlq:480"),
+         InlineKeyboardButton(_opt("360", "360p"), callback_data="ytdlq:360")],
+        [InlineKeyboardButton(_opt("audio", "Audio Only"), callback_data="ytdlq:audio")],
+        [InlineKeyboardButton("\u2b05\ufe0f Back", callback_data="settings_back")],
+    ])
+
+    labels = {"best": "Best Quality", "720": "720p", "480": "480p", "360": "360p", "audio": "Audio Only (MP3)"}
+    text = (
+        "<b>Video / YTDL Quality</b>\n\n"
+        f"Current: <b>{labels.get(current, 'Best Quality')}</b>\n\n"
+        "Pick the quality used for YouTube / yt-dlp downloads:\n"
+        "- <b>Best</b> - highest available video+audio\n"
+        "- <b>720p / 480p / 360p</b> - capped resolution\n"
+        "- <b>Audio Only</b> - extract MP3 audio"
+    )
+    try:
+        await client.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=msg_id,
+            text=text,
+            reply_markup=keyboard_markup,
+            parse_mode=enums.ParseMode.HTML,
+        )
+    except Exception as error:
+        if "Message is not modified" not in str(error):
+            log.error(f"Video settings display error: {error}", exc_info=False)
+
+
+async def send_pack_settings(client, message, msg_id):
+    """TikTok bulk pack-size sub-menu (Auto / 2 GB / 1 GB / 500 MB)."""
+    global BOT
+    current = str(getattr(BOT.Setting, "bulk_pack_size", "auto"))
+
+    def _opt(value, label):
+        return f"\u2705 {label}" if current == value else label
+
+    keyboard_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton(_opt("auto", "Auto (Max / premium-aware)"), callback_data="packsize:auto")],
+        [InlineKeyboardButton(_opt("2048", "2 GB"), callback_data="packsize:2048"),
+         InlineKeyboardButton(_opt("1024", "1 GB"), callback_data="packsize:1024"),
+         InlineKeyboardButton(_opt("500", "500 MB"), callback_data="packsize:500")],
+        [InlineKeyboardButton("\u2b05\ufe0f Back", callback_data="settings_back")],
+    ])
+
+    labels = {"auto": "Auto (Max, premium-aware)", "2048": "2 GB", "1024": "1 GB", "500": "500 MB"}
+    text = (
+        "<b>TikTok Bulk Pack Size</b>\n\n"
+        f"Current: <b>{labels.get(current, 'Auto (Max)')}</b>\n\n"
+        "Caps how much each TikTok bulk batch / ZIP holds:\n"
+        "- <b>Auto</b> - 1.9 GB standard / 3.8 GB premium\n"
+        "- <b>2 GB / 1 GB / 500 MB</b> - smaller packs for limited connections\n\n"
+        "<i>Tip: pick 1 GB or 500 MB when your connection is capped under 1 GB.</i>"
+    )
+    try:
+        await client.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=msg_id,
+            text=text,
+            reply_markup=keyboard_markup,
+            parse_mode=enums.ParseMode.HTML,
+        )
+    except Exception as error:
+        if "Message is not modified" not in str(error):
+            log.error(f"Pack settings display error: {error}", exc_info=False)
+
 
 # (Inside colab_leecher/utility/helper.py)
 
@@ -2266,4 +2355,19 @@ def get_max_split_size_mib() -> int:
         return 3800 if is_premium else 1900
     except Exception:
         return 1900
+
+
+def get_bulk_pack_size_mib() -> int:
+    """Resolve the user-selected TikTok bulk pack size in MiB.
+
+    'auto' uses the premium-aware Telegram limit (get_max_split_size_mib());
+    the presets let users force smaller packs on limited connections.
+    """
+    try:
+        from .variables import BOT
+        choice = getattr(BOT.Options, "bulk_pack_size", None) or getattr(BOT.Setting, "bulk_pack_size", "auto")
+    except Exception:
+        choice = "auto"
+    presets = {"2048": 2048, "1024": 1024, "500": 500}
+    return presets.get(str(choice).lower(), get_max_split_size_mib())
 

@@ -4,13 +4,14 @@
 import logging
 import asyncio
 import os
+import re
 import yt_dlp
 from asyncio import sleep
 from threading import Thread
 from os import makedirs, path as ospath
 from pyrogram.errors import MessageNotModified, RPCError
 from colab_leecher.utility.handler import cancelTask
-from colab_leecher.utility.variables import YTDL, MSG, Messages, Paths
+from colab_leecher.utility.variables import YTDL, MSG, Messages, Paths, BOT
 from colab_leecher.utility.helper import getTime, keyboard, sizeUnit, status_bar, sysINFO
 # Interactive cookie-recovery flow. needs_cookies() / site_from_url() are
 # defined in cookie_recovery and re-exported here so they remain available in
@@ -250,6 +251,25 @@ def _build_ydl_opts(output_template):
     if ospath.exists(cookie_file):
         opts["cookiefile"] = cookie_file
 
+    # Fix #5: apply the user-selected YTDL quality / audio-only preference.
+    try:
+        _quality = getattr(BOT.Options, "ytdl_quality", None) or getattr(BOT.Setting, "ytdl_quality", "best")
+    except Exception:
+        _quality = "best"
+    _quality = str(_quality or "best").lower()
+    if _quality in ("720", "480", "360"):
+        opts["format"] = f"bestvideo[height<={_quality}]+bestaudio/best[height<={_quality}]"
+    elif _quality in ("audio", "audio_only", "audioonly", "mp3"):
+        opts["format"] = "bestaudio/best"
+        opts["merge_output_format"] = "mp3"
+        # Extract audio to MP3 instead of converting into a video container.
+        opts["postprocessors"] = [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"},
+            {"key": "FFmpegMetadata", "add_metadata": True},
+            {"key": "EmbedThumbnail", "already_have_thumbnail": False},
+        ]
+    # else: keep the default "bestvideo+bestaudio/best"
+
     return opts
 
 
@@ -278,6 +298,60 @@ def _progress_hook(d):
 
     elif d["status"] == "finished":
         log.info(f"Finished downloading: {d.get('filename', 'unknown')}")
+
+
+def _split_multiext(basename):
+    """Split a filename, keeping language-coded subtitle suffixes intact."""
+    lower = basename.lower()
+    for known in (".en.srt", ".ar.srt", ".en.vtt", ".ar.vtt", ".en.ass", ".ar.ass"):
+        if lower.endswith(known):
+            return basename[:-len(known)], basename[-len(known):]
+    stem, ext = ospath.splitext(basename)
+    return stem, ext
+
+
+def _apply_youtube_only_naming(files, info_dict, down_path):
+    """Fix #4: rename file(s) to 'Title [With Brackets]{YYYY-MM-DD}.ext'."""
+    if not info_dict:
+        return None
+    title = info_dict.get("title")
+    if not title:
+        return None
+    bracket_title = str(title).replace("(", "[").replace(")", "]")
+    bracket_title = re.sub(r'[\\/:*?"<>|]+', "_", bracket_title).strip().rstrip(".")
+    if not bracket_title:
+        return None
+
+    upload_date = info_dict.get("upload_date")
+    if upload_date and str(upload_date).isdigit() and len(str(upload_date)) == 8:
+        d = str(upload_date)
+        date_part = "{" + f"{d[:4]}-{d[4:6]}-{d[6:8]}" + "}"
+    else:
+        date_part = ""
+
+    new_base = f"{bracket_title}{date_part}"
+    renamed = []
+    for f in sorted(files):
+        try:
+            if not ospath.exists(f):
+                renamed.append(f)
+                continue
+            dir_name = ospath.dirname(f)
+            base_name = ospath.basename(f)
+            _stem, ext = _split_multiext(base_name)
+            target = ospath.join(dir_name, f"{new_base}{ext}")
+            if ospath.abspath(target) != ospath.abspath(f) and ospath.exists(target):
+                target = ospath.join(dir_name, f"{new_base}_{_stem[:8]}{ext}")
+            if ospath.abspath(target) == ospath.abspath(f):
+                renamed.append(f)
+                continue
+            os.rename(f, target)
+            renamed.append(target)
+            log.info(f"Renamed YouTube-only file -> {ospath.basename(target)}")
+        except Exception as e:
+            log.warning(f"Could not rename {f}: {e}")
+            renamed.append(f)
+    return renamed
 
 
 def YouTubeDL(url, task_ctx=None):
@@ -442,6 +516,16 @@ def YouTubeDL(url, task_ctx=None):
                 result["success"] = True
                 result["error"] = None
                 result["files"] = list(new_files)
+
+                # Fix #4: clean naming for YouTube-only Gist downloads.
+                try:
+                    is_playlist = bool(info_dict and info_dict.get("_type") == "playlist")
+                    if task_ctx and task_ctx.metadata.get("youtube_only_gist") and not is_playlist:
+                        renamed = _apply_youtube_only_naming(list(new_files), info_dict, down_path)
+                        if renamed:
+                            result["files"] = renamed
+                except Exception as rename_err:
+                    log.warning(f"YouTube-only naming skipped: {rename_err}")
             else:
                 if info_dict and info_dict.get("_type") == "playlist":
                     result["success"] = False

@@ -20,7 +20,7 @@ from pyrogram.types import Message
 
 from colab_leecher.downlader.base import BaseDownloader
 from colab_leecher.utility.task_context import TaskContext
-from colab_leecher.utility.helper import sizeUnit, getTime
+from colab_leecher.utility.helper import sizeUnit, getTime, get_max_split_size_mib, get_bulk_pack_size_mib
 from colab_leecher.utility.converters import archive
 
 log = logging.getLogger(__name__)
@@ -290,7 +290,14 @@ class TikTokBulkDownloader(BaseDownloader):
                             file_path = base_path + ext
                             break
                             
-            return {'success': True, 'error': None, 'file_path': file_path}
+            meta = info or {}
+            return {
+                'success': True,
+                'error': None,
+                'file_path': file_path,
+                'uploader': meta.get('uploader') or meta.get('uploader_id') or meta.get('channel') or meta.get('creator'),
+                'upload_date': meta.get('upload_date'),
+            }
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
@@ -387,17 +394,19 @@ class TikTokBulkDownloader(BaseDownloader):
             Tuple of (overall_success: bool, summary_message: str, remaining_urls: List[str])
         """
         try:
-            # Use 500MB as hard limit if not specified or if larger than 500MB
-            # 500MB = 500 * 1024 * 1024 bytes
-            HARD_LIMIT = 500 * 1024 * 1024
-            if size_limit is None or size_limit > HARD_LIMIT:
-                size_limit = HARD_LIMIT
-                log.info(f"Enforcing 500MB hard limit for TikTok bulk download.")
+            # Fix #1: size the batch limit dynamically from the user's Telegram
+            # premium status (1.9 GB standard / 3.8 GB premium) instead of a
+            # hardcoded 500 MB cap. A caller-provided size_limit is still honored.
+            if size_limit is None:
+                # Honors the user's Pack Size setting (Auto = premium-aware max).
+                size_limit = get_bulk_pack_size_mib() * 1024 * 1024
+                log.info(f"TikTok bulk batch limit set to {sizeUnit(size_limit)} (pack size setting)")
 
             self.urls = urls
             total_videos = len(urls)
             remaining_urls = []
             self.batch_user_stats = {} # Track video count per user in THIS batch
+            self.batch_user_dates = {} # Fix #2: upload_date list per user in THIS batch
 
             log.info(f"Starting bulk download of up to {total_videos} TikTok videos (Hard Limit: {sizeUnit(size_limit)})")
             self.start_progress_tracking("video")
@@ -455,13 +464,16 @@ class TikTokBulkDownloader(BaseDownloader):
                         self.successful_downloads.append(result)
                         session_successful.append(result)
                         
-                        # Update user stats
+                        # Update user stats (Fix #2: capture uploader + upload_date)
                         try:
-                            file_path = result['file_path']
-                            parts = Path(file_path).parts
-                            if len(parts) >= 2:
-                                uploader = parts[-2]
-                                self.batch_user_stats[uploader] = self.batch_user_stats.get(uploader, 0) + 1
+                            uploader = result.get('uploader')
+                            if not uploader:
+                                parts = Path(result['file_path']).parts
+                                uploader = parts[-2] if len(parts) >= 2 else 'unknown_uploader'
+                            self.batch_user_stats[uploader] = self.batch_user_stats.get(uploader, 0) + 1
+                            upload_date = result.get('upload_date')
+                            if upload_date and str(upload_date).isdigit() and len(str(upload_date)) == 8:
+                                self.batch_user_dates.setdefault(uploader, []).append(str(upload_date))
                         except Exception as e:
                             log.warning(f"Could not extract uploader for stats: {e}")
                     else:
@@ -520,6 +532,51 @@ class TikTokBulkDownloader(BaseDownloader):
             log.exception(error_msg)
             await self.update_progress_bar(0.0, f"❌ {error_msg}", engine="TikTok Bulk")
             return False, error_msg, []
+
+    def _sanitize_username(self, name) -> str:
+        cleaned = re.sub(r'[^A-Za-z0-9_.-]+', '_', str(name or '').lstrip('@')).strip('_')
+        return cleaned or 'unknown'
+
+    def get_batch_archive_name(self, part_num: int = 1) -> str:
+        """Fix #2: descriptive archive name based on the current batch.
+
+        - Single user with dates -> TikTok_@user_[YYYY-MM-DD_to_YYYY-MM-DD]
+        - Multiple users        -> TikTok_Bulk_user1_user2_user3[_and_others]_BatchN
+        """
+        users = list(self.batch_user_stats.keys()) if getattr(self, 'batch_user_stats', None) else []
+        if not users:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            return f"TikTok_Bulk_{timestamp}_Batch{part_num}"
+
+        if len(users) == 1:
+            raw_user = users[0]
+            user = self._sanitize_username(raw_user)
+            dates = sorted(
+                d for d in getattr(self, 'batch_user_dates', {}).get(raw_user, [])
+                if d and str(d).isdigit() and len(str(d)) == 8
+            )
+            if dates:
+                def _fmt(d):
+                    return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+                lo, hi = dates[0], dates[-1]
+                if lo == hi:
+                    return f"TikTok_@{user}_[{_fmt(lo)}]"
+                return f"TikTok_@{user}_[{_fmt(lo)}_to_{_fmt(hi)}]"
+            return f"TikTok_@{user}_Batch{part_num}"
+
+        shown = [self._sanitize_username(u) for u in users[:3]]
+        name = "TikTok_Bulk_" + "_".join(shown)
+        if len(users) > 3:
+            name += "_and_others"
+        return f"{name}_Batch{part_num}"
+
+    def get_batch_caption(self) -> str:
+        """Fix #2: 'Contains videos from: @user1, @user2' for the upload caption."""
+        users = list(self.batch_user_stats.keys()) if getattr(self, 'batch_user_stats', None) else []
+        if not users:
+            return ""
+        handles = ", ".join(f"@{str(u).lstrip('@')}" for u in users)
+        return f"Contains videos from: {handles}"
 
     def get_batch_user_summary(self) -> str:
         """
@@ -591,11 +648,13 @@ class TikTokBulkDownloader(BaseDownloader):
 
             # Use the existing archive() function from converters.py
             # Pass the download directory to archive all files in it
-            # Use 1GB split size for consistent policy
+            # Split size follows the chosen Pack Size, but never exceeds the
+            # Telegram upload limit (1.9 GB standard / 3.8 GB premium).
+            max_split = min(get_bulk_pack_size_mib(), get_max_split_size_mib()) * 1024 * 1024
             archive_path, archive_size = await archive(
                 path=self.download_dir,
                 remove=False,  # Don't remove source files
-                max_split_size_bytes=1024*1024*1024,  # 1GB per part
+                max_split_size_bytes=max_split,
                 task_ctx=self.task_ctx
             )
 
