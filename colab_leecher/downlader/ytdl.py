@@ -191,9 +191,6 @@ def _build_ydl_opts(output_template, task_ctx=None):
 
         "extractor_args": {
             "tiktok": {"webpage_download": True},
-            "youtube": {
-                "player_client": ["android", "ios"],
-            }
         },
         "cache_dir": False,
         "remote_components": ["ejs:github"],
