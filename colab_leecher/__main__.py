@@ -2294,7 +2294,6 @@ async def ask_service_type(client, message):
 # --- End ask_service_type function ---
 
 # --- Replace the entire handle_url function ---
-@colab_bot.on_message(filters.create(isLink) & ~filters.photo & filters.private)
 def _is_single_youtube_link(line) -> bool:
     """Fix #3: True if a single line is a YouTube (youtube.com / youtu.be) URL."""
     line = (line or "").strip()
@@ -2333,6 +2332,7 @@ def _is_youtube_only_gist(gist_lines) -> bool:
     return all(_is_single_youtube_link(l) for l in non_empty)
 
 
+@colab_bot.on_message(filters.create(isLink) & ~filters.photo & filters.private)
 async def handle_url(client: Client, message: Message):
     global BOT, user_tasks
     user_id = message.from_user.id
