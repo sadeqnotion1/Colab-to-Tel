@@ -60,3 +60,6 @@
 **Decision:** Modify `_get_YT_Name_sync` inside `colab_leecher/downlader/ytdl.py` to instantiate `ImpersonateTarget` using `ImpersonateTarget.from_str()` for the `"impersonate"` option, falling back to the raw string if older yt-dlp is in use.
 **Why:** The metadata/name lookup in `_get_YT_Name_sync` also constructs a `YoutubeDL` client instance. In v4, we only patched `_build_ydl_opts()` (the downloader itself), leaving `_get_YT_Name_sync()` to pass a raw string. This caused name lookups to raise `AssertionError` and fall back to no impersonation, triggering rate limits/HTTP 403 Forbidden errors on segment downloads. Patching this second site fully completes the fix.
 
+### D14 — 2026-07-02 — Add in-process controller bot, headless API, and jobs.txt queue watcher
+**Decision:** Integrate the dual-bot controller kit, adding a second bot client running in-process, headless `submit_task` API, and standard `jobs.txt` poller.
+**Why:** Re-uses the existing event loop and Pyrogram instance structures while avoiding bot-to-bot Telegram restrictions, enabling programmatic task ingestion via text file or direct message to a separate control bot.

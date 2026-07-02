@@ -25,3 +25,8 @@
 - **Verified:** Ran `test/test_post_hook.py` using Python 3.9 (with Pyrogram dependency mocked). Validated that the session settings load successfully from the repository root, resolve the post URL shortcode (`DZzndRyD82d`), extract the media PK, fetch media metadata successfully, and enter the private API download phase. Verified profile URL cleaning regex logic and credentials self-healing fallback generation.
 - **Stop point:** All changes committed and pushed to branch `master`. Ready for live verification of M2 progress unification and Instagram post downloading in Google Colab.
 
+## 2026-07-02 — Dual-bot Controller Integration
+- **Did:** Applied the Colab-to-Tel Control Kit. Added the dual-bot entry point (`colab_leecher/run_with_controller.py`), controller bot handlers and commands (`colab_leecher/controller/control_bot.py`), programmatic `submit_task` API (`colab_leecher/controller/headless.py`), and `jobs.txt` queue watcher poller (`colab_leecher/controller/queue_watcher.py`). Added thin launcher scripts `run_controller.sh` and `run_controller.bat` to the root, and added placeholder `credentials.json` with the new `"CONTROL_BOT_TOKEN"` option.
+- **Verified:** Checked that the configuration loads properly under the local Python virtual environment, successfully parsing both `BOT_TOKEN` and the new `CONTROL_BOT_TOKEN` from the repository root JSON.
+- **Stop point:** All new files and brain updates added and ready to commit/push to `master`. Ready for live verification of the dual-bot controller in Google Colab.
+

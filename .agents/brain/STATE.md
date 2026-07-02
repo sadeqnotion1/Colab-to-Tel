@@ -3,7 +3,7 @@
 > Single source of truth. If this disagrees with the real code, the **code wins** —
 > tell me and I'll fix the brain. Repo: https://github.com/sadeqnotion1/Colab-to-Tel
 
-**Status (one-liner):** Working Colab Telegram leech bot. M1 and M2 code-complete in `master`. Active focus: live verification of unified progress and centralized `BAR_STYLE` in Google Colab, followed by M3 pipeline decision (keep vs. remove `colab_leecher`).
+**Status (one-liner):** Working Colab Telegram leech bot with dual-bot controller integration. M1 and M2 code-complete in `master`. Active focus: live verification of dual-bot controller setup, jobs.txt watcher, and classic entry point functionality in Google Colab.
 
 ## Status table
 
@@ -16,6 +16,7 @@
 | Fast 7z + honest progress + streaming upload fix | ✅ | Merged and verified in `master` (commit `ca319ec`). |
 | YTDL 403 & Runtime Fixes | ✅ | Fixed AssertionError in download + name lookup, upgraded bootstrap to v3.2, and resolved HTTP 403 CDN errors (commit `99b7a1f`). |
 | Instagram Profile & Post Downloader Hook | ✅ | Added instagrapi profile/post hooks, session cookie self-healing, request_timeout=15 override, clips_metadata v2 patch, parallel-task progress, and pause-and-resume rate limit handler (commit `9b4f83b`). |
+| Controller bot & queue watcher | ✅ | Added dual-bot entry point, controller bot + commands, headless API, and jobs.txt queue watcher. |
 | `.agents/` brain | ✅ | This system (installed 2026-06-24). |
 | Knowledge graph | ✅ | Seeded in `graph/graph.json` and regenerated using render_graph.py. |
 
